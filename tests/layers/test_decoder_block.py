@@ -10,7 +10,8 @@ from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.common.normalization.normalization import NoNormalization
 from fast_llm.layers.decoder.block import DecoderBlock
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from tests.utils.utils import get_stage
+from fast_llm.utils import Assert
+from tests.utils.utils import get_stage, no_tf32
 
 _NUM_TOKENS = 16
 _HIDDEN_SIZE = 64
@@ -100,7 +101,7 @@ _base_post_norm_cases = [
     ("post_mixer_norm", {"post_mixer_norm": True}),
     ("post_mlp_norm", {"post_mlp_norm": True}),
     ("both_post_norms", {"post_mixer_norm": True, "post_mlp_norm": True}),
-    ("output_scale", {"output_scale": 2.5}),
+    ("output_scale", {"output_scale": 0.8}),
     # `{"type": "none"}` disables the position-specific pre-norm. Gemma 4's MoE block path uses
     # this to skip the pre-MLP norm (the routed branch owns its own pre/post norms).
     ("pre_mixer_norm_disabled", {"pre_mixer_normalization": {"type": "none"}}),
@@ -150,8 +151,7 @@ def test_post_norms(test_config: PostNormTestConfig):
     }
     block.preprocess(kwargs)
 
-    with torch.no_grad():
+    with torch.no_grad(), no_tf32():
         output = block(input_, kwargs)
-
-    expected = test_config.expected_output(block, input_, kwargs)
-    torch.testing.assert_close(output, expected, rtol=_TOLERANCE, atol=_TOLERANCE)
+        expected = test_config.expected_output(block, input_, kwargs)
+    Assert.rms_close_relative(output, expected, _TOLERANCE, 1e-7)

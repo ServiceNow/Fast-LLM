@@ -10,7 +10,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.mlp.config import HybridMoEMLPConfig
 from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP
 from fast_llm.utils import Assert
-from tests.utils.utils import get_stage
+from tests.utils.utils import get_stage, no_tf32
 
 _NUM_TOKENS = 128
 _HIDDEN_SIZE = 128
@@ -119,8 +119,7 @@ def test_hybrid_moe_mlp(config: HybridMoEMLPTestConfig) -> None:
     token_dim = TensorDim("tokens", _NUM_TOKENS)
     kwargs = {BlockKwargs.hidden_token_dim: token_dim}
 
-    with torch.no_grad():
+    with torch.no_grad(), no_tf32():
         output = hybrid(input_, kwargs)
-
-    expected = config.expected_output(hybrid, input_, kwargs)
+        expected = config.expected_output(hybrid, input_, kwargs)
     Assert.rms_close_relative(output, expected, 1e-5, 1e-7)
