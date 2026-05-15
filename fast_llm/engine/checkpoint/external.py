@@ -490,6 +490,11 @@ class ConfigSectionConverter(abc.ABC):
 
     Subclasses that participate in :class:`DispatchConfigConverter` set ``hf_type_name`` to the discriminator value
     used by the HF format (e.g. ``"attention"``, ``"mamba"``).
+
+    .. warning::
+       :meth:`_create_config_converters` is ``@functools.cache``\\ d on the base class. Subclasses that override
+       it must return a *fresh* dict (idiomatically ``{**super()._create_config_converters(), ...}``); mutating
+       the parent's returned dict in place would corrupt the cache entry for every subsequent caller.
     """
 
     fast_llm_config_class: typing.ClassVar[type[Config]]

@@ -17,6 +17,7 @@ from fast_llm.models.gpt.conversion.mistral import (
     MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
+from fast_llm.utils import Assert
 
 
 class MixtralMLPConverter(LlamaMLPConverter):
@@ -53,8 +54,8 @@ class MixtralMLPConverter(LlamaMLPConverter):
     @classmethod
     def _validate_export(cls, config: MoEMLPConfig) -> None:
         super()._validate_export(config)
-        assert not config.router_scale.enabled
-        assert not config.router_per_expert_scale.enabled
+        Assert.custom(lambda v: not v, config.router_scale.enabled)
+        Assert.custom(lambda v: not v, config.router_per_expert_scale.enabled)
 
     @classmethod
     def get_converters(

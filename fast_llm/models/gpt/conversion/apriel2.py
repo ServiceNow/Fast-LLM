@@ -84,7 +84,7 @@ def _per_layer_bias_converter(layer_names: tuple[str, ...]) -> CustomConfigConve
     )
 
 
-def _apriel2_conv_kernel_converter() -> CustomConfigConverter:
+def _apriel2_kernel_size_only_conv_converter() -> CustomConfigConverter:
     """Round-trip Apriel2's flat ``convolution_layer.kernel_size`` against the Fast-LLM
     ``convolution_layer`` sub-config. Shared between :class:`Apriel2GatedDeltaNetConverter` and
     :class:`Apriel2KimiDeltaAttentionConverter`."""
@@ -175,8 +175,6 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
             "value_norm": ConstantImportConfigConverter(("value_norm",), None),
             "shared_key_value": ConstantImportConfigConverter(("shared_key_value",), False),
         }
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -275,8 +273,6 @@ class Apriel2MambaConverter(ConfigSectionConverter):
             ),
         }
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls,
@@ -340,7 +336,7 @@ class Apriel2GatedDeltaNetConverter(ConfigSectionConverter):
             "key_heads": RenameConfigConverter(("key_heads",), ("key_heads",)),
             "key_head_dim": RenameConfigConverter(("key_head_dim",), ("key_head_dim",)),
             "value_head_dim": RenameConfigConverter(("value_head_dim",), ("value_head_dim",)),
-            "convolution_layer_kernel": _apriel2_conv_kernel_converter(),
+            "convolution_layer_kernel": _apriel2_kernel_size_only_conv_converter(),
             # CausalConv1dConfig sub-fields the Apriel2 HF format does not surface (weight rides the tensor
             # side; bias/activation round-trip at their Fast-LLM defaults).
             "convolution_layer_unmapped": IgnoredConfigConverter(
@@ -358,8 +354,6 @@ class Apriel2GatedDeltaNetConverter(ConfigSectionConverter):
                 ("a_log_weight",),
             ),
         }
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -422,7 +416,7 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
         return {
             "heads": RenameConfigConverter(("heads",), ("heads",)),
             "head_dim": RenameConfigConverter(("head_dim",), ("head_dim",)),
-            "convolution_layer_kernel": _apriel2_conv_kernel_converter(),
+            "convolution_layer_kernel": _apriel2_kernel_size_only_conv_converter(),
             # CausalConv1dConfig sub-fields not surfaced in HF (same as :class:`Apriel2GatedDeltaNetConverter`).
             "convolution_layer_unmapped": IgnoredConfigConverter(
                 ("convolution_layer", "weight"),
@@ -455,8 +449,6 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
                 ("a_log_weight",),
             ),
         }
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -587,8 +579,6 @@ class Apriel2StochasticMixerConverter(ConfigSectionConverter):
             ),
         }
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls,
@@ -625,16 +615,20 @@ APRIEL2_BLOCK_MIXER_REGISTRY: dict[type[Config], type[ConfigSectionConverter]] =
 # ============================================================
 
 
-class Apriel2RMSNormConverter(ConfigSectionConverter):
-    fast_llm_config_class = RMSNormalizationConfig
+class Apriel2RMSNormConverter(LlamaNormalizationConverter):
+    """Apriel2's typed ``{type: "rms_norm", epsilon: ...}`` form. Identical to
+    :class:`LlamaNormalizationConverter` except the HF epsilon key is ``epsilon`` (not ``rms_norm_eps``)
+    and the type discriminator is auto-injected by NestedConfigConverter/DispatchConfigConverter via
+    ``hf_type_name`` rather than declared as a flat ``ConstantImport``.
+    """
+
     hf_type_name = "rms_norm"
 
     @classmethod
     def _create_config_converters(cls) -> dict:
         return {
+            **super()._create_config_converters(),
             "epsilon": RenameConfigConverter(("epsilon",), ("epsilon",)),
-            "weight": IgnoredConfigConverter(("weight",)),
-            "zero_centered": ConstantImportConfigConverter(("zero_centered",), False),
         }
 
 
@@ -653,6 +647,9 @@ class Apriel2LayerNormConverter(ConfigSectionConverter):
 
 
 class Apriel2NoNormConverter(ConfigSectionConverter):
+    """No-op normalization. NoNormalizationConfig carries no fields, so the converter dict is empty —
+    the class exists solely as a registry entry for :class:`APRIEL2_NORM_REGISTRY` dispatch."""
+
     fast_llm_config_class = NoNormalizationConfig
     hf_type_name = "none"
 
@@ -769,10 +766,9 @@ class Apriel2BlockConverter(ConfigSectionConverter):
         # Apriel2 HF format only represents plain MLP. ``NestedConfigConverter`` dispatches by fixed class
         # (``Apriel2MLPConverter`` registered against ``MLPConfig``) and would silently descend into a
         # ``MoEMLPConfig`` via MRO, dropping every MoE-specific architecture field.
+        # Strict type to reject MoEMLPConfig subclass — not isinstance.
         Assert.is_(type(config.mlp), MLPConfig)
-        assert not config.output_scale.enabled
-
-    # --- weight side (imperative) ---
+        Assert.custom(lambda v: not v, config.output_scale.enabled)
 
     @classmethod
     def get_converters(
@@ -931,8 +927,6 @@ class Apriel2HeadConverter(ConfigSectionConverter):
         # LayerNorm/NoNorm head config doesn't silently round-trip through the wrong weight conversion.
         Assert.is_(type(config.normalization), RMSNormalizationConfig)
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls,
@@ -986,8 +980,6 @@ class Apriel2BaseModelConverter(ConfigSectionConverter):
     @classmethod
     def _validate_export(cls, config: GPTBaseModelConfig) -> None:
         assert_no_peft(config)
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:

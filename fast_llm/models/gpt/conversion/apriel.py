@@ -435,18 +435,18 @@ class AprielBlockConverter:
     :class:`DispatchConfigConverter`. Each branch delegates to a regular declarative block converter.
     """
 
-    layout_names = {
+    layout_names: typing.ClassVar[dict[type[Config], str]] = {
         AttentionConfig: "t",
         MambaConfig: "m2",
         GatedDeltaNetConfig: "gdn",
     }
-    _converter_classes = {
+    _converter_classes: typing.ClassVar[dict[type[Config], type[ConfigSectionConverter]]] = {
         AttentionConfig: MistralBlockConverter,
         MambaConfig: AprielMambaBlockConverter,
         KimiDeltaAttentionConfig: AprielKimiDeltaAttentionBlockConverter,
         GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
     }
-    _config_classes = {value: key for key, value in layout_names.items()}
+    _config_classes: typing.ClassVar[dict[str, type[Config]]] = {value: key for key, value in layout_names.items()}
 
     @classmethod
     def import_config(cls, config: dict, layout_name: str = "t") -> dict:
@@ -589,8 +589,6 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
                 fast_llm_recurses=True,
             ),
         }
-
-    # --- weight side (imperative): use Apriel's per-position dispatcher instead of the standard inline loop.
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:

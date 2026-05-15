@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 def assert_no_peft(config: GPTBaseModelConfig) -> None:
     """Reject any non-trivial PEFT config: HuggingFace formats serialize the base weights only,
     so a configured LoRA (or other adapter) would be silently dropped on export."""
-    Assert.custom(isinstance, config.peft, NoPeftConfig)
+    Assert.is_(type(config.peft), NoPeftConfig)
 
 
 def effective_bias(layer_config: AffineLinearConfig, default: bool) -> bool:
@@ -255,8 +255,6 @@ class LlamaNormalizationConverter(ConfigSectionConverter):
             "zero_centered": ConstantImportConfigConverter(("zero_centered",), False),
         }
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls,
@@ -303,8 +301,6 @@ class LlamaMLPConverter(ConfigSectionConverter):
     def _validate_export(cls, config: MLPConfig) -> None:
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -388,8 +384,6 @@ class LlamaAttentionConverter(ConfigSectionConverter):
         Assert.incl(config.value_layer.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls,
@@ -451,9 +445,7 @@ class LlamaBlockConverter(ConfigSectionConverter):
 
     @classmethod
     def _validate_export(cls, config: DecoderBlockConfig) -> None:
-        assert not config.output_scale.enabled
-
-    # --- weight side (imperative) ---
+        Assert.custom(lambda v: not v, config.output_scale.enabled)
 
     @classmethod
     def get_converters(
@@ -528,8 +520,6 @@ class LlamaDecoderConverter(ConfigSectionConverter):
             "num_blocks": RenameConfigConverter(("num_blocks",), ("num_hidden_layers",)),
         }
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls,
@@ -571,8 +561,6 @@ class LlamaEmbeddingsConverter(ConfigSectionConverter):
     def _validate_export(cls, config: LanguageModelEmbeddingsConfig) -> None:
         Assert.incl(config.position_embeddings.enabled, (None, False))
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls, config: LanguageModelEmbeddingsConfig, fast_llm_prefix: str, hf_prefix: str
@@ -601,8 +589,6 @@ class LlamaHeadConverter(ConfigSectionConverter):
             "prediction_heads": ConstantImportConfigConverter(("prediction_heads",), 1),
             "final_logit_softcap": ConstantImportConfigConverter(("final_logit_softcap",), None),
         }
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -679,8 +665,6 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
     @classmethod
     def _validate_export(cls, config: GPTBaseModelConfig) -> None:
         assert_no_peft(config)
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:

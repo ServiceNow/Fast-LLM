@@ -753,8 +753,6 @@ class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConve
             "vocab_size_per_layer_input": IgnoredConfigConverter(hf_paths=(("vocab_size_per_layer_input",),)),
         }
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
         return [

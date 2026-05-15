@@ -181,9 +181,7 @@ class Apriel2VisionBlockConverter(ConfigSectionConverter):
 
     @classmethod
     def _validate_export(cls, config: DecoderBlockConfig) -> None:
-        assert not config.output_scale.enabled
-
-    # --- weight side (imperative) ---
+        Assert.custom(lambda v: not v, config.output_scale.enabled)
 
     @classmethod
     def get_converters(
@@ -250,8 +248,6 @@ class Apriel2VisionEncoderConverter(ConfigSectionConverter):
                 import_fn=lambda hf: {},
             ),
         }
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
@@ -342,8 +338,6 @@ class Apriel2VisionAdapterConverter(Apriel2VisionMLPConverter):
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(
         cls, config: MLPConfig, fast_llm_prefix: str, hf_prefix: str, drop_on_export: bool = False
@@ -418,8 +412,6 @@ class Apriel2VisionModelConverter(ConfigSectionConverter):
             }
         return {}
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
         return [
@@ -472,6 +464,8 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
 
     text_base_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BaseModelConverter
     vision_model_converter_class: typing.ClassVar[type[Apriel2VisionModelConverter]] = Apriel2VisionModelConverter
+    embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
+    head_converter_class: typing.ClassVar[type[Apriel2MultimodalHeadConverter]] = Apriel2MultimodalHeadConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
@@ -519,11 +513,6 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
             # but it does live on the HF dict for vision-enabled checkpoints.
             "image_token_index": OptionalConfigConverter(("image_token_index",), ("image_token_index",)),
         }
-
-    # --- weight side (imperative) ---
-
-    embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
-    head_converter_class: typing.ClassVar[type[Apriel2MultimodalHeadConverter]] = Apriel2MultimodalHeadConverter
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
@@ -581,6 +570,7 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> dict[str, typing.Any]:
+        cls._check_hf_coverage(config)
         return {"base_model": cls.base_model_converter_class.import_config(config)}
 
     @classmethod

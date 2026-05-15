@@ -33,7 +33,7 @@ from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerCo
 _DEFAULT_FACTORIES: dict[type, typing.Callable[[], typing.Any]] = {
     PatternBlockSequenceConfig: lambda: PatternBlockSequenceConfig(
         blocks={"x": DecoderBlockConfig()},
-        pattern=("x",),
+        pattern=["x"],
     ),
     StochasticMixerConfig: lambda: StochasticMixerConfig(
         mixers={"x": AttentionConfig()},

@@ -242,8 +242,6 @@ class LlavaVisionAdapterConverter(ConfigSectionConverter):
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
 
-    # --- weight side (imperative) ---
-
     @classmethod
     def get_converters(cls, config: MLPConfig, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
         return [
@@ -315,8 +313,6 @@ class LlavaVisionModelConverter(ConfigSectionConverter):
         mixer = config.encoder.block.mixer
         if isinstance(mixer, AttentionConfig):
             Assert.eq(mixer.head_size * mixer.heads, config.hidden_size)
-
-    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
@@ -428,10 +424,8 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
     @classmethod
     def _validate_export(cls, config: MultiModalBaseModelConfig) -> None:
         # Llava requires both a vision encoder and an image_token_index to be set.
-        Assert.custom(lambda v: v is not None, config.vision_encoder)
-        Assert.custom(lambda v: v is not None, config.image_token_index)
-
-    # --- weight side (imperative) ---
+        assert config.vision_encoder is not None, "Llava requires a vision encoder"
+        assert config.image_token_index is not None, "Llava requires an image_token_index"
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
