@@ -16,7 +16,7 @@ from fast_llm.engine.distributed.distributed import ProcessGroupPool
 from fast_llm.engine.training.config import StreamingTrainerCallbackConfig
 from fast_llm.engine.training.streaming import REDIS_TRAINING_FIELD, REDIS_TRAINING_STREAM
 from fast_llm.utils import Assert
-from tests.conftest import WorkerResources
+from tests.conftest import MODEL_STREAMING_PORT_OFFSET, PORTS_PER_WORKER, WorkerResources
 from tests.models.test_checkpoint import compare_safetensor_files
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup, update_and_add_testing_config
@@ -58,6 +58,9 @@ _DISTRIBUTED_STREAMING_CONFIGS = [
         consumer_count=2,
     ),
 ]
+
+# Each config consumes one redis producer port plus one weights-broadcast rendezvous port.
+Assert.leq(MODEL_STREAMING_PORT_OFFSET + 2 * len(_DISTRIBUTED_STREAMING_CONFIGS), PORTS_PER_WORKER)
 
 
 def _run_event_consumer(
@@ -131,13 +134,17 @@ def _run_event_consumer(
 
 
 def _run_model_streaming_configs(
-    test_context: DistributedTestContext, base_path: pathlib.Path, model_testing_config: ModelTestingConfig, port: int
+    test_context: DistributedTestContext,
+    base_path: pathlib.Path,
+    model_testing_config: ModelTestingConfig,
+    streaming_port: int,
 ) -> None:
     # Import all dynamic classes.
     import fast_llm.cli  # noqa
 
     for config_index, config in enumerate(_DISTRIBUTED_STREAMING_CONFIGS):
-        config_port = port + config_index
+        config_port = streaming_port + config_index
+        broadcast_port = streaming_port + len(_DISTRIBUTED_STREAMING_CONFIGS) + config_index
         model_testing_config = update_and_add_testing_config(
             model_testing_config,
             None,
@@ -149,7 +156,7 @@ def _run_model_streaming_configs(
                         "type": "streaming",
                         "port": config_port,
                         "broadcast": {
-                            "port": config_port + 1000,
+                            "port": broadcast_port,
                             "external_world_size": config.consumer_count,
                         },
                         "export": {"format": model_testing_config.checkpoint_format.name},
@@ -203,11 +210,9 @@ def test_run_model_distributed_streaming(
     if torch.cuda.device_count() < 2:
         pytest.skip(f"Not enough GPUs")
     model_testing_config.get_dataset()
-    # Use a fixed shift to avoid port conflicts with other distributed tests.
-    port = worker_resources.torchrun_port + 4321
     run_parallel_script(
         _run_model_streaming_configs,
-        (run_test_script_base_path, model_testing_config, port),
+        (run_test_script_base_path, model_testing_config, worker_resources.model_streaming_port),
         world_size=torch.cuda.device_count(),
         backend=model_testing_config.distributed_backend,
     )

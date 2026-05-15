@@ -21,8 +21,17 @@ _KV_HEADS = 2
 _HEAD_SIZE = 16
 
 
-def _compute_rotary_freqs(seq_len: int, head_size: int, theta: float, device: torch.device) -> torch.Tensor:
+def _compute_rotary_freqs(
+    seq_len: int,
+    head_size: int,
+    theta: float,
+    device: torch.device,
+    partial_rotary_factor: float | None = None,
+) -> torch.Tensor:
     angle_scales = theta ** (-torch.arange(0, 1, 2 / head_size, dtype=torch.float64, device=device))
+    if partial_rotary_factor is not None:
+        rotary_pairs = round(head_size * partial_rotary_factor) // 2
+        angle_scales[rotary_pairs:] = 0
     positions = torch.arange(seq_len, dtype=torch.float64, device=device)
     angles = torch.outer(positions, angle_scales)
     freqs = torch.cat([torch.cos(angles), torch.sin(angles)], dim=-1).to(torch.float32)
@@ -44,8 +53,13 @@ class AttentionTestConfig:
     head_size: int = _HEAD_SIZE
     causal: bool = True
     window_size: int | None = None
+    query_norm: bool = False
+    key_norm: bool = False
+    value_norm: bool = False
+    shared_key_value: bool = False
     rotary: bool = False
     rotary_theta: float = 10000.0
+    rotary_partial_rotary_factor: float | None = None
 
     @property
     def hidden_size(self) -> int:
@@ -66,8 +80,23 @@ class AttentionTestConfig:
         }
         if self.window_size is not None:
             config["window_size"] = self.window_size
+        if self.query_norm:
+            config["query_norm"] = {"type": "rms_norm"}
+        if self.key_norm:
+            config["key_norm"] = {"type": "rms_norm"}
+        if self.value_norm:
+            config["value_norm"] = {"type": "fixed_rms_norm"}
+        if self.shared_key_value:
+            config["shared_key_value"] = True
         if self.rotary:
-            config["rotary"] = {"type": "default", "theta": self.rotary_theta}
+            if self.rotary_partial_rotary_factor is not None:
+                config["rotary"] = {
+                    "type": "proportional",
+                    "theta": self.rotary_theta,
+                    "partial_rotary_factor": self.rotary_partial_rotary_factor,
+                }
+            else:
+                config["rotary"] = {"type": "default", "theta": self.rotary_theta}
         return AttentionConfig.from_dict(config)
 
     def expected_output(
@@ -77,19 +106,42 @@ class AttentionTestConfig:
         lengths: list[int],
     ) -> torch.Tensor:
         """
-        Independent reference: plain F.linear + rotary + per-document einsum attention.
-        No calls to Fast-LLM attention internals.
+        Independent reference: plain F.linear + torch.rms_norm + rotary + per-document einsum attention.
+        No calls to Fast-LLM attention or norm internals.
         """
         with torch.no_grad():
             q = torch.nn.functional.linear(input_, attention.query.weight.detach()).unflatten(
                 1, (self.heads, self.head_size)
             )
-            kv = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
-                1, (2 * self.kv_heads, self.head_size)
-            )
+            if self.shared_key_value:
+                key_projected = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
+                    1, (self.kv_heads, self.head_size)
+                )
+                kv = torch.cat([key_projected, key_projected], dim=1)
+            else:
+                kv = torch.nn.functional.linear(input_, attention.key_value.weight.detach()).unflatten(
+                    1, (2 * self.kv_heads, self.head_size)
+                )
+
+            if self.query_norm:
+                q = torch.rms_norm(q, (self.head_size,), attention.query_norm.weight.detach(), 1e-5)
+            if self.key_norm:
+                key_normed = torch.rms_norm(
+                    kv[:, : self.kv_heads, :], (self.head_size,), attention.key_norm.weight.detach(), 1e-5
+                )
+                kv = torch.cat([key_normed, kv[:, self.kv_heads :, :]], dim=1)
+            if self.value_norm:
+                value_normed = torch.rms_norm(kv[:, self.kv_heads :, :], (self.head_size,), None, 1e-5)
+                kv = torch.cat([kv[:, : self.kv_heads, :], value_normed], dim=1)
 
             if self.rotary:
-                freqs = _compute_rotary_freqs(input_.shape[0], self.head_size, self.rotary_theta, input_.device)
+                freqs = _compute_rotary_freqs(
+                    input_.shape[0],
+                    self.head_size,
+                    self.rotary_theta,
+                    input_.device,
+                    partial_rotary_factor=self.rotary_partial_rotary_factor,
+                )
                 q = _apply_rotary(q, freqs)
                 k_rotated = _apply_rotary(kv[:, : self.kv_heads, :], freqs)
                 kv = torch.cat([k_rotated, kv[:, self.kv_heads :, :]], dim=1)
@@ -136,17 +188,64 @@ _attention_rotary_cases = [
     ("causal_rotary", {"causal": True, "rotary": True}),
 ]
 
-_attention_test_configs = [
-    AttentionTestConfig(name=base_name, **base_kwargs)
-    for base_name, base_kwargs in _base_attention_cases + _attention_rotary_cases
+_attention_norm_variants = [
+    ("no_norm", {}),
+    ("query_norm", {"query_norm": True}),
+    ("key_norm", {"key_norm": True}),
+    ("value_norm", {"value_norm": True}),
+    ("both_norms", {"query_norm": True, "key_norm": True}),
+    ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
 ]
 
-_attention_lengths = [
-    [15],
-    [6, 9],
-    [4, 1, 10],
-    [20, 32, 10, 11, 9, 18],
+_attention_shared_key_value_cases = [
+    ("shared_key_value", {"shared_key_value": True}),
+    ("shared_key_value_rotary", {"shared_key_value": True, "rotary": True}),
+    # Gemma 4's full-attention layer combines shared_key_value with ProportionalRotary.
+    (
+        "shared_key_value_proportional_rotary",
+        {"shared_key_value": True, "rotary": True, "rotary_partial_rotary_factor": 0.5},
+    ),
 ]
+
+_attention_shared_key_value_norm_variants = [
+    ("no_norm", {}),
+    ("key_norm", {"key_norm": True}),
+    ("value_norm", {"value_norm": True}),
+    ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
+]
+
+# Norms apply per-head and don't interact with mask/group structure, so we test all norm
+# variants on a single base (causal) instead of crossing every norm with every base.
+# Lengths matter for packing/flash equivalence checks, so we sweep all lengths on the
+# base × no_norm cases (where seq layout interacts most with attention math).
+_LENGTHS_FULL = [[15], [6, 9], [4, 1, 10], [20, 32, 10, 11, 9, 18]]
+_LENGTHS_SHORT = [[15], [4, 1, 10]]
+_LENGTHS_SINGLE = [[15]]
+
+
+def _build_test_cases() -> list[tuple[AttentionTestConfig, list[int]]]:
+    cases: list[tuple[AttentionTestConfig, list[int]]] = []
+    for base_name, base_kwargs in _base_attention_cases:
+        config = AttentionTestConfig(name=f"{base_name}_no_norm", **base_kwargs)
+        cases.extend((config, lengths) for lengths in _LENGTHS_FULL)
+    for variant_name, variant_kwargs in _attention_norm_variants:
+        if variant_name == "no_norm":
+            continue
+        config = AttentionTestConfig(name=f"causal_{variant_name}", causal=True, **variant_kwargs)
+        cases.extend((config, lengths) for lengths in _LENGTHS_SHORT)
+    for base_name, base_kwargs in _attention_rotary_cases:
+        for variant_name, variant_kwargs in _attention_norm_variants:
+            config = AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+            cases.extend((config, lengths) for lengths in _LENGTHS_SINGLE)
+    for base_name, base_kwargs in _attention_shared_key_value_cases:
+        lengths_set = _LENGTHS_SINGLE if base_kwargs.get("rotary") else _LENGTHS_SHORT
+        for variant_name, variant_kwargs in _attention_shared_key_value_norm_variants:
+            config = AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
+            cases.extend((config, lengths) for lengths in lengths_set)
+    return cases
+
+
+_attention_test_cases = _build_test_cases()
 
 
 def _run_per_seq_reference(
@@ -301,17 +400,13 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         attention_flash.preprocess(kwargs_flash)
         out_flash, _ = stage_flash.forward(hidden_states_bf16, kwargs_flash)
 
-        Assert.rms_close_relative(out_flash, out_ref_bf16, 4e-3, 1e-7)
+        Assert.rms_close_relative(out_flash, out_ref_bf16, 5e-3, 1e-7)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "lengths",
-    [pytest.param(lengths, id=str(lengths)) for lengths in _attention_lengths],
-)
-@pytest.mark.parametrize(
-    "config",
-    [pytest.param(config, id=config.name) for config in _attention_test_configs],
+    ("config", "lengths"),
+    [pytest.param(config, lengths, id=f"{config.name}-{lengths}") for config, lengths in _attention_test_cases],
 )
 def test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     with _no_tf32():

@@ -9,6 +9,7 @@ from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.triton.normalization import triton_normalization_autograd
 from fast_llm.layers.common.normalization.config import (
+    FixedRMSNormConfig,
     GatedRMSNormalizationConfig,
     LayerNormalizationConfig,
     NoNormalizationConfig,
@@ -299,6 +300,27 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
 
     def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
         return torch.rms_norm(input_.to(self.weight.dtype), self._normalized_shape, self.weight, self._config.epsilon)
+
+
+class FixedRMSNormalization[ConfigType: FixedRMSNormConfig](Normalization[ConfigType]):
+    """RMS normalization with no learnable weight (fixed unit scale)."""
+
+    def __init__(self, config: ConfigType, hidden_dim: TensorDim, lr_scale: float | None = None):
+        super().__init__(config, hidden_dim, lr_scale)
+        self._normalized_shape = (hidden_dim.size,)
+        if TritonConfig.enabled(torch.device("cuda")):
+            self._forward = self._forward_triton
+        else:
+            self._forward = self._forward_torch
+
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
+        return self._forward(input_.view(-1, *self._normalized_shape)).view_as(input_)
+
+    def _forward_triton(self, input_: torch.Tensor) -> torch.Tensor:
+        return triton_normalization_autograd(input_, None, None, self._config.epsilon, self.training, False)
+
+    def _forward_torch(self, input_: torch.Tensor) -> torch.Tensor:
+        return torch.rms_norm(input_, self._normalized_shape, None, self._config.epsilon)
 
 
 class GatedRMSNormalization[ConfigType: GatedRMSNormalizationConfig](RMSNormalization[ConfigType], torch.nn.Module):

@@ -53,27 +53,18 @@ def test_frozen_weights(model_testing_config):
         len(model_ref.stages),
         len(model_frozen.stages),
     )
+    # Compare unpadded `parameter_count` rather than buffer `numel()`. Each FSDP independently pads to
+    # `SHARD_PAD_TO_MULTIPLE`, so moving parameters between trainable and frozen FSDPs can shift total
+    # padding even though no parameter changed — buffer-level equality is incidental to the alignment of
+    # each fixture's MLP parameter counts and not the invariant we want to assert.
     for stage_index in range(num_stages):
-        # Weight buffers are the same.
+        ref_stage = model_ref.stages[stage_index]
+        frozen_stage = model_frozen.stages[stage_index]
+        # Total parameter count is invariant: `lr_scale=0` does not add or remove parameters.
+        Assert.eq(ref_stage.parameter_count, frozen_stage.parameter_count)
+        # Frozen MLP parameters drop out of the trainable set.
         Assert.eq(
-            model_ref._weight_buffers[model_ref._weight_buffer_indices[stage_index]].numel(),
-            model_frozen._weight_buffers[model_frozen._weight_buffer_indices[stage_index]].numel(),
-        )
-        # Weight buffers exclude frozen weights.
-        Assert.eq(
-            model_ref._grad_buffers[model_ref._grad_buffer_indices[stage_index]].numel()
-            - model_frozen._grad_buffers[model_frozen._grad_buffer_indices[stage_index]].numel(),
+            sum(fsdp.parameter_count for fsdp in ref_stage.fsdps if fsdp.requires_grad)
+            - sum(fsdp.parameter_count for fsdp in frozen_stage.fsdps if fsdp.requires_grad),
             frozen_parameter_counts[stage_index],
-        )
-
-    for shard_name, shard_frozen_count in zip(
-        model_ref._shard_names,
-        [0] + [sum(frozen_parameter_counts)] * (len(model_ref._all_shard_names) - 1),
-        strict=True,
-    ):
-        # Same with shards.
-        Assert.eq(
-            model_ref.get_shard(shard_name).numel() - model_frozen.get_shard(shard_name).numel(),
-            shard_frozen_count,
-            msg=shard_name,
         )

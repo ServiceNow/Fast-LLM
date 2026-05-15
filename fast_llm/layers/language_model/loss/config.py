@@ -41,6 +41,15 @@ class LanguageModelLossConfig(Config):
         desc="Weight for this loss in the total loss computation.",
         valid=check_field(Assert.geq, 0.0),
     )
+    logits_scale_factor: float = Field(
+        default=1.0,
+        hint=FieldHint.feature,
+        desc=(
+            "Extra logits scale factor applied for this loss only, stacked on top of the model's"
+            " `logits_scale_factor`."
+        ),
+        valid=check_field(Assert.gt, 0.0),
+    )
 
     def get_layer(
         self,

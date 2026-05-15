@@ -32,6 +32,14 @@ class MixtralMLPConverter(LlamaMLPConverter):
     def export_config(cls, config: MoEMLPConfig) -> dict:
         Assert.custom(isinstance, config, MoEMLPConfig)
         assert not config.add_linear_biases
+        if config.router_normalization is not None:
+            raise NotImplementedError(f"`router_normalization` is not supported by `{cls.__name__}`.")
+        if config.router_scale.enabled:
+            raise NotImplementedError(f"`router_scale` is not supported by `{cls.__name__}`.")
+        if config.router_input_scale != 1.0:
+            raise NotImplementedError(f"`router_input_scale != 1.0` is not supported by `{cls.__name__}`.")
+        if config.router_per_expert_scale.enabled:
+            raise NotImplementedError(f"`router_per_expert_scale` is not supported by `{cls.__name__}`.")
         out = super().export_config(config)
         del out["mlp_bias"]
         return safe_merge_dicts(

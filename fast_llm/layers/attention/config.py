@@ -6,6 +6,7 @@ from fast_llm.config import Field, FieldHint, check_field, config_class, skip_va
 from fast_llm.layers.attention.rotary.config import RotaryConfig
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.config import AffineLinearConfig
+from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.decoder.config import MixerConfig
 from fast_llm.utils import Assert
 
@@ -121,6 +122,26 @@ class AttentionConfig(MixerConfig):
         default=AttentionImplementation.auto,
         desc="The implementation to use for the attention layer. Default: `flash` if supported, otherwise `backup`.",
         hint=FieldHint.feature,
+    )
+    query_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to query vectors before RoPE, per attention head. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    key_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to key vectors before RoPE, per attention head. Set to `{type: rms_norm}` to enable.",
+        hint=FieldHint.architecture,
+    )
+    value_norm: NormalizationConfig | None = Field(
+        default=None,
+        desc="Normalization applied to value projections per head before attention. Use `{type: fixed_rms_norm}` for a no-weight RMS norm.",
+        hint=FieldHint.architecture,
+    )
+    shared_key_value: bool = Field(
+        default=False,
+        desc="Use one shared key/value projection. The projected key is reused as value before separate K/V norms.",
+        hint=FieldHint.architecture,
     )
 
     def _validate(self) -> None:
