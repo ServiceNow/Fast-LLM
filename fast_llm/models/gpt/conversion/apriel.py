@@ -55,6 +55,9 @@ class AprielMambaConverter(ConfigSectionConverter):
                 ("ssm_cfg", "d_inner"),
                 hf_default_fn=lambda hf: hf["hidden_size"] * hf.get("ssm_cfg", {}).get("expand", 1),
             ),
+            # ``ssm_cfg.expand`` is consumed only as a fallback input to ``d_inner``'s default; declared here
+            # so the HF coverage walker accepts real Apriel Mamba configs that carry the key.
+            "ssm_expand": IgnoredConfigConverter(hf_paths=(("ssm_cfg", "expand"),)),
             "d_xb": DefaultConfigConverter(
                 ("d_xb",),
                 ("ssm_cfg", "d_xb"),

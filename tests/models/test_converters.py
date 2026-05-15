@@ -70,11 +70,13 @@ def _all_format_handlers() -> list[type[HuggingfaceStateDictCheckpointHandler]]:
 def _children(node: type) -> list[type]:
     """Return every sub-converter class reachable from ``node``.
 
-    Picks up two complementary structures:
+    Picks up three complementary structures:
     * ``ConfigSectionConverter`` declarations — the ``_converter_class`` on each Nested/Dispatch/TypedDict.
     * ``*_converter_class`` ClassVars — the polymorphism extension points used by aggregator nodes
       (e.g. ``LlavaBaseModelConverter`` is not itself a section converter but exposes
       ``vision_model_converter_class`` and ``language_model_converter_class``).
+    * ``*_converter_classes`` ClassVar dicts — imperative dispatchers that fan out to per-key sub-converters
+      (e.g. ``AprielBlockConverter._converter_classes`` keyed on mixer config class).
     """
     out: list[type] = []
     if isinstance(node, type) and issubclass(node, ConfigSectionConverter):
@@ -84,11 +86,16 @@ def _children(node: type) -> list[type]:
             elif isinstance(declaration, (DispatchConfigConverter, TypedDictContainerConfigConverter)):
                 out.extend(declaration._registry.values())
     for name in dir(node):
-        if not name.endswith("_converter_class") or name == "base_model_converter_class":
+        if name == "base_model_converter_class":
             continue
-        attr = getattr(node, name, None)
-        if isinstance(attr, type):
-            out.append(attr)
+        if name.endswith("_converter_class"):
+            attr = getattr(node, name, None)
+            if isinstance(attr, type):
+                out.append(attr)
+        elif name.endswith("_converter_classes"):
+            attr = getattr(node, name, None)
+            if isinstance(attr, dict):
+                out.extend(value for value in attr.values() if isinstance(value, type))
     return out
 
 
