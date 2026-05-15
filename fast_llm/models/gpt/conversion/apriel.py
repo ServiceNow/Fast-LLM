@@ -21,7 +21,6 @@ from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionCo
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
-    LlamaDecoderConverter,
     effective_bias,
     get_parameter_converter,
     get_weight_and_bias_converters,
@@ -480,11 +479,11 @@ class AprielBlockConverter:
         )
 
 
-class AprielDecoderConverter(LlamaDecoderConverter):
+class AprielDecoderConverter:
     """Pattern-style decoder dispatched via Apriel's ``hybrid_block_layout`` list (one entry per block).
     Stays imperative because the layout-list shape doesn't match the declarative ``decoder.type``
-    discriminator that Apriel2 uses. Overrides every classmethod from
-    :class:`LlamaDecoderConverter`; the parent is used only as a nominal base.
+    discriminator that :class:`Apriel2BaseModelConverter` uses; a declarative form would need a
+    ``ListDispatchConfigConverter`` primitive that maps a positional list to per-position sub-converters.
     """
 
     block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
@@ -587,7 +586,7 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
                 ),
                 export_fn=_decoder_export,
                 import_fn=_decoder_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
         }
 

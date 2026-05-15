@@ -368,7 +368,7 @@ class LlamaAttentionConverter(ConfigSectionConverter):
                 hf_paths=(("rope_theta",), ("rope_scaling",), ("rope_parameters",)),
                 export_fn=_llama_rotary_export,
                 import_fn=_llama_rotary_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             "query_norm": ConstantImportConfigConverter(("query_norm",), None),
             "key_norm": ConstantImportConfigConverter(("key_norm",), None),
@@ -508,44 +508,40 @@ def _llama_decoder_export(
     return {**block_hf, "num_hidden_layers": decoder_config.num_blocks}
 
 
-class LlamaDecoderConverter:
-    """Imperative dispatcher for the polymorphic Fixed/Pattern block sequence.
+class LlamaDecoderConverter(ConfigSectionConverter):
+    """Converts ``FixedBlockSequenceConfig`` ↔ Llama's flat decoder shape (per-block fields + ``num_hidden_layers``).
 
     Used by formats that don't compose at the :class:`LlamaBaseModelConverter` level — currently only
-    Pixtral's vision encoder (:class:`PixtralEncoderConverter`) and Apriel's per-position hybrid layout
-    dispatcher inherit from it. The standard text formats (Mistral/Qwen2/Mixtral) use the inline dispatch
-    inside :class:`LlamaBaseModelConverter._create_config_converters` instead, parameterised by
+    Pixtral's vision encoder (:class:`PixtralEncoderConverter`). The standard text formats
+    (Mistral/Qwen2/Mixtral) use the inline dispatch inside
+    :class:`LlamaBaseModelConverter._create_config_converters` instead, parameterised by
     ``block_converter_class``.
     """
 
+    fast_llm_config_class = FixedBlockSequenceConfig
     block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaBlockConverter
 
     @classmethod
-    def import_config(cls, hf_dict: dict) -> dict:
+    def _create_config_converters(cls) -> dict:
         return {
-            "block": cls.block_converter_class.import_config(hf_dict),
-            "num_blocks": hf_dict["num_hidden_layers"],
+            "block": NestedConfigConverter(("block",), cls.block_converter_class),
+            "num_blocks": RenameConfigConverter(("num_blocks",), ("num_hidden_layers",)),
         }
 
-    @classmethod
-    def export_config(cls, decoder_config: FixedBlockSequenceConfig | PatternBlockSequenceConfig) -> dict:
-        return _llama_decoder_export(decoder_config, cls.block_converter_class)
+    # --- weight side (imperative) ---
 
     @classmethod
     def get_converters(
         cls,
-        config: FixedBlockSequenceConfig | PatternBlockSequenceConfig,
+        config: FixedBlockSequenceConfig,
         fast_llm_prefix: str,
         hf_prefix: str,
         drop_on_export: bool = False,
     ) -> list[WeightConverter]:
-        block_config = (
-            config.block if isinstance(config, FixedBlockSequenceConfig) else next(iter(config.blocks.values()))
-        )
         converters: list[WeightConverter] = []
         for block_index in range(config.num_blocks):
             converters += cls.block_converter_class.get_converters(
-                block_config,
+                config.block,
                 f"{fast_llm_prefix}.{block_index}",
                 f"{hf_prefix}.{block_index}",
                 drop_on_export,
@@ -671,7 +667,7 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
                 ),
                 export_fn=_decoder_export,
                 import_fn=_decoder_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
             "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),

@@ -98,7 +98,7 @@ class PixtralAttentionConverter(LlamaAttentionConverter):
                 hf_paths=(("rope_theta",), ("rope_parameters",)),
                 export_fn=_pixtral_rotary_export,
                 import_fn=_pixtral_rotary_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
         }
 
@@ -279,28 +279,11 @@ class LlavaVisionModelConverter(ConfigSectionConverter):
 
     @classmethod
     def _create_config_converters(cls) -> dict:
-        encoder_cls = cls.encoder_converter_class
-
-        def _encoder_export(config: VisionEncoderConfig) -> dict:
-            return {(k,): v for k, v in encoder_cls.export_config(config.encoder).items()}
-
-        def _encoder_import(hf_dict: dict) -> dict:
-            return {("encoder",): encoder_cls.import_config(hf_dict)}
-
         return {
             # Flat-merged into vision_config: embeddings (PatchEmbeddingsConverter writes patch_size/etc),
-            # encoder (LlamaDecoderConverter dispatch — Custom-wrapped since it stays imperative).
+            # encoder (LlamaDecoderConverter, declarative — flat-merged Fixed sequence shape).
             "embeddings": NestedConfigConverter(("embeddings",), cls.embeddings_converter_class),
-            "encoder": CustomConfigConverter(
-                fast_llm_paths=(("encoder",),),
-                hf_paths=(
-                    ("num_hidden_layers",),
-                    *encoder_cls.block_converter_class._consumed_hf_paths(),
-                ),
-                export_fn=_encoder_export,
-                import_fn=_encoder_import,
-                recurses=True,
-            ),
+            "encoder": NestedConfigConverter(("encoder",), cls.encoder_converter_class),
             "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
             # Llava's vision_config carries a literal ``model_type: "pixtral"``;
             # ``ConstantExportConfigConverter`` emits on export and asserts equality on import.
@@ -423,7 +406,7 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
                 hf_paths=(("text_config",),),
                 export_fn=_text_export,
                 import_fn=_text_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             "vision_encoder": NestedConfigConverter(("vision_encoder",), vision_cls, hf_path=("vision_config",)),
             # Adapter flat-merged at top level: its import sees text_config.hidden_size as a sibling key.

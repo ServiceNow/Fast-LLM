@@ -71,20 +71,29 @@ class ConfigConverter(abc.ABC):
     ``hf_paths`` (tuples of dict keys rooted at the section's HF subdict). The walker calls ``export_to`` to produce
     HF entries from a Fast-LLM config object, and ``import_to`` to produce a Fast-LLM config dict from an HF dict.
 
-    ``recurses`` controls how :meth:`ConfigSectionConverter._check_architecture_coverage` interprets the paths:
+    ``fast_llm_recurses`` controls how :meth:`ConfigSectionConverter.check_architecture_coverage` interprets
+    ``fast_llm_paths``:
 
-    * ``recurses = False`` (default) — paths are exact-match leaves. Every architecture-hint field at every depth
-      under the section's config class must be exactly listed by some declaration.
-    * ``recurses = True`` — paths are recursive prefixes covering the entire subtree. Used by primitives that
-      delegate to a sub-converter that runs its own coverage check (Nested/Dispatch/TypedDictContainer), by
+    * ``fast_llm_recurses = False`` (default) — paths are exact-match leaves. Every architecture-hint field at
+      every depth under the section's config class must be exactly listed by some declaration.
+    * ``fast_llm_recurses = True`` — paths are recursive prefixes covering the entire subtree. Used by primitives
+      that delegate to a sub-converter that runs its own coverage check (Nested/Dispatch/TypedDictContainer), by
       :class:`IgnoredConfigConverter` (the format intentionally does not represent the subtree), and by
       :class:`CustomConfigConverter` when its author opts in (escape hatch for cases like rotary that don't
       decompose into per-leaf renames).
+
+    The HF-side counterpart :meth:`ConfigSectionConverter.check_hf_coverage` always treats every entry in
+    ``hf_paths`` as a recursive prefix, regardless of ``fast_llm_recurses``. HF configs frequently carry leaf
+    values (numbers, strings) that the walker has no further depth to descend into, and sub-dicts that round-trip
+    through transformers' ``save_pretrained`` may sprout new keys that don't correspond to Fast-LLM fields —
+    treating any claimed HF path as a recursive prefix is the simplest contract that survives both. Use
+    :class:`IgnoredConfigConverter` with ``hf_paths=...`` to claim HF subtrees the format doesn't surface to
+    Fast-LLM (transformers' generated metadata, defaulted-but-unused inference fields, ...).
     """
 
     fast_llm_paths: tuple[tuple[str, ...], ...] = ()
     hf_paths: tuple[tuple[str, ...], ...] = ()
-    recurses: typing.ClassVar[bool] = False
+    fast_llm_recurses: typing.ClassVar[bool] = False
 
     @abc.abstractmethod
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None: ...
@@ -212,7 +221,7 @@ class IgnoredConfigConverter(ConfigConverter):
     covers the entire subtree under each listed path on the side it applies to.
     """
 
-    recurses: typing.ClassVar[bool] = True
+    fast_llm_recurses: typing.ClassVar[bool] = True
 
     def __init__(self, *fast_llm_paths: tuple[str, ...], hf_paths: tuple[tuple[str, ...], ...] = ()):
         self.fast_llm_paths = fast_llm_paths
@@ -232,10 +241,11 @@ class CustomConfigConverter(ConfigConverter):
     Cross-field validators that produce nothing on the HF side belong on :py:meth:`ConfigSectionConverter._validate_export`
     instead; this primitive is for shape-changing transforms.
 
-    Pass ``recurses=True`` when the converter genuinely owns a sub-config subtree (e.g. rotary, per-layer biases) —
-    the listed paths then act as recursive prefixes and the architecture-coverage check stops at them. The author
-    is trusted to handle every architecture field of the claimed subtree; prefer Nested/Dispatch primitives when
-    the subtree decomposes cleanly.
+    Pass ``fast_llm_recurses=True`` when the converter genuinely owns a sub-config subtree (e.g. rotary, per-layer
+    biases) — the listed ``fast_llm_paths`` then act as recursive prefixes and the architecture-coverage check stops
+    at them. The author is trusted to handle every architecture field of the claimed subtree; prefer
+    Nested/Dispatch primitives when the subtree decomposes cleanly. The HF-side coverage walker treats every entry
+    of ``hf_paths`` as a recursive prefix regardless (see :class:`ConfigConverter`).
     """
 
     def __init__(
@@ -244,13 +254,13 @@ class CustomConfigConverter(ConfigConverter):
         export_fn: typing.Callable[[Config], dict],
         import_fn: typing.Callable[[dict], dict],
         hf_paths: tuple[tuple[str, ...], ...] = (),
-        recurses: bool = False,
+        fast_llm_recurses: bool = False,
     ):
         self.fast_llm_paths = fast_llm_paths
         self.hf_paths = hf_paths
         self._export_fn = export_fn
         self._import_fn = import_fn
-        self.recurses = recurses
+        self.fast_llm_recurses = fast_llm_recurses
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         produced = self._export_fn(fast_llm_config)
@@ -273,10 +283,10 @@ class ImportOnlyConfigConverter(ConfigConverter):
     ``import_fn`` produces the Fast-LLM dict entries. The fast_llm_paths register as consumed for the
     architecture-coverage check; ``hf_paths`` register as consumed for the HF-side check.
 
-    Pass ``recurses=True`` when the converter populates a sub-config subtree (e.g. Qwen2's per-layer
-    biases that target ``query_layer``/``key_layer``/...). Same trade-off as
-    :class:`CustomConfigConverter`: the listed paths become recursive prefixes and the framework no
-    longer enforces leaf coverage under them.
+    Pass ``fast_llm_recurses=True`` when the converter populates a sub-config subtree (e.g. Qwen2's per-layer
+    biases that target ``query_layer``/``key_layer``/...). Same trade-off as :class:`CustomConfigConverter`: the
+    listed ``fast_llm_paths`` become recursive prefixes and the framework no longer enforces leaf coverage under
+    them. The HF-side coverage walker treats every entry of ``hf_paths`` as a recursive prefix regardless.
     """
 
     def __init__(
@@ -284,12 +294,12 @@ class ImportOnlyConfigConverter(ConfigConverter):
         fast_llm_paths: tuple[tuple[str, ...], ...],
         import_fn: typing.Callable[[dict], dict],
         hf_paths: tuple[tuple[str, ...], ...] = (),
-        recurses: bool = False,
+        fast_llm_recurses: bool = False,
     ):
         self.fast_llm_paths = fast_llm_paths
         self.hf_paths = hf_paths
         self._import_fn = import_fn
-        self.recurses = recurses
+        self.fast_llm_recurses = fast_llm_recurses
 
     def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
         pass
@@ -314,7 +324,7 @@ class NestedConfigConverter(ConfigConverter):
     for homogeneous (single-target) cases.
     """
 
-    recurses: typing.ClassVar[bool] = True
+    fast_llm_recurses: typing.ClassVar[bool] = True
 
     def __init__(
         self,
@@ -358,7 +368,7 @@ class DispatchConfigConverter(ConfigConverter):
     Both registries (Fast-LLM type → converter class, HF discriminator → converter class) must agree at runtime.
     """
 
-    recurses: typing.ClassVar[bool] = True
+    fast_llm_recurses: typing.ClassVar[bool] = True
 
     def __init__(
         self,
@@ -410,7 +420,7 @@ class TypedDictContainerConfigConverter(ConfigConverter):
     is then omitted on export and ignored on import.
     """
 
-    recurses: typing.ClassVar[bool] = True
+    fast_llm_recurses: typing.ClassVar[bool] = True
 
     def __init__(
         self,
@@ -632,10 +642,10 @@ class ConfigSectionConverter(abc.ABC):
         field whose runtime value is a :class:`Config`, collecting an architecture-leaf list, and matches each
         leaf against the section's declarations:
 
-        * Recursive declarations (``recurses = True`` — Nested/Dispatch/TypedDictContainer/Ignored, plus Custom
-          when its author opts in) cover the entire subtree under each listed prefix. Nested/Dispatch/TypedDict
-          delegate to a sub-converter that runs its own coverage check; Ignored and recursive Custom assume the
-          author has handled the subtree.
+        * Recursive declarations (``fast_llm_recurses = True`` — Nested/Dispatch/TypedDictContainer/Ignored, plus
+          Custom when its author opts in) cover the entire subtree under each listed prefix.
+          Nested/Dispatch/TypedDict delegate to a sub-converter that runs its own coverage check; Ignored and
+          recursive Custom assume the author has handled the subtree.
         * Non-recursive declarations (Rename, ConstantImport/Export, Default, Optional, ImportOnly, Custom by
           default) must list every architecture leaf they consume by exact path.
 
@@ -648,7 +658,7 @@ class ConfigSectionConverter(abc.ABC):
         explicit_paths: set[tuple[str, ...]] = set()
         recursive_prefixes: list[tuple[str, ...]] = []
         for converter in declarations.values():
-            if converter.recurses:
+            if converter.fast_llm_recurses:
                 recursive_prefixes.extend(converter.fast_llm_paths)
             else:
                 explicit_paths.update(converter.fast_llm_paths)
@@ -669,7 +679,8 @@ class ConfigSectionConverter(abc.ABC):
                 hint = (
                     f" (declarations for {names} claim the parent path non-recursively; "
                     f"either list every architecture sub-field or switch to Nested/Dispatch — "
-                    f"or pass ``recurses=True`` to a Custom/ImportOnly converter when claiming the whole subtree)"
+                    f"or pass ``fast_llm_recurses=True`` to a Custom/ImportOnly converter when claiming the whole "
+                    f"subtree)"
                 )
             raise ValueError(
                 f"{cls.__name__}: architecture-hint fields on {type(config).__name__} "

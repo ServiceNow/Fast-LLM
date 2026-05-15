@@ -48,7 +48,7 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
                     ("value_layer",): {"bias": {"enabled": True}},
                     ("dense_layer",): {"bias": {"enabled": False}},
                 },
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             # Sliding-window machinery surfaced by Qwen2 HF but not yet supported here (see TODO above).
             "sliding_window_unsupported": IgnoredConfigConverter(
@@ -124,7 +124,7 @@ class Qwen2HeadConverter(LlamaHeadConverter):
 
 def _qwen2_mrope_guard_import(hf_dict: dict) -> dict:
     if hf_dict.get("use_mrope") is True:
-        raise AssertionError("MRoPE (use_mrope=True) is not supported by the Qwen2 converter")
+        raise NotImplementedError("MRoPE (use_mrope=True) is not supported by the Qwen2 converter")
     return {}
 
 

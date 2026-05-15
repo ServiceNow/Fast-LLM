@@ -80,7 +80,7 @@ def _per_layer_bias_converter(layer_names: tuple[str, ...]) -> CustomConfigConve
         hf_paths=tuple((name,) for name in layer_names),
         export_fn=lambda c: _per_layer_bias_export(c, layer_names),
         import_fn=lambda hf: _per_layer_bias_import(hf, layer_names),
-        recurses=True,
+        fast_llm_recurses=True,
     )
 
 
@@ -160,7 +160,7 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
                 hf_paths=(("rotary",),),
                 export_fn=_apriel2_attention_rotary_export,
                 import_fn=_apriel2_attention_rotary_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             # Apriel2 emits add_linear_biases only when False; the True default is implicit.
             "add_linear_biases": OptionalConfigConverter(
@@ -259,7 +259,7 @@ class Apriel2MambaConverter(ConfigSectionConverter):
                 hf_paths=(("d_conv",), ("conv_bias",), ("dt_proj_bias",)),
                 export_fn=_apriel2_mamba_aux_export,
                 import_fn=_apriel2_mamba_aux_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             # Architecture fields with no HF counterpart; they round-trip at their Fast-LLM defaults.
             "layers_unmapped": IgnoredConfigConverter(

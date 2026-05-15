@@ -659,7 +659,7 @@ class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConve
 
     Each section ((embeddings, decoder, head)) is therefore expressed as a :class:`CustomConfigConverter`
     that delegates to an imperative helper class (kept private to this module). Coverage at the
-    section level is satisfied via ``recurses=True``.
+    section level is satisfied via ``fast_llm_recurses=True``.
     """
 
     fast_llm_config_class = GPTBaseModelConfig
@@ -698,7 +698,7 @@ class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConve
                 hf_paths=(("vocab_size",),),
                 export_fn=_embeddings_export,
                 import_fn=_embeddings_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             "decoder": CustomConfigConverter(
                 fast_llm_paths=(("decoder",),),
@@ -725,14 +725,14 @@ class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConve
                 ),
                 export_fn=_decoder_export,
                 import_fn=_decoder_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             "head": CustomConfigConverter(
                 fast_llm_paths=(("head",),),
                 hf_paths=(("final_logit_softcapping",),),
                 export_fn=_head_export,
                 import_fn=_head_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             "hidden_size": RenameConfigConverter(("hidden_size",), ("hidden_size",)),
             "tied_embedding_weight": RenameConfigConverter(("tied_embedding_weight",), ("tie_word_embeddings",)),

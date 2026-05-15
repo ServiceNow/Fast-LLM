@@ -16,7 +16,6 @@ from fast_llm.engine.checkpoint.external import (
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
-from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Rotary2DConfig
 from fast_llm.layers.block.config import FixedBlockSequenceConfig
@@ -27,6 +26,7 @@ from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderCo
 from fast_llm.models.gpt.conversion.apriel2 import (
     Apriel2BaseModelConverter,
     Apriel2HeadConverter,
+    Apriel2MLPConverter,
     Apriel2RMSNormConverter,
     get_apriel2_decoder_converter,
 )
@@ -39,7 +39,6 @@ from fast_llm.models.gpt.conversion.llama import (
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.models.multimodal.conversion.config import Apriel2CheckpointFormat
 from fast_llm.models.multimodal.conversion.llava import (
-    LlavaVisionAdapterConverter,
     PatchEmbeddingWeightConverter,
     PixtralAttentionConverter,
 )
@@ -101,7 +100,7 @@ class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
                 hf_paths=(("rotary",),),
                 export_fn=_apriel2_vision_attention_rotary_export,
                 import_fn=_apriel2_vision_attention_rotary_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             # Apriel2 vision attention has no per-layer bias representation; the Fast-LLM defaults round-trip.
             "linear_layers": IgnoredConfigConverter(
@@ -124,42 +123,23 @@ class Apriel2VisionAttentionConverter(PixtralAttentionConverter):
         Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
 
 
-class Apriel2VisionMLPConverter(ConfigSectionConverter):
+class Apriel2VisionMLPConverter(Apriel2MLPConverter):
     """The vision-side MLP shape ``{type: mlp, intermediate_size, activation, gated, add_linear_biases}``.
 
     Distinct from the text :class:`Apriel2MLPConverter` only in lacking the per-layer-bias declaration: the
     Apriel2 vision MLP HF shape has no representation for per-layer ``bias.enabled`` overrides, so the
     Fast-LLM defaults are dropped on export (declared :class:`IgnoredConfigConverter`) and re-defaulted on
-    import. Weight-side ``get_converters`` is shared with the text MLP.
+    import. Weight-side ``get_converters`` is inherited from the text MLP.
     """
-
-    fast_llm_config_class = MLPConfig
-    hf_type_name = "mlp"
 
     @classmethod
     def _create_config_converters(cls) -> dict:
         return {
-            "intermediate_size": RenameConfigConverter(("intermediate_size",), ("intermediate_size",)),
-            "gated": RenameConfigConverter(("gated",), ("gated",)),
-            "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("add_linear_biases",)),
-            "activation": CustomConfigConverter(
-                fast_llm_paths=(("activation",),),
-                hf_paths=(("activation",),),
-                export_fn=lambda c: {("activation",): c.activation.hf_name},
-                import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
-            ),
-            "linear_layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
-            "pre_norm": ConstantImportConfigConverter(("pre_norm",), None),
-            "post_norm": ConstantImportConfigConverter(("post_norm",), None),
+            **super()._create_config_converters(),
+            # Apriel2 vision MLP has no per-layer ``bias.enabled`` representation; the Fast-LLM defaults
+            # round-trip. Replaces the text MLP's ``_per_layer_bias_converter`` claim.
+            "layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
         }
-
-    @classmethod
-    def get_converters(
-        cls, config: MLPConfig, fast_llm_prefix: str, hf_prefix: str, drop_on_export: bool = False
-    ) -> list[WeightConverter]:
-        from fast_llm.models.gpt.conversion.apriel2 import Apriel2MLPConverter
-
-        return Apriel2MLPConverter.get_converters(config, fast_llm_prefix, hf_prefix, drop_on_export)
 
 
 class Apriel2VisionBlockConverter(ConfigSectionConverter):
@@ -261,7 +241,7 @@ class Apriel2VisionEncoderConverter(ConfigSectionConverter):
                     ("num_blocks",): hf["encoder"]["num_blocks"],
                     ("block",): cls.block_converter_class.import_config(hf["encoder"]["block"]),
                 },
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             "num_hidden_layers_mirror": CustomConfigConverter(
                 fast_llm_paths=(),
@@ -349,41 +329,43 @@ class Apriel2EmbeddingsConverter(ConfigSectionConverter):
         ]
 
 
-class Apriel2VisionAdapterConverter(LlavaVisionAdapterConverter):
+class Apriel2VisionAdapterConverter(Apriel2VisionMLPConverter):
     """Converts :class:`MLPConfig` (adapter) ↔ Apriel2 HF ``adapter`` subdict.
 
-    Apriel2 nests the adapter shape under ``adapter`` and uses the typed ``{type: mlp, ...}`` dict-of-fields
-    layout, distinct from Llava's flat top-level ``projector_hidden_act``/``multimodal_projector_bias`` shape.
-
-    Inherits declarative ``import_config``/``export_config`` from :class:`ConfigSectionConverter` via
-    :class:`LlavaVisionAdapterConverter`, and weight-side ``get_converters`` from Llava (same ``linear_1`` /
-    ``linear_2`` weight names as Llava).
+    Config side: shares the vision MLP declaration (typed ``{type: mlp, ...}`` shape with no per-layer-bias
+    representation). Weight side: uses ``linear_1`` / ``linear_2`` weight names matching the Llava-style
+    adapter (distinct from the Apriel2 MLP ``gate_proj``/``up_proj``/``down_proj`` layout).
     """
-
-    fast_llm_config_class = MLPConfig
-    hf_type_name = "mlp"
-
-    @classmethod
-    def _create_config_converters(cls) -> dict:
-        return {
-            "intermediate_size": RenameConfigConverter(("intermediate_size",), ("intermediate_size",)),
-            "gated": RenameConfigConverter(("gated",), ("gated",)),
-            "add_linear_biases": RenameConfigConverter(("add_linear_biases",), ("add_linear_biases",)),
-            "activation": CustomConfigConverter(
-                fast_llm_paths=(("activation",),),
-                hf_paths=(("activation",),),
-                export_fn=lambda c: {("activation",): c.activation.hf_name},
-                import_fn=lambda hf: {("activation",): ActivationType.from_hf_name(hf["activation"])},
-            ),
-            "linear_layers": IgnoredConfigConverter(("layer_1",), ("layer_2",)),
-            "pre_norm": ConstantImportConfigConverter(("pre_norm",), None),
-            "post_norm": ConstantImportConfigConverter(("post_norm",), None),
-        }
 
     @classmethod
     def _validate_export(cls, config: MLPConfig) -> None:
         Assert.incl(config.layer_1.bias.enabled, (None, config.add_linear_biases))
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
+
+    # --- weight side (imperative) ---
+
+    @classmethod
+    def get_converters(
+        cls, config: MLPConfig, fast_llm_prefix: str, hf_prefix: str, drop_on_export: bool = False
+    ) -> list[WeightConverter]:
+        from fast_llm.models.gpt.conversion.llama import MLPLayer2Converter
+
+        return [
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_1",
+                f"{hf_prefix}.linear_1",
+                config.add_linear_biases,
+                WeightConverter,
+                drop_on_export=drop_on_export,
+            ),
+            *get_weight_and_bias_converters(
+                f"{fast_llm_prefix}.layer_2",
+                f"{hf_prefix}.linear_2",
+                config.add_linear_biases,
+                MLPLayer2Converter,
+                drop_on_export=drop_on_export,
+            ),
+        ]
 
 
 class Apriel2VisionModelConverter(ConfigSectionConverter):
@@ -522,7 +504,7 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
                 hf_paths=tuple(text_base_cls._consumed_hf_paths()),
                 export_fn=lambda c: {(k,): v for k, v in text_base_cls.export_config(c).items()},
                 import_fn=lambda hf: {(k,): v for k, v in text_base_cls.import_config(hf).items()},
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             # Optional vision encoder. The Fast-LLM ``vision_encoder`` field is architecture-hint and
             # ``None`` by default; the HF ``vision_encoder`` key is absent for text-only models.
@@ -531,7 +513,7 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
                 hf_paths=(("vision_encoder",),),
                 export_fn=_vision_export,
                 import_fn=_vision_import,
-                recurses=True,
+                fast_llm_recurses=True,
             ),
             # ``image_token_index`` is FieldHint.optional so it's not in the architecture-coverage set,
             # but it does live on the HF dict for vision-enabled checkpoints.
