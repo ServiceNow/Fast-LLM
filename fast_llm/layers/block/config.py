@@ -146,7 +146,10 @@ class FixedBlockSequenceConfig(BlockSequenceConfig):
 @config_class(dynamic_type={BlockSequenceConfig: "pattern"})
 class PatternBlockSequenceConfig(BlockSequenceConfig):
     _abstract = False
-    blocks: dict[str, BlockConfig] = Field()
+    blocks: dict[str, BlockConfig] = Field(
+        desc="Named block configurations referenced by `pattern`.",
+        hint=FieldHint.architecture,
+    )
     pattern: list[str] = Field(
         default=None,
         desc="The name of each block (key in `blocks`) in the repeated pattern.",

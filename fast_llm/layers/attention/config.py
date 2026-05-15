@@ -63,7 +63,7 @@ class AttentionConfig(MixerConfig):
     )
     dense_layer: AffineLinearConfig = Field(
         desc="Initialization configuration for the dense layer.",
-        hint=FieldHint.feature,
+        hint=FieldHint.architecture,
     )
     # TODO: Review names
     rotary: RotaryConfig = Field(
@@ -116,6 +116,7 @@ class AttentionConfig(MixerConfig):
         " Under Standard Parameterization (SP): default to 0.5. "
         " Under muP (if scaling head_size size): use 1. "
         " Under muP (if scaling number of heads instead of head_size): use 0.5.",
+        hint=FieldHint.architecture,
         valid=skip_valid_if_none(check_field(Assert.geq, 0)),
     )
     implementation: AttentionImplementation = Field(
