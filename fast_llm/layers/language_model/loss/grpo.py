@@ -114,7 +114,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             "group": self._parallel_dim.group if self._vocab_parallel else None,
             "epsilon_low": self._config.epsilon_low,
             "epsilon_high": self._config.epsilon_high,
-            "logits_scale_factor": self._effective_logits_scale,
+            "logits_scale_factor": self._logits_scale_factor,
             "num_labels_in_seq": (
                 None
                 if losses is None
@@ -156,7 +156,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
             self._config.epsilon_low,
             self._config.epsilon_high,
-            self._effective_logits_scale,
+            self._logits_scale_factor,
             group=self._parallel_dim.group if self._vocab_parallel else None,
             compute_entropy=self._config.metrics == GRPOMetricsLevel.with_entropy,
         )
@@ -219,10 +219,6 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return {"use_grpo_data": True, "return_label_counts": True, "return_document_count": True}
-
-    @functools.cached_property
-    def _effective_logits_scale(self) -> float:
-        return self._logits_scale_factor / self._config.temperature
 
     @functools.cached_property
     def _logprob_metric_name(self) -> str:
