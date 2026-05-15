@@ -454,7 +454,7 @@ class AprielBlockConverter:
         return cls._converter_classes[cls._config_classes[layout_name]].import_config(config)
 
     @classmethod
-    def export_config(cls, config) -> dict:
+    def export_config(cls, config: DecoderBlockConfig) -> dict:
         return cls._converter_classes[type(config.mixer)].export_config(config)
 
     @classmethod

@@ -559,7 +559,7 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
 
 
 # Mixer dispatch registry — used inside StochasticMixer (no nested-stochastic) and at the block level.
-APRIEL2_LEAF_MIXER_REGISTRY: dict = {
+APRIEL2_LEAF_MIXER_REGISTRY: dict[type[Config], type[ConfigSectionConverter]] = {
     AttentionConfig: Apriel2AttentionConverter,
     MambaConfig: Apriel2MambaConverter,
     GatedDeltaNetConfig: Apriel2GatedDeltaNetConverter,
@@ -614,7 +614,7 @@ class Apriel2StochasticMixerConverter(ConfigSectionConverter):
 
 
 # Block-level mixer registry includes StochasticMixer (which can wrap leaf mixers).
-APRIEL2_BLOCK_MIXER_REGISTRY: dict = {
+APRIEL2_BLOCK_MIXER_REGISTRY: dict[type[Config], type[ConfigSectionConverter]] = {
     **APRIEL2_LEAF_MIXER_REGISTRY,
     StochasticMixerConfig: Apriel2StochasticMixerConverter,
 }
@@ -661,7 +661,7 @@ class Apriel2NoNormConverter(ConfigSectionConverter):
         return {}
 
 
-APRIEL2_NORM_REGISTRY: dict = {
+APRIEL2_NORM_REGISTRY: dict[type[Config], type[ConfigSectionConverter]] = {
     RMSNormalizationConfig: Apriel2RMSNormConverter,
     LayerNormalizationConfig: Apriel2LayerNormConverter,
     NoNormalizationConfig: Apriel2NoNormConverter,
@@ -888,7 +888,7 @@ class Apriel2PatternDecoderConverter(ConfigSectionConverter):
         return converters
 
 
-APRIEL2_DECODER_REGISTRY: dict = {
+APRIEL2_DECODER_REGISTRY: dict[type[Config], type[ConfigSectionConverter]] = {
     FixedBlockSequenceConfig: Apriel2FixedDecoderConverter,
     PatternBlockSequenceConfig: Apriel2PatternDecoderConverter,
 }
@@ -936,7 +936,7 @@ class Apriel2HeadConverter(ConfigSectionConverter):
     @classmethod
     def get_converters(
         cls,
-        config,
+        config: LanguageModelHeadConfig,
         exported_config: dict,
         fast_llm_prefix: str,
     ) -> list[WeightConverter]:

@@ -59,7 +59,7 @@ def effective_bias(layer_config: AffineLinearConfig, default: bool) -> bool:
 
 
 # ============================================================
-# Weight converters (imperative — kept as-is during config migration)
+# Weight converters (imperative)
 # ============================================================
 
 

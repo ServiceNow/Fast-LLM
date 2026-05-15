@@ -22,6 +22,7 @@ from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Rotary2
 from fast_llm.layers.block.config import FixedBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
+from fast_llm.layers.language_model.config import LanguageModelHeadConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.apriel2 import (
     Apriel2BaseModelConverter,
@@ -456,7 +457,7 @@ class Apriel2MultimodalHeadConverter(Apriel2HeadConverter):
     @classmethod
     def get_converters(
         cls,
-        config,
+        config: LanguageModelHeadConfig,
         exported_config: dict,
         fast_llm_prefix: str,
     ) -> list[WeightConverter]:

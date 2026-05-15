@@ -475,9 +475,8 @@ class ConfigSectionConverter(abc.ABC):
     """Base class for converting one Fast-LLM ``Config`` class ↔ one HF dict subtree.
 
     Subclasses declare the conversion via ``_create_config_converters``. Format-specific cross-field
-    invariants go on the ``_validate_export`` hook. The weight side is still imperative (per-converter
-    ``get_converters`` classmethods on the concrete subclasses); a declarative weight-side primitive will be
-    added when the weight-converter migration lands.
+    invariants go on the ``_validate_export`` hook. The weight side is imperative — concrete subclasses
+    provide a ``get_converters`` classmethod that emits :class:`WeightConverter` instances.
 
     Subclasses that participate in :class:`DispatchConfigConverter` set ``hf_type_name`` to the discriminator value
     used by the HF format (e.g. ``"attention"``, ``"mamba"``).

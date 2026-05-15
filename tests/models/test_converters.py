@@ -7,8 +7,6 @@ For each registered ``HuggingfaceStateDictCheckpointHandler``, walk its modular 
 * Architecture-hint fields on ``cls.fast_llm_config_class`` are all consumed by some declaration.
 * OptionalConfigConverter sentinels match the resolved field default. Otherwise an exported value equal
   to the sentinel becomes absent on disk and re-imports as a different default, silently breaking round-trip.
-
-Replaces the per-export ``check_architecture_coverage`` invocation that used to happen on every save.
 """
 
 import typing
