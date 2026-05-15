@@ -4,6 +4,7 @@ FROM nvcr.io/nvidia/pytorch:25.11-py3
 # Install dependencies.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y acl git-lfs \
+    # && apt-get install --no-install-recommends -y acl git-lfs libtiff5-dev \
     && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 

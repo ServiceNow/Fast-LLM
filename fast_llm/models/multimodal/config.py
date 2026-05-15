@@ -6,6 +6,7 @@ from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.layers.audio_encoder.config import AudioMultiModalModelConfig
 from fast_llm.layers.vision.config import VisionMultiModalModelConfig
 from fast_llm.models.gpt.config import (
     GPTBaseModelConfig,
@@ -15,8 +16,11 @@ from fast_llm.models.gpt.config import (
 )
 from fast_llm.models.multimodal.conversion.config import (
     Apriel2CheckpointFormat,
+    AyraCheckpointFormat,
     LlavaCheckpointFormat,
     LlavaHybridSSMCheckpointFormat,
+    UltravoxCheckpointFormat,
+    WhisperCheckpointFormat,
 )
 
 if typing.TYPE_CHECKING:
@@ -28,7 +32,15 @@ logger = logging.getLogger(__name__)
 
 
 @config_class()
-class MultiModalBaseModelConfig(VisionMultiModalModelConfig, GPTBaseModelConfig):
+class MultiModalBaseModelConfig(VisionMultiModalModelConfig, AudioMultiModalModelConfig, GPTBaseModelConfig):
+    def _validate(self) -> None:
+        super()._validate()
+        if self.vision_encoder is None and not self.audio_encoder.enabled:
+            raise ValueError(
+                "MultiModalBaseModelConfig requires at least one encoder to be enabled. "
+                "Set model.base_model.vision_encoder or model.base_model.audio_encoder.encoder_type."
+            )
+
     @property
     def base_model_class(self) -> type["MultiModalBaseModel"]:
         from fast_llm.models.multimodal.model import MultiModalBaseModel
@@ -45,6 +57,9 @@ class MultiModalModelConfig(GPTModelConfig):
         LlavaCheckpointFormat,
         LlavaHybridSSMCheckpointFormat,
         Apriel2CheckpointFormat,
+        WhisperCheckpointFormat,
+        AyraCheckpointFormat,
+        UltravoxCheckpointFormat,
     )
 
     @classmethod
@@ -74,8 +89,13 @@ class PretrainedMultiModalModelConfig(PretrainedGPTModelConfig):
 
 @config_class(dynamic_type={RunnableConfig: "train_multimodal", TrainerConfig: "multimodal"})
 class MultiModalTrainerConfig(PretrainedMultiModalModelConfig, GPTTrainerConfig):
+    # Reference models can be either text-only (`PretrainedGPTModelConfig`) or
+    # multi-modal (`PretrainedMultiModalModelConfig`, a subtype).  Typing the
+    # field as the GPT supertype lets users plug in either shape:
+    #   - default: text-only LM (e.g. rc8 Llama for audio distillation)
+    #   - opt-in:  multi-modal teacher via `model.type: multimodal` in the YAML
     # TODO: Use dynamic model type?
-    reference_models: dict[str, PretrainedMultiModalModelConfig] = FieldOverride()
+    reference_models: dict[str, PretrainedGPTModelConfig] = FieldOverride()
 
     @classmethod
     def get_trainer_class(cls) -> type["MultiModalTrainer"]:

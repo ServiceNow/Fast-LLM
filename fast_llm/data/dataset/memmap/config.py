@@ -18,6 +18,7 @@ if typing.TYPE_CHECKING:
         MemmapWriter,
         NullMemmapReader,
     )
+    from fast_llm.data.dataset.memmap.audio import AudioReader, AudioWriter
     from fast_llm.data.dataset.memmap.language_model import LanguageModelReader, LanguageModelWriter
     from fast_llm.data.dataset.memmap.patch import PatchReader, PatchWriter
     from fast_llm.data.dataset.memmap.range import RangeReader, RangeWriter
@@ -345,6 +346,77 @@ class MemmapIndexDatasetReaderConfig(MemmapReaderConfig):
         return {"num_tokens": sum(metadata_["num_tokens"] for metadata_ in metadata)}
 
 
+@config_class(dynamic_type={MemmapReaderBaseConfig: "audio"})
+class AudioReaderConfig(MemmapIndexDatasetReaderConfig):
+    """
+    Configuration for an audio reader section in a memmap file.
+
+    Buffer layout (each section ends with its own header/footer):
+      [float32 × num_samples]          — concatenated raw audio waveforms
+      [int32   × num_clips]            — length (in float32 samples) per clip
+      [int32   × num_clips]            — token position of each clip in the LM sequence
+      [int32   × (num_documents + 1)]  — CSR clip offsets per document
+    """
+
+    _abstract = False
+    header: typing.ClassVar[bytes] = b"audio begin"
+    footer: typing.ClassVar[bytes] = b"audio end"
+
+    num_documents: int = Field(desc="Total number of documents.")
+    num_clips: int = Field(desc="Total number of audio clips across all documents.")
+    num_samples: int = Field(desc="Total number of float32 audio samples across all clips.")
+
+    def __len__(self) -> int:
+        return self.num_documents
+
+    @property
+    def num_tokens(self) -> int:
+        return 0
+
+    @property
+    def _expected_buffer_size(self) -> int:
+        import torch
+
+        return (
+            self.num_samples * torch.float32.itemsize
+            + self.num_clips * torch.int32.itemsize  # lengths
+            + self.num_clips * torch.int32.itemsize  # positions
+            + (self.num_documents + 1) * torch.int32.itemsize  # CSR offsets
+        )
+
+    @property
+    def reader_class(self) -> "type[AudioReader]":
+        from fast_llm.data.dataset.memmap.audio import AudioReader
+
+        return AudioReader
+
+    @property
+    def writer_class(self) -> "type[AudioWriter]":
+        from fast_llm.data.dataset.memmap.audio import AudioWriter
+
+        return AudioWriter
+
+    def get_split(self, begin_ratio: float, end_ratio: float) -> tuple[int, int, dict[str, typing.Any]]:
+        begin_index = round(begin_ratio * self.num_documents)
+        end_index = round(end_ratio * self.num_documents)
+        return begin_index, end_index, self.get_metadata()
+
+    def get_metadata(self) -> dict[str, typing.Any]:
+        return {
+            "num_documents": self.num_documents,
+            "num_clips": self.num_clips,
+            "num_samples": self.num_samples,
+        }
+
+    @classmethod
+    def blend_metadata(cls, metadata: list[dict[str, typing.Any]]) -> dict[str, typing.Any]:
+        return {
+            "num_documents": sum(m["num_documents"] for m in metadata),
+            "num_clips": sum(m["num_clips"] for m in metadata),
+            "num_samples": sum(m["num_samples"] for m in metadata),
+        }
+
+
 @config_class(dynamic_type={MemmapReaderBaseConfig: "language_model"})
 class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     _abstract = False
@@ -356,8 +428,13 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
     chosen_spans: MemmapReaderBaseConfig = Field()
     rejected_spans: MemmapReaderBaseConfig = Field()
     image_patches: MemmapReaderBaseConfig = Field()
+    audio: MemmapReaderBaseConfig = Field()
     advantages: MemmapReaderBaseConfig = Field()
     old_log_probabilities: MemmapReaderBaseConfig = Field()
+    # Parallel teacher stream (audio distillation): a recursive LanguageModelReaderConfig
+    # holding the text-only teacher's tokens / loss-masking spans (different total length
+    # from the student).  NullReaderConfig when absent -> shard works as label-CE-only data.
+    teacher: MemmapReaderBaseConfig = Field()
 
     def _validate(self) -> None:
         super()._validate()
@@ -383,10 +460,18 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
         return isinstance(self.image_patches, PatchReaderConfig)
 
     @functools.cached_property
+    def has_audio(self) -> bool:
+        return isinstance(self.audio, AudioReaderConfig)
+
+    @functools.cached_property
     def has_grpo_data(self) -> bool:
         has_grpo_data = isinstance(self.advantages, TokenDataReaderConfig)
         Assert.eq(has_grpo_data, isinstance(self.old_log_probabilities, TokenDataReaderConfig))
         return has_grpo_data
+
+    @functools.cached_property
+    def has_teacher(self) -> bool:
+        return isinstance(self.teacher, LanguageModelReaderConfig)
 
     @functools.cached_property
     def patch_shape(self) -> tuple[int, int, int]:
@@ -417,8 +502,10 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             + self.chosen_spans.expected_buffer_size
             + self.rejected_spans.expected_buffer_size
             + self.image_patches.expected_buffer_size
+            + self.audio.expected_buffer_size
             + self.advantages.expected_buffer_size
             + self.old_log_probabilities.expected_buffer_size
+            + self.teacher.expected_buffer_size
         )
 
     def get_metadata(self) -> dict[str, typing.Any]:
@@ -431,9 +518,13 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             out["rejected_spans"] = self.rejected_spans.get_metadata()
         if self.has_image_patches:
             out["image_patches"] = self.image_patches.get_metadata()
+        if self.has_audio:
+            out["audio"] = self.audio.get_metadata()
         if self.has_grpo_data:
             out["advantages"] = self.advantages.get_metadata()
             out["old_log_probabilities"] = self.old_log_probabilities.get_metadata()
+        if self.has_teacher:
+            out["teacher"] = self.teacher.get_metadata()
         return out
 
     @classmethod
@@ -456,6 +547,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             out["image_patches"] = PatchReaderConfig.blend_metadata(
                 [metadata_["image_patches"] for metadata_ in metadata]
             )
+        if "audio" in metadata[0]:
+            out["audio"] = AudioReaderConfig.blend_metadata([metadata_["audio"] for metadata_ in metadata])
         if "advantages" in metadata[0]:
             out["advantages"] = TokenDataReaderConfig.blend_metadata(
                 [metadata_["advantages"] for metadata_ in metadata]
@@ -464,6 +557,8 @@ class LanguageModelReaderConfig(MemmapIndexDatasetReaderConfig):
             out["old_log_probabilities"] = TokenDataReaderConfig.blend_metadata(
                 [metadata_["old_log_probabilities"] for metadata_ in metadata]
             )
+        if "teacher" in metadata[0]:
+            out["teacher"] = LanguageModelReaderConfig.blend_metadata([metadata_["teacher"] for metadata_ in metadata])
         return out
 
 

@@ -416,3 +416,101 @@ def test_preprocessing(test_config: PreprocessingTestConfig):
         _assert_tensor_equal_or_none(model_input.cumulative_lengths_q, cu_q)
         _assert_tensor_equal_or_none(model_input.cumulative_lengths_k, cu_k)
         Assert.eq(model_input.num_documents, test_config.expected_num_documents[split_index])
+
+
+def test_parallel_teacher_stream_wiring():
+    """End-to-end shape check for the audio-distillation parallel teacher stream.
+
+    Builds documents with both a student stream (length 30, response in last 10
+    tokens) and a teacher stream (length 25, response in last 10 tokens) and
+    walks them through the batch builder.  Verifies that:
+
+    1. `LanguageModelBatch.from_documents` picks up the per-document teachers
+       and produces a `batch.teacher` of the right total length.
+    2. `get_model_inputs` builds a parallel `model_input.teacher` with its own
+       tokens / lengths / target masks.
+    3. `to_kwargs` emits `LanguageModelKwargs.teacher_loss_mask` and the
+       student/teacher masks select the same number of response tokens
+       (the alignment guarantee that the gather-then-KL loss path relies on).
+    """
+    from fast_llm.layers.language_model.config import LanguageModelKwargs
+
+    # Two docs.  Per-doc: student length 30 (mask first 20), teacher length 25 (mask first 15).
+    # Response = last 10 tokens on each side.
+    n_docs = 2
+    student_len, teacher_len, n_response = 30, 25, 10
+    student_mask_end = student_len - n_response  # 20
+    teacher_mask_end = teacher_len - n_response  # 15
+
+    documents = [
+        LanguageModelDocument(
+            tokens=torch.arange(student_len, dtype=torch.int64) + 1000 * i,
+            loss_masking_spans=RangeDocument(ranges=[(0, student_mask_end)]),
+            teacher=LanguageModelDocument(
+                tokens=torch.arange(teacher_len, dtype=torch.int64) + 1000 * i + 500,
+                loss_masking_spans=RangeDocument(ranges=[(0, teacher_mask_end)]),
+            ),
+        )
+        for i in range(n_docs)
+    ]
+
+    batch = LanguageModelBatch.from_documents(documents)
+    Assert.eq(len(batch.tokens), n_docs * student_len)
+    assert batch.teacher is not None
+    Assert.eq(len(batch.teacher.tokens), n_docs * teacher_len)
+    Assert.eq(batch.teacher.lengths, [teacher_len] * n_docs)
+
+    config = LanguageModelBatchPreprocessingConfig(
+        phase=PhaseType.training,
+        predicted_tokens=1,
+        micro_batch_splits=1,
+        return_prediction_mask=True,
+    )
+    model_inputs = batch.get_model_inputs(config)
+    Assert.eq(len(model_inputs), 1)
+    model_input = model_inputs[0]
+
+    # Teacher input is attached and carries its own tokens / lengths / targets.
+    assert model_input.teacher is not None
+    Assert.eq(len(model_input.teacher.tokens), n_docs * teacher_len - 1)  # predicted_tokens=1
+    Assert.eq(len(model_input.teacher.targets), 1)
+
+    # The same number of response tokens is unmasked on each side -- the
+    # contract gather-then-KL relies on.
+    student_mask = model_input.targets[0].mask
+    teacher_mask = model_input.teacher.targets[0].mask
+    Assert.eq(int(student_mask.sum().item()), n_docs * n_response)
+    Assert.eq(int(teacher_mask.sum().item()), n_docs * n_response)
+
+    # `to_kwargs` exposes the teacher mask under the key the loss path consumes.
+    kwargs = model_input.to_kwargs()
+    assert LanguageModelKwargs.teacher_loss_mask in kwargs
+    Assert.eq(len(kwargs[LanguageModelKwargs.teacher_loss_mask]), 1)
+    Assert.all_equal(kwargs[LanguageModelKwargs.teacher_loss_mask][0], teacher_mask)
+
+
+def test_parallel_teacher_stream_micro_batch_splits_rejected():
+    """Parallel teacher stream is incompatible with micro_batch_splits > 1 because
+    student token-axis slicing has no positional mapping into the teacher's
+    differently-sized sequence.  Verify we fail loudly rather than silently
+    misaligning."""
+    documents = [
+        LanguageModelDocument(
+            tokens=torch.arange(30, dtype=torch.int64),
+            loss_masking_spans=RangeDocument(ranges=[(0, 20)]),
+            teacher=LanguageModelDocument(
+                tokens=torch.arange(25, dtype=torch.int64),
+                loss_masking_spans=RangeDocument(ranges=[(0, 15)]),
+            ),
+        )
+        for _ in range(2)
+    ]
+    batch = LanguageModelBatch.from_documents(documents)
+    config = LanguageModelBatchPreprocessingConfig(
+        phase=PhaseType.training,
+        predicted_tokens=1,
+        micro_batch_splits=2,
+        return_prediction_mask=True,
+    )
+    with pytest.raises(AssertionError, match="micro_batch_splits"):
+        batch.get_model_inputs(config)

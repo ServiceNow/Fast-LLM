@@ -98,17 +98,25 @@ class VisionMultiModalModel[ConfigType: VisionMultiModalModelConfig](LanguageMod
             lr_scale=lr_scale,
             peft=peft,
         )
-        self.vision_encoder = self._config.vision_encoder.get_layer(
-            distributed_config,
-            hidden_dim=self._hidden_dim,
-            lr_scale=self._lr_scale,
-            peft=self._peft,
-        )
+        if self._config.vision_encoder is not None:
+            self.vision_encoder = self._config.vision_encoder.get_layer(
+                distributed_config,
+                hidden_dim=self._hidden_dim,
+                lr_scale=self._lr_scale,
+                peft=self._peft,
+            )
+        else:
+            self.vision_encoder = None
 
     def get_layers(self) -> list[Layer]:
+        if self.vision_encoder is None:
+            return super().get_layers()
         return self._vision_encoder_with_namespace.get_layers() + super().get_layers()
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        base = super().get_preprocessing_config()
+        if self.vision_encoder is None:
+            return base
         return safe_merge_dicts(
             {
                 "vision_encoder": safe_merge_dicts(
@@ -116,15 +124,17 @@ class VisionMultiModalModel[ConfigType: VisionMultiModalModelConfig](LanguageMod
                     {"distributed": self._distributed_config, "namespace": self._vision_encoder_namespace},
                 )
             },
-            super().get_preprocessing_config(),
+            base,
         )
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
-        self._vision_encoder_with_namespace.preprocess(kwargs)
+        if self.vision_encoder is not None:
+            self._vision_encoder_with_namespace.preprocess(kwargs)
         super().preprocess(kwargs)
 
     def get_loss_definitions(self) -> list[LossDef]:
-        return self.vision_encoder.get_loss_definitions() + super().get_loss_definitions()
+        vision_losses = self.vision_encoder.get_loss_definitions() if self.vision_encoder is not None else []
+        return vision_losses + super().get_loss_definitions()
 
     @functools.cached_property
     def _vision_encoder_namespace(self) -> str:

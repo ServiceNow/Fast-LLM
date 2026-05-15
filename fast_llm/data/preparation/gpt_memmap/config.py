@@ -5,6 +5,7 @@ import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class
 from fast_llm.data.preparation.config import DatasetPreparatorConfig
+from fast_llm.data.preparation.audio import AudioPreparationConfig
 from fast_llm.data.preparation.image_patch import ImagePreparationConfig
 from fast_llm.data.preparation.tokenizer import TokenizerConfig
 from fast_llm.engine.config_utils.data_type import DataType
@@ -46,6 +47,10 @@ class LanguageModelSourceConfig(Config):
 
     @functools.cached_property
     def has_images(self) -> bool:
+        return False
+
+    @functools.cached_property
+    def has_audio(self) -> bool:
         return False
 
     @functools.cached_property
@@ -95,6 +100,31 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
         desc="Field containing image positions in the text.",
         hint=FieldHint.optional,
     )
+    audio: str | None = Field(
+        default=None,
+        desc="Field containing audio clips (list of decoded HuggingFace Audio items per document).",
+        hint=FieldHint.optional,
+    )
+    audio_positions: str | None = Field(
+        default=None,
+        desc="Field containing character positions of audio clips in the document text.",
+        hint=FieldHint.optional,
+    )
+    teacher_text: str | None = Field(
+        default=None,
+        desc="Field containing the parallel text-only version of the document for audio "
+        "distillation.  When set, prep tokenizes this field independently to produce the "
+        "teacher token stream attached to `LanguageModelDocument.teacher`.  The unmasked "
+        "(label-positive) region must contain the same response tokens as the student "
+        "stream so the gather-then-KL loss has matching token counts on both sides.",
+        hint=FieldHint.optional,
+    )
+    teacher_loss_masking_spans: str | None = Field(
+        default=None,
+        desc="Field containing character spans to mask in `teacher_text` (analogous to "
+        "`loss_masking_spans` but in teacher coordinates).  Required when `teacher_text` is set.",
+        hint=FieldHint.optional,
+    )
     # TODO: Old log probabilities are made up (zeros) since we don't know the token count in advance.
     advantages: str | None = Field(
         default=None,
@@ -112,6 +142,10 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
             columns.extend([self.chosen_span, self.rejected_span])
         if self.has_images:
             columns.extend([self.images, self.image_positions])
+        if self.has_audio:
+            columns.extend([self.audio, self.audio_positions])
+        if self.has_teacher:
+            columns.extend([self.teacher_text, self.teacher_loss_masking_spans])
         return columns
 
     @functools.cached_property
@@ -129,13 +163,27 @@ class DocumentSourceConfig(LanguageModelSourceConfig):
         return self.images is not None
 
     @functools.cached_property
+    def has_audio(self) -> bool:
+        Assert.eq(self.audio is None, self.audio_positions is None)
+        return self.audio is not None
+
+    @functools.cached_property
     def has_grpo_data(self) -> bool:
         return self.advantages is not None
+
+    @functools.cached_property
+    def has_teacher(self) -> bool:
+        Assert.eq(self.teacher_text is None, self.teacher_loss_masking_spans is None)
+        return self.teacher_text is not None
 
     def _validate(self):
         super()._validate()
         if self.has_preference_spans and self.has_loss_masking_span:
             raise ValueError("Cannot enable both loss masking and preference spans.")
+        if self.has_teacher and not self.has_loss_masking_span:
+            raise ValueError(
+                "Audio distillation (teacher_text) requires loss_masking_spans on the student stream."
+            )
 
 
 @config_class(dynamic_type={LanguageModelSourceConfig: "conversation"})
@@ -308,6 +356,10 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
     image_patches: ImagePreparationConfig = Field(
         desc="Configuration for the image patches, if enabled.",
+        hint=FieldHint.feature,
+    )
+    audio: AudioPreparationConfig = Field(
+        desc="Configuration for audio placeholder insertion, if enabled.",
         hint=FieldHint.feature,
     )
     splits: dict[str, float] | None = Field(

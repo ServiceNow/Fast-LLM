@@ -7,6 +7,7 @@ from fast_llm.core.distributed import all_gather_scalar
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDim
 from fast_llm.engine.inference.runner import InferenceRunner
+from fast_llm.layers.audio_encoder.audio_model import AudioMultiModalModel
 from fast_llm.layers.vision.vision_encoder import VisionMultiModalModel
 from fast_llm.models.gpt.model import GPTBaseModel, GPTModel
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
@@ -72,7 +73,7 @@ class PatchSequenceTensorDim(TensorDim):
 
 
 class MultiModalBaseModel[ConfigType: MultiModalBaseModelConfig](
-    GPTBaseModel[ConfigType], VisionMultiModalModel[ConfigType]
+    GPTBaseModel[ConfigType], VisionMultiModalModel[ConfigType], AudioMultiModalModel[ConfigType]
 ):
     """
     A transformer-based language model generalizing the GPT model architecture.

@@ -37,11 +37,20 @@ class InferenceRunner(abc.ABC):
             # External runner from training loop must be already setup
             assert runner._is_setup
 
+        # The meta batch's sequence length must satisfy the TP-SP divisibility
+        # constraint when the model uses sequence-tensor-parallel:
+        distributed_config = self._fast_llm_model.config.distributed
+        meta_size = (
+            distributed_config.tensor_parallel if distributed_config.sequence_tensor_parallel else 1
+        )
+
         # TODO: Random state? (Distributed.set_step)
         self._schedule = Schedule(
             config=self._schedule_config,
             multi_stage=self._fast_llm_model,
-            batch_meta=self._fast_llm_model.get_preprocessing_config(PhaseType.inference).get_input_meta(),
+            batch_meta=self._fast_llm_model.get_preprocessing_config(PhaseType.inference).get_input_meta(
+                size=meta_size
+            ),
             distributed_config=self._fast_llm_model.config.distributed,
             phase=PhaseType.inference,
         )

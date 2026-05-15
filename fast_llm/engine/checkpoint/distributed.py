@@ -1,11 +1,12 @@
 import logging
+import traceback
 import typing
 
 import safetensors.torch
 import torch
 import yaml
 
-from fast_llm.core.distributed import broadcast_scalar
+from fast_llm.core.distributed import allreduce_scalar, broadcast_scalar, safe_barrier
 from fast_llm.engine.checkpoint.config import (
     CheckpointFormat,
     CheckpointHandler,
@@ -39,15 +40,52 @@ class DistributedCheckpointHandler(CheckpointHandler):
         return CheckpointMetadata.from_dict(yaml.safe_load((config.path / "metadata.yaml").read_text()))
 
     def save(self, config: CheckpointSaveConfig, metadata: CheckpointMetadata) -> None:
+        import os
+
+        import psutil
+
+        proc = psutil.Process(os.getpid())
         serialized_metadata = metadata.to_dict()
         config.path.mkdir(parents=True, exist_ok=True)
         if self._model.config.distributed.rank == 0:
             (config.path / "metadata.yaml").write_text(yaml.safe_dump(serialized_metadata))
-        safetensors.torch.save_file(
-            tensors={f"{shard_name}_shard": self._model.get_shard(shard_name) for shard_name in metadata.shards},
-            filename=config.path / f"rank_{self._model.config.distributed.rank}.safetensors",
-            metadata=export_safetensors_metadata(serialized_metadata),
-        )
+
+        rank = self._model.config.distributed.rank
+        rss_before = proc.memory_info().rss / 1024**3
+        logger.info(f"[Rank {rank}] checkpoint save start, RSS={rss_before:.2f} GiB")
+
+        # Stagger writes so only num_concurrent ranks per node write at once, capping
+        # peak CPU memory (each rank's shards can be ~10 GB).
+        local_rank = self._model.config.distributed.local_rank
+        local_world_size = self._model.config.distributed.local_world_size
+        num_concurrent = 2
+
+        failed = 0
+        for slot in range(0, local_world_size, num_concurrent):
+            if slot <= local_rank < slot + num_concurrent:
+                rss_slot = proc.memory_info().rss / 1024**3
+                logger.info(f"[Rank {rank}] writing slot {slot}, RSS={rss_slot:.2f} GiB")
+                try:
+                    safetensors.torch.save_file(
+                        tensors={
+                            f"{shard_name}_shard": self._model.get_shard(shard_name)
+                            for shard_name in metadata.shards
+                        },
+                        filename=config.path / f"rank_{rank}.safetensors",
+                        metadata=export_safetensors_metadata(serialized_metadata),
+                    )
+                    rss_after = proc.memory_info().rss / 1024**3
+                    logger.info(f"[Rank {rank}] write done, RSS={rss_after:.2f} GiB")
+                except Exception:
+                    logger.error(f"[Rank {rank}] Checkpoint save failed:\n{traceback.format_exc()}")
+                    failed = 1
+            safe_barrier(self._model.distributed.world_group, f"distributed_checkpoint_slot_{slot}")
+
+        total_failed = allreduce_scalar(failed, dtype=torch.int32, group=self._model.distributed.world_group)
+        if total_failed:
+            raise RuntimeError(
+                f"Checkpoint save failed on {total_failed} rank(s). See logs above for per-rank tracebacks."
+            )
 
     def load(self, config: CheckpointLoadConfig) -> dict[str, typing.Any] | None:
         # TODO: More safety checks

@@ -68,6 +68,13 @@ class PatchPreprocessingConfig(LengthPreprocessingConfig):
 
 
 @config_class()
+class AudioPreprocessingConfig(LengthPreprocessingConfig):
+    """Preprocessing config for the audio encoder's attention blocks."""
+
+    namespace: str = Field(default="audio")
+
+
+@config_class()
 class LanguageModelBatchPreprocessingConfig(TokenPreprocessingConfig):
     _abstract = False
     phase: PhaseType = Field(default=PhaseType.training)
@@ -75,6 +82,7 @@ class LanguageModelBatchPreprocessingConfig(TokenPreprocessingConfig):
     predicted_tokens: int = Field(default=1)
     return_prediction_mask: bool = Field(default=False)
     vision_encoder: PatchPreprocessingConfig | None = Field(default=None)
+    audio_encoder: AudioPreprocessingConfig | None = Field(default=None)
     vocab_size: int | None = Field(default=None)
     use_loss_masking_spans: bool = Field(default=True)
     use_preference_spans: bool = Field(default=False)
