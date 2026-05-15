@@ -52,7 +52,12 @@ def apply_audio_padding(audio, aud_padding_duration, aud_sampling_rate):
     if aud_padding_duration > 0:
         raw_audio_seq_length = aud_padding_duration * aud_sampling_rate
         for aud in audio:
-            padded = np.pad(aud, (0, raw_audio_seq_length - len(aud)), mode="constant", constant_values=0)
+            padded = np.pad(
+                aud,
+                (0, raw_audio_seq_length - len(aud)),
+                mode="constant",
+                constant_values=0,
+            )
             padded_audio.append(padded)
         return padded_audio
     else:
@@ -78,17 +83,26 @@ class AudioPreprocessor:
         self._config = config
         self._device = device  # torch.device | str | None
         # Allow runtime overrides (e.g. from BatchConfig)
-        self._aud_padding_duration = aud_padding_duration if aud_padding_duration is not None else config.aud_padding_duration
-        self._audio_padding = audio_padding if audio_padding is not None else config.audio_padding
+        self._aud_padding_duration = (
+            aud_padding_duration
+            if aud_padding_duration is not None
+            else config.aud_padding_duration
+        )
+        self._audio_padding = (
+            audio_padding if audio_padding is not None else config.audio_padding
+        )
 
-        self.feature_extractor = WhisperFeatureExtractor(sampling_rate=self._config.aud_sampling_rate)
+        self.feature_extractor = WhisperFeatureExtractor(
+            feature_size=self._config.num_mel_bins,
+            sampling_rate=self._config.aud_sampling_rate,
+        )
 
     def preprocess_meta(self, kwargs: dict[str, typing.Any]) -> None:
         pass
 
     def preprocess(self, tokens, kwargs: dict[str, typing.Any]) -> None:
-        _HOP_LENGTH = 160   # Whisper default mel hop length
-        _CONV_STRIDE = 2    # AudioConv conv2 stride
+        _HOP_LENGTH = 160  # Whisper default mel hop length
+        _CONV_STRIDE = 2  # AudioConv conv2 stride
         k = self._config.aud_downsampling_k
 
         audio_mel = []
@@ -142,7 +156,9 @@ class AudioPreprocessor:
             padding = torch.zeros(
                 padding_size,
                 self.feature_extractor.feature_size,
-                audio_mel.shape[-1] if curr_size > 0 else self.feature_extractor.nb_max_frames,
+                audio_mel.shape[-1]
+                if curr_size > 0
+                else self.feature_extractor.nb_max_frames,
                 dtype=audio_mel.dtype,
             )
             audio_mel = torch.cat((audio_mel, padding), dim=0)
@@ -179,7 +195,9 @@ class AudioPreprocessor:
         kwargs[BlockKwargs.sequence_length] = N_total
 
         # Document indices: each clip is a separate document, preventing cross-clip attention.
-        doc_indices = torch.arange(N_clips, dtype=torch.int32, device=device).repeat_interleave(T)
+        doc_indices = torch.arange(
+            N_clips, dtype=torch.int32, device=device
+        ).repeat_interleave(T)
         kwargs[MixerKwargs.document_index_q] = doc_indices
         kwargs[MixerKwargs.document_index_k] = doc_indices
 

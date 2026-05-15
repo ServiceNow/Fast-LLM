@@ -19,6 +19,7 @@ from fast_llm.models.multimodal.conversion.config import (
     AyraCheckpointFormat,
     LlavaCheckpointFormat,
     LlavaHybridSSMCheckpointFormat,
+    UltravoxCheckpointFormat,
     WhisperCheckpointFormat,
 )
 
@@ -58,6 +59,7 @@ class MultiModalModelConfig(GPTModelConfig):
         Apriel2CheckpointFormat,
         WhisperCheckpointFormat,
         AyraCheckpointFormat,
+        UltravoxCheckpointFormat,
     )
 
     @classmethod

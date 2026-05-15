@@ -35,3 +35,7 @@ class WhisperCheckpointFormat(MultimodalHuggingfaceCheckpointFormat):
 
 class AyraCheckpointFormat(MultimodalHuggingfaceCheckpointFormat):
     name: typing.ClassVar[str] = "ayra"
+
+
+class UltravoxCheckpointFormat(MultimodalHuggingfaceCheckpointFormat):
+    name: typing.ClassVar[str] = "ultravox"

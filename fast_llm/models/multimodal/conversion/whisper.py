@@ -17,10 +17,14 @@ Fast-LLM ↔ HuggingFace weight-name mapping:
   audio_encoder.encoder.{i}.mixer.dense.{weight,bias}     ← encoder.layers.{i}.self_attn.out_proj.*
   audio_encoder.encoder.{i}.mlp.layer_1.{weight,bias}     ← encoder.layers.{i}.fc1.*
   audio_encoder.encoder.{i}.mlp.layer_2.{weight,bias}     ← encoder.layers.{i}.fc2.*
-  audio_encoder.adapter.norm_1.{weight,bias}              ← encoder.layer_norm.*
+  audio_encoder.final_norm.norm.{weight,bias}             ← encoder.layer_norm.*
   audio_encoder.adapter.norm_2.{weight,bias}              ← encoder_projector.layer_norm.*
   audio_encoder.adapter.layer_1.{weight,bias}             ← encoder_projector.linear1.*
   audio_encoder.adapter.layer_2.{weight,bias}             ← encoder_projector.linear2.*
+
+The Whisper checkpoint has no projector pre-norm; ``adapter.norm_1`` is
+initialized to identity (LayerNorm weight=1, bias=0) — its slot is reserved
+for projectors that have a learned pre-norm (e.g. Ultravox's ``ln_pre``).
 """
 
 import typing
@@ -251,6 +255,21 @@ class WhisperAudioConvConverter:
         return converters
 
 
+class WhisperFinalNormConverter:
+    """Maps the Whisper encoder's terminal layer_norm to ``audio_encoder.final_norm.norm``."""
+
+    @classmethod
+    def get_converters(
+        cls,
+        fast_llm_prefix: str,
+        hf_encoder_prefix: str,
+    ) -> list[WeightConverter]:
+        return [
+            WeightConverter(f"{fast_llm_prefix}.norm.weight", f"{hf_encoder_prefix}.layer_norm.weight"),
+            WeightConverter(f"{fast_llm_prefix}.norm.bias", f"{hf_encoder_prefix}.layer_norm.bias"),
+        ]
+
+
 class WhisperAudioAdapterConverter:
     @classmethod
     def get_converters(
@@ -260,10 +279,10 @@ class WhisperAudioAdapterConverter:
         hf_encoder_prefix: str,
         hf_projector_prefix: str,
     ) -> list[WeightConverter]:
+        # Whisper-only checkpoints have no projector pre-norm — ``adapter.norm_1`` is
+        # left at its identity init. ``encoder.layer_norm`` is mapped separately to
+        # ``audio_encoder.final_norm.norm`` by ``WhisperFinalNormConverter``.
         converters = [
-            # norm_1 ← Whisper final encoder layer_norm
-            WeightConverter(f"{fast_llm_prefix}.norm_1.weight", f"{hf_encoder_prefix}.layer_norm.weight"),
-            WeightConverter(f"{fast_llm_prefix}.norm_1.bias", f"{hf_encoder_prefix}.layer_norm.bias"),
             # norm_2 ← Ayra encoder_projector layer_norm
             WeightConverter(f"{fast_llm_prefix}.norm_2.weight", f"{hf_projector_prefix}.layer_norm.weight"),
             WeightConverter(f"{fast_llm_prefix}.norm_2.bias", f"{hf_projector_prefix}.layer_norm.bias"),
@@ -279,11 +298,13 @@ class WhisperAudioAdapterConverter:
 
 class WhisperAudioEncoderConverter:
     """
-    Top-level converter for the full audio encoder stack (conv + transformer + adapter).
+    Top-level converter for the full audio encoder stack
+    (conv + transformer + final_norm + adapter).
     """
 
     conv_converter_class: typing.ClassVar = WhisperAudioConvConverter
     encoder_converter_class: typing.ClassVar = WhisperEncoderConverter
+    final_norm_converter_class: typing.ClassVar = WhisperFinalNormConverter
     adapter_converter_class: typing.ClassVar = WhisperAudioAdapterConverter
 
     @classmethod
@@ -314,6 +335,10 @@ class WhisperAudioEncoderConverter:
                 config.encoder,
                 f"{fast_llm_prefix}.encoder",
                 f"{hf_encoder_prefix}.layers",
+            ),
+            *cls.final_norm_converter_class.get_converters(
+                f"{fast_llm_prefix}.final_norm",
+                hf_encoder_prefix,
             ),
             *cls.adapter_converter_class.get_converters(
                 config,

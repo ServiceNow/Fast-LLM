@@ -10,14 +10,25 @@ from fast_llm.functional.triton.mlp import torch_mlp_activation
 from fast_llm.layers.audio_encoder.config import AudioEncoderConfig, AudioEncoderDimNames, AudioKwargs
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.common.linear.linear import Linear
+from fast_llm.layers.common.normalization.config import NoNormalizationConfig
 from fast_llm.tensor import ParameterMeta, TensorMeta
 
 
 class AudioAdapter(Layer):
     """
-    Audio adapter: groups k consecutive encoder frames, then projects to LM hidden size.
+    Audio adapter / projector: groups k consecutive encoder frames, then projects to LM hidden size.
 
-    Downsampling: (batch, T, hidden) → (batch, T/k, hidden * k) → (batch, T/k, lm_hidden)
+    Pipeline:
+      (N_clips, T, audio_hidden)
+        → stack k frames → (N_clips, T/k, audio_hidden * k)
+        → norm_1        (projector pre-norm; receives Ultravox ``ln_pre`` weights,
+                         identity-init for Whisper-only checkpoints)
+        → layer_1       (audio_hidden*k → adapter_size [* 2 if gated])
+        → activation    (gated chunks → adapter_size)
+        → dropout       (adapter_dropout; 0 for Ultravox, 0.1 for legacy Whisper/Ayra)
+        → norm_2        (projector mid-norm; receives Ultravox ``ln_mid`` /
+                         Ayra ``encoder_projector.layer_norm``)
+        → layer_2       (adapter_size → lm_hidden)
     """
 
     def __init__(
@@ -29,7 +40,9 @@ class AudioAdapter(Layer):
     ):
         super().__init__(distributed_config or DistributedConfig())
         self._activation_type = config.adapter_activation_type
+        self._gated = config.adapter_gated
         self._use_adapter_bias = config.adapter_bias
+        self._dropout_p = config.adapter_dropout
         self._lr_scale = config.adapter_lr_scale
         self.aud_downsampling_k = config.aud_downsampling_k
 
@@ -38,19 +51,31 @@ class AudioAdapter(Layer):
             audio_hidden_dim.size * config.aud_downsampling_k,
         )
         adapter_size_dim = TensorDim(AudioEncoderDimNames.adapter_size, config.adapter_size)
+        # When gated, layer_1 emits 2× the adapter size; the activation halves it back.
+        layer_1_output_dim = TensorDim(
+            AudioEncoderDimNames.adapter_size + ("_gated" if self._gated else ""),
+            config.adapter_size * (2 if self._gated else 1),
+        )
 
-        self.norm_1 = config.normalization.get_layer(audio_hidden_dim, peft=None)
+        # norm_1: projector pre-norm, dim = audio_hidden * k (post-stack).
+        # None = NoNormalization (Whisper / Ayra have no projector pre-norm; their
+        # encoder.layer_norm now lives in AudioEncoder.final_norm).
+        pre_norm_config = config.adapter_pre_normalization or NoNormalizationConfig()
+        self.norm_1 = pre_norm_config.get_layer(adapter_input_dim, peft=None)
         self.norm_1.lr_scale = self._lr_scale
-        self.norm_2 = config.normalization.get_layer(adapter_size_dim, peft=None)
+        # norm_2: projector mid-norm, dim = adapter_size. Inherits from
+        # ``audio_encoder.normalization`` when ``adapter_mid_normalization`` is unset.
+        mid_norm_config = config.adapter_mid_normalization or config.normalization
+        self.norm_2 = mid_norm_config.get_layer(adapter_size_dim, peft=None)
         self.norm_2.lr_scale = self._lr_scale
 
         weight_1 = ParameterMeta.from_dims(
-            (adapter_size_dim, adapter_input_dim),
+            (layer_1_output_dim, adapter_input_dim),
             init_method=init_normal_(),
             lr_scale=self._lr_scale,
         )
         bias_1 = ParameterMeta.from_dims(
-            (adapter_size_dim,), init_method=init_zeros_, lr_scale=self._lr_scale
+            (layer_1_output_dim,), init_method=init_zeros_, lr_scale=self._lr_scale
         ) if self._use_adapter_bias else None
         self.layer_1 = Linear(weight_1, bias_1)
 
@@ -88,7 +113,6 @@ class AudioAdapter(Layer):
         T = N_total // N_clips
         input_ = input_.view(N_clips, T, hidden)
 
-        input_ = self.norm_1(input_)
         batch_size, seq_len, dim = input_.size()
 
         # Trim to multiple of downsampling_k if needed
@@ -101,11 +125,15 @@ class AudioAdapter(Layer):
         new_seq_len = seq_len // self.aud_downsampling_k
         input_ = input_.contiguous().view(batch_size, new_seq_len, dim * self.aud_downsampling_k)
 
+        # Projector pre-norm operates over the stacked dim (matches HF Ultravox ln_pre).
+        input_ = self.norm_1(input_)
+
         layer1_res = torch_mlp_activation(
-            input_=self.layer_1(input_), gated=False, activation_type=self._activation_type
+            input_=self.layer_1(input_), gated=self._gated, activation_type=self._activation_type
         )
-        layer1_res_dropout = torch.nn.functional.dropout(layer1_res, 0.1)
-        layer1_res_norm = self.norm_2(layer1_res_dropout)
+        if self._dropout_p > 0:
+            layer1_res = torch.nn.functional.dropout(layer1_res, self._dropout_p, training=self.training)
+        layer1_res_norm = self.norm_2(layer1_res)
         output = self.layer_2(layer1_res_norm)  # (N_clips, T/k, lm_hidden)
 
         # Trim each clip to its actual token count before flattening.

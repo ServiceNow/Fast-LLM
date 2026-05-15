@@ -9,10 +9,12 @@ from fast_llm.models.multimodal.conversion.config import (
     AyraCheckpointFormat,
     LlavaCheckpointFormat,
     LlavaHybridSSMCheckpointFormat,
+    UltravoxCheckpointFormat,
     WhisperCheckpointFormat,
 )
 from fast_llm.models.multimodal.conversion.llava import LlavaHuggingfaceCheckpointHandler
 from fast_llm.models.multimodal.conversion.llava_hybrid import LlavaHybridSSMHuggingfaceCheckpointHandler
+from fast_llm.models.multimodal.conversion.ultravox import UltravoxHuggingfaceCheckpointHandler
 from fast_llm.models.multimodal.conversion.whisper import WhisperHuggingfaceCheckpointHandler
 
 
@@ -26,4 +28,5 @@ class AutoMultimodalHuggingfaceCheckpointHandler(
         Apriel2CheckpointFormat.name: Apriel2HuggingfaceCheckpointHandler,
         WhisperCheckpointFormat.name: WhisperHuggingfaceCheckpointHandler,
         AyraCheckpointFormat.name: AyraHuggingfaceCheckpointHandler,
+        UltravoxCheckpointFormat.name: UltravoxHuggingfaceCheckpointHandler,
     }

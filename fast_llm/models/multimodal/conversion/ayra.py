@@ -63,7 +63,11 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
 
     Weights are prefixed:
     - ``"encoder.*"`` → audio encoder
+    - ``"encoder_projector.*"`` → audio projector / adapter
     - ``"llm.*"`` → language model
+
+    Subclasses (e.g. Ultravox) override the three ``hf_*_prefix`` ClassVars
+    plus ``architecture`` / ``format`` / ``audio_encoder_converter_class``.
     """
 
     _model_class: typing.ClassVar[FastLLMModelConfig] = MultiModalModelConfig
@@ -72,6 +76,10 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     audio_encoder_converter_class: typing.ClassVar = AyraAudioEncoderConverter
     # Name of the text handler registered in the auto registry (e.g. "llama" or "mistral")
     text_handler_name: typing.ClassVar[str] = "llama"
+    # HF state-dict prefixes for the three weight namespaces.
+    hf_audio_encoder_prefix: typing.ClassVar[str] = "encoder"
+    hf_audio_projector_prefix: typing.ClassVar[str] = "encoder_projector"
+    hf_llm_prefix: typing.ClassVar[str] = "llm"
 
     @classmethod
     def get_transformers_configuration_class(cls):
@@ -119,21 +127,20 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         base_config = self._model.config.base_model
         audio_encoder_config = base_config.audio_encoder
 
-        # Audio encoder weights: HF prefix "encoder."
+        # Audio encoder weights: HF prefix controlled by ClassVars.
         converters = self.audio_encoder_converter_class.get_converters(
             audio_encoder_config,
             fast_llm_prefix="audio_encoder",
-            hf_encoder_prefix="encoder",
-            hf_projector_prefix="encoder_projector",
+            hf_encoder_prefix=self.hf_audio_encoder_prefix,
+            hf_projector_prefix=self.hf_audio_projector_prefix,
         )
 
-        # LLM weights: HF prefix "llm."
+        # LLM weights: HF prefix controlled by ClassVar (e.g. "llm" for Ayra, "language_model" for Ultravox).
         text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.text_handler_name)
         text_handler = text_handler_cls(self._model)
         for converter in text_handler._create_weight_converters():
-            # Re-prefix HF names from "" to "llm."
             new_export_names = tuple(
-                f"llm.{name}" if name else name for name in converter.export_name
+                f"{self.hf_llm_prefix}.{name}" if name else name for name in converter.export_name
             )
             converter.export_name = new_export_names
             converters.append(converter)

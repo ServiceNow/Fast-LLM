@@ -75,6 +75,18 @@ class AudioEncoderConfig(BlockConfig):
     )
 
     # --- Conv encoder ---
+    disable_tensor_parallel: bool = Field(
+        default=False,
+        desc=(
+            "Replicate the audio encoder across the parent tensor-parallel group "
+            "instead of sharding heads. Required when the encoder's attention head "
+            "count does not divide the LM's ``tensor_parallel`` (e.g. "
+            "whisper-large-v3-turbo has 20 heads, which doesn't divide TP=8). "
+            "Memory cost is one full set of encoder weights per TP rank — a few GiB "
+            "of bf16 — and is acceptable for frozen encoders."
+        ),
+        hint=FieldHint.feature,
+    )
     conv_bias: bool = Field(
         default=True,
         desc="Whether to use bias in the convolutional layer.",
@@ -114,10 +126,47 @@ class AudioEncoderConfig(BlockConfig):
         desc="The intermediate activation type for the audio adapter. Default: GeLU.",
         hint=FieldHint.core,
     )
+    adapter_gated: bool = Field(
+        default=False,
+        desc=(
+            "Whether the adapter activation is gated (SwiGLU / GeGLU style). "
+            "When True, ``layer_1`` produces ``2 * adapter_size`` features and the "
+            "activation halves them back to ``adapter_size``."
+        ),
+        hint=FieldHint.architecture,
+    )
     adapter_bias: bool = Field(
         default=True,
         desc="Whether to use bias in the adapter layer.",
         hint=FieldHint.optional,
+    )
+    adapter_dropout: float = Field(
+        default=0.1,
+        desc=(
+            "Dropout applied between the adapter's first linear and its mid-norm. "
+            "Set to 0 to disable (matches HF Ultravox)."
+        ),
+        hint=FieldHint.optional,
+    )
+    adapter_pre_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc=(
+            "Projector pre-norm applied after the k-frame stack, before ``layer_1``. "
+            "None (default) skips it (Whisper / Ayra). For Ultravox set to "
+            "``rms_norm`` with the appropriate ``norm_init``; corresponds to "
+            "``UltravoxProjector.ln_pre``."
+        ),
+        hint=FieldHint.architecture,
+    )
+    adapter_mid_normalization: NormalizationConfig | None = Field(
+        default=None,
+        desc=(
+            "Projector mid-norm applied between the activation and ``layer_2``. "
+            "If unset, falls back to ``audio_encoder.normalization`` for "
+            "back-compat with Whisper / Ayra (LayerNorm). For Ultravox set to "
+            "``rms_norm``; corresponds to ``UltravoxProjector.ln_mid``."
+        ),
+        hint=FieldHint.architecture,
     )
     adapter_lr_scale: float | None = Field(
         default=None,

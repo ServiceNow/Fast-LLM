@@ -94,10 +94,16 @@ class TensorMeta(torch.Tensor):
     @functools.cached_property
     def tensor_parallel_dim_index(self) -> int | None:
         # TODO: Avoid hard-coded assumptions on tensor parallel.
+        # A size-1 tensor parallel dim means the parameter is replicated across the
+        # TP group (e.g. via ``audio_encoder.disable_tensor_parallel: true``) — it is
+        # NOT actually sharded, so we ignore it here. Otherwise ``is_tensor_parallel``
+        # would lie and SafeLoad's duplicate-counter logic would N× overcount.
         indexes = [
             i
             for i, dim in enumerate(self.dims)
-            if dim.parallel_dim is not None and dim.parallel_dim.name == DistributedDimNames.tensor
+            if dim.parallel_dim is not None
+            and dim.parallel_dim.name == DistributedDimNames.tensor
+            and dim.parallel_dim.size > 1
         ]
         assert len(indexes) <= 1, indexes
         return indexes[0] if indexes else None
