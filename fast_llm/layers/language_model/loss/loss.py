@@ -33,7 +33,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         self._prediction_heads = prediction_heads
         self._name = name
         self._num_splits = num_splits
-        self._logits_scale_factor = logits_scale_factor
+        self._logits_scale_factor = logits_scale_factor * self._config.logits_scale_factor
         self._weight = weight * self._config.weight
         self._do_register_loss = register_loss
         self._vocab_parallel = distributed_config.tensor_parallel > 1 and vocab_parallel
