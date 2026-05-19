@@ -432,35 +432,22 @@ class AprielGatedDeltaNetBlockConverter(MistralBlockConverter):
 
 
 class ListDispatchConfigConverter(ConfigConverter):
-    """Polymorphic block-sequence dispatch driven by a positional HF list.
+    """Block-sequence dispatch driven by a positional HF list.
 
-    Models Apriel's hybrid-SSM shape: the HF config carries one entry per pipeline position in a
-    ``hybrid_block_layout: list[str]``, and the per-block HF keys live flat at the top level — each
-    registered block converter claims a disjoint subset (attention → flat top-level keys, mamba →
-    ``ssm_cfg.*``, gdn/kda → ``linear_attn_config.*``). On import, the layout list dispatches each
-    Fast-LLM block; on export, the block sequence (Fixed or Pattern) emits the union of each distinct
-    block's HF dict plus the layout and block count.
+    The HF config carries one layout-discriminator string per pipeline position; each registered
+    block converter handles one mixer type, and their outputs flat-merge into the parent HF root
+    (each claims a disjoint subset of top-level keys; shared scalars cross-validate via the safe-set
+    guard). The Fast-LLM target is a :class:`FixedBlockSequenceConfig` when the layout has a single
+    entry, a :class:`PatternBlockSequenceConfig` otherwise.
 
-    Lives next to its consumer (``AprielBaseModelConverter``) because its export/import shape
-    hardcodes Fast-LLM's :class:`FixedBlockSequenceConfig` / :class:`PatternBlockSequenceConfig`
-    types, and is unlikely to be reused by a second HF format. The framework's
-    :meth:`ConfigSectionConverter._consumed_hf_paths` aggregator picks it up generically via the
-    :meth:`ConfigConverter._consumed_hf_paths` virtual method.
+    Two registries:
 
-    Two registries are required because the format distinguishes "which mixer classes appear at
-    all" from "which mixer classes participate in the config round-trip":
-
-    * ``registry``: mixer-config class → block ``ConfigSectionConverter``. Covers every block type
-      whose HF keys must be claimed by the coverage walker — including weight-side-only types whose
-      config-side layout name is absent (e.g. ``KimiDeltaAttentionConfig``).
+    * ``registry``: mixer-config class → block ``ConfigSectionConverter``. Domain of the HF coverage
+      walker — every block type whose HF keys must be claimed appears here.
     * ``layout_names``: mixer-config class → layout discriminator string. Must be a subset of
-      ``registry`` keys — checked in ``__init__``. Classes absent here can't be config-exported
-      (no layout name to emit) or config-imported (no reverse-map entry).
-
-    Fast-LLM target is a :class:`FixedBlockSequenceConfig` when the layout has a single entry, a
-    :class:`PatternBlockSequenceConfig` otherwise. The same HF dict feeds every per-block import —
-    each block converter's declarations claim disjoint top-level keys, and shared top-level scalars
-    (e.g. ``rms_norm_eps``) cross-validate via the safe-set guard.
+      ``registry`` keys (checked in ``__init__``). Domain of the config-side round-trip — classes
+      absent here can't be config-exported (no layout name to emit) or config-imported (no reverse
+      lookup).
     """
 
     fast_llm_recurses: typing.ClassVar[bool] = True
@@ -489,7 +476,7 @@ class ListDispatchConfigConverter(ConfigConverter):
             distinct_blocks = [block_sequence.block]
             pattern_blocks = [block_sequence.block]
         elif type(block_sequence) is PatternBlockSequenceConfig:
-            distinct_blocks = list(block_sequence.blocks.values())
+            distinct_blocks = block_sequence.blocks.values()
             pattern_blocks = [block_sequence.blocks[name] for name in block_sequence.pattern]
         else:
             raise NotImplementedError(type(block_sequence).__name__)
@@ -528,15 +515,14 @@ class ListDispatchConfigConverter(ConfigConverter):
 
 
 class AprielBlockConverter:
-    """Apriel hybrid-SSM block dispatch registries.
+    """Per-mixer-type Apriel block-converter registries plus a weight-side dispatch helper.
 
-    Consumed by :class:`ListDispatchConfigConverter` on the config side and by the weight-side
-    :meth:`get_converters` dispatcher below. Stays a non-section class because it doesn't itself
-    convert a single :class:`DecoderBlockConfig` — it picks which block converter applies to each.
-    The two registries differ deliberately: ``layout_names`` lists the mixer types that participate
-    in Apriel's config-side ``hybrid_block_layout`` discriminator; ``_converter_classes`` covers
-    every type whose weights can appear in an Apriel checkpoint (a superset that includes the
-    weight-side-only ``KimiDeltaAttentionConfig``).
+    ``layout_names`` maps the mixer-config classes that participate in Apriel's
+    ``hybrid_block_layout`` discriminator to their string layout names. ``_converter_classes``
+    maps every mixer-config class whose weights can appear in an Apriel checkpoint to its block
+    converter — a superset of ``layout_names`` keys that adds ``KimiDeltaAttentionConfig`` for
+    weight-only coverage. :meth:`get_converters` picks the right block converter from
+    ``_converter_classes`` by the mixer's runtime type.
     """
 
     layout_names: typing.ClassVar[dict[type[Config], str]] = {
@@ -569,10 +555,11 @@ class AprielHeadConverter(MistralHeadConverter):
 
 
 class AprielBaseModelConverter(MistralBaseModelConverter):
-    """Apriel replaces the parent's ``"decoder"`` declaration with a
-    :class:`ListDispatchConfigConverter`: the format's per-position layout list
-    (``hybrid_block_layout``) drives polymorphic block dispatch, with each block's HF keys
-    flat-merged at the top of the HF config.
+    """Section converter for the Apriel hybrid-SSM base model.
+
+    The decoder uses :class:`ListDispatchConfigConverter` driven by the format's
+    ``hybrid_block_layout`` list (per-position mixer-type discriminator); each block converter's
+    HF keys flat-merge into the parent HF root.
     """
 
     head_converter_class: typing.ClassVar[type[AprielHeadConverter]] = AprielHeadConverter
