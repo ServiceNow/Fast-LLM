@@ -21,7 +21,10 @@ class MixerKwargs(BlockKwargs):
     cu_seqlens_k = "cu_seqlens_k"
     max_seqlen_q = "max_seqlen_q"
     max_seqlen_k = "max_seqlen_k"
+    min_seqlen_q = "min_seqlen_q"
+    min_seqlen_k = "min_seqlen_k"
     position_ids = "position_ids"
+    first_document_begin = "first_document_begin"
 
 
 class AttentionKwargs(MixerKwargs):
@@ -33,9 +36,15 @@ class AttentionKwargs(MixerKwargs):
     past_key_values = "past_key_values"
 
 
+_FLASH_MAX_HEAD_SIZE = 256
+
+
 class AttentionImplementation(enum.StrEnum):
     auto = "auto"
     flash = "flash"
+    sdpa = "sdpa"
+    sdpa_nested = "sdpa_nested"
+    sdpa_dense = "sdpa_dense"
     backup = "backup"
 
 
@@ -119,7 +128,10 @@ class AttentionConfig(MixerConfig):
     )
     implementation: AttentionImplementation = Field(
         default=AttentionImplementation.auto,
-        desc="The implementation to use for the attention layer. Default: `flash` if supported, otherwise `backup`.",
+        desc="The implementation to use for the attention layer."
+        " `auto` picks `flash` when available (bf16/fp16, head_size <= 256, flash-attn installed), otherwise `sdpa`."
+        " `sdpa` further resolves to `sdpa_nested` on CUDA without sliding window, and to `sdpa_dense` otherwise."
+        " `sdpa_nested` and `sdpa_dense` are explicit overrides; `backup` is a slow pure-PyTorch fallback.",
         hint=FieldHint.feature,
     )
     query_norm: NormalizationConfig | None = Field(
@@ -150,6 +162,14 @@ class AttentionConfig(MixerConfig):
 
         if not self.causal:
             assert self.window_size is None, "Non-causal windowed attention is not supported."
+
+        if self.implementation == AttentionImplementation.flash:
+            Assert.leq(self.head_size, _FLASH_MAX_HEAD_SIZE)
+
+        if self.implementation == AttentionImplementation.sdpa_nested:
+            assert (
+                self.window_size is None
+            ), "`sdpa_nested` does not support sliding window; use `sdpa` or `sdpa_dense`."
 
     @property
     def layer_class(self) -> "type[Attention]":

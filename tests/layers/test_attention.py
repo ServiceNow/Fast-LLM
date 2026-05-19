@@ -1,4 +1,3 @@
-import contextlib
 import dataclasses
 
 import pytest
@@ -14,7 +13,7 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.attention import Attention, _flash_available
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.utils import Assert
-from tests.utils.utils import get_stage
+from tests.utils.utils import get_stage, no_tf32
 
 _HEADS = 4
 _KV_HEADS = 2
@@ -174,78 +173,139 @@ class AttentionTestConfig:
             return torch.nn.functional.linear(attn_out.flatten(1), attention.dense.weight.detach())
 
 
-_base_attention_cases = [
+_LENGTHS_FULL = [[15], [6, 9], [4, 1, 10], [20, 32, 10, 11, 9, 18]]
+_LENGTHS_SHORT = [[15], [4, 1, 10]]
+_LENGTHS_SINGLE = [[15]]
+
+_attention_test_cases: list[tuple[AttentionTestConfig, list[int]]] = []
+
+# Mask, group, and window base cases — no norms, swept over all length sets.
+for name, kwargs in (
     ("causal", {"causal": True}),
     ("noncausal", {"causal": False}),
     ("window", {"causal": True, "window_size": 4}),
     ("mqa", {"causal": True, "kv_heads": 1}),
     ("mha", {"causal": True, "kv_heads": _HEADS}),
-]
+):
+    for lengths in _LENGTHS_FULL:
+        _attention_test_cases.append((AttentionTestConfig(name=f"{name}_no_norm", **kwargs), lengths))
 
-_attention_rotary_cases = [
-    # Rotary: packing equivalence is skipped for multi-document inputs (packed rotary uses global
-    # positions; per-sequence reference uses per-doc positions). All three checks run for single-doc inputs.
-    ("causal_rotary", {"causal": True, "rotary": True}),
-]
-
-_attention_norm_variants = [
-    ("no_norm", {}),
-    ("query_norm", {"query_norm": True}),
-    ("key_norm", {"key_norm": True}),
-    ("value_norm", {"value_norm": True}),
-    ("both_norms", {"query_norm": True, "key_norm": True}),
-    ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
-]
-
-_attention_shared_key_value_cases = [
-    ("shared_key_value", {"shared_key_value": True}),
-    ("shared_key_value_rotary", {"shared_key_value": True, "rotary": True}),
-    # Gemma 4's full-attention layer combines shared_key_value with ProportionalRotary.
+# Per-head norm variants on causal and shared key/value bases. Rotary bases use single-doc
+# inputs because the packed and per-sequence rotary references diverge across boundaries.
+for base_name, base_kwargs, variants, length_set in (
+    (
+        "causal",
+        {"causal": True},
+        (
+            ("query_norm", {"query_norm": True}),
+            ("key_norm", {"key_norm": True}),
+            ("value_norm", {"value_norm": True}),
+            ("both_norms", {"query_norm": True, "key_norm": True}),
+            ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
+        ),
+        _LENGTHS_SHORT,
+    ),
+    (
+        "causal_rotary",
+        {"causal": True, "rotary": True},
+        (
+            ("no_norm", {}),
+            ("query_norm", {"query_norm": True}),
+            ("key_norm", {"key_norm": True}),
+            ("value_norm", {"value_norm": True}),
+            ("both_norms", {"query_norm": True, "key_norm": True}),
+            ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
+        ),
+        _LENGTHS_SINGLE,
+    ),
+    (
+        "shared_key_value",
+        {"shared_key_value": True},
+        (
+            ("no_norm", {}),
+            ("key_norm", {"key_norm": True}),
+            ("value_norm", {"value_norm": True}),
+            ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
+        ),
+        _LENGTHS_SHORT,
+    ),
+    (
+        "shared_key_value_rotary",
+        {"shared_key_value": True, "rotary": True},
+        (
+            ("no_norm", {}),
+            ("key_norm", {"key_norm": True}),
+            ("value_norm", {"value_norm": True}),
+            ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
+        ),
+        _LENGTHS_SINGLE,
+    ),
     (
         "shared_key_value_proportional_rotary",
         {"shared_key_value": True, "rotary": True, "rotary_partial_rotary_factor": 0.5},
+        (
+            ("no_norm", {}),
+            ("key_norm", {"key_norm": True}),
+            ("value_norm", {"value_norm": True}),
+            ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
+        ),
+        _LENGTHS_SINGLE,
     ),
-]
+):
+    for variant_name, variant_kwargs in variants:
+        for lengths in length_set:
+            _attention_test_cases.append(
+                (
+                    AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs),
+                    lengths,
+                )
+            )
 
-_attention_shared_key_value_norm_variants = [
-    ("no_norm", {}),
-    ("key_norm", {"key_norm": True}),
-    ("value_norm", {"value_norm": True}),
-    ("all_norms", {"query_norm": True, "key_norm": True, "value_norm": True}),
-]
-
-# Norms apply per-head and don't interact with mask/group structure, so we test all norm
-# variants on a single base (causal) instead of crossing every norm with every base.
-# Lengths matter for packing/flash equivalence checks, so we sweep all lengths on the
-# base × no_norm cases (where seq layout interacts most with attention math).
-_LENGTHS_FULL = [[15], [6, 9], [4, 1, 10], [20, 32, 10, 11, 9, 18]]
-_LENGTHS_SHORT = [[15], [4, 1, 10]]
-_LENGTHS_SINGLE = [[15]]
-
-
-def _build_test_cases() -> list[tuple[AttentionTestConfig, list[int]]]:
-    cases: list[tuple[AttentionTestConfig, list[int]]] = []
-    for base_name, base_kwargs in _base_attention_cases:
-        config = AttentionTestConfig(name=f"{base_name}_no_norm", **base_kwargs)
-        cases.extend((config, lengths) for lengths in _LENGTHS_FULL)
-    for variant_name, variant_kwargs in _attention_norm_variants:
-        if variant_name == "no_norm":
-            continue
-        config = AttentionTestConfig(name=f"causal_{variant_name}", causal=True, **variant_kwargs)
-        cases.extend((config, lengths) for lengths in _LENGTHS_SHORT)
-    for base_name, base_kwargs in _attention_rotary_cases:
-        for variant_name, variant_kwargs in _attention_norm_variants:
-            config = AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
-            cases.extend((config, lengths) for lengths in _LENGTHS_SINGLE)
-    for base_name, base_kwargs in _attention_shared_key_value_cases:
-        lengths_set = _LENGTHS_SINGLE if base_kwargs.get("rotary") else _LENGTHS_SHORT
-        for variant_name, variant_kwargs in _attention_shared_key_value_norm_variants:
-            config = AttentionTestConfig(name=f"{base_name}_{variant_name}", **base_kwargs, **variant_kwargs)
-            cases.extend((config, lengths) for lengths in lengths_set)
-    return cases
+# head_size > 256 — exercises the SDPA-only regime (flash caps at 256).
+for name, kwargs in (
+    ("large_head_causal_no_norm", {"causal": True, "head_size": 320}),
+    ("large_head_mqa_no_norm", {"causal": True, "head_size": 320, "kv_heads": 1}),
+):
+    for lengths in _LENGTHS_SHORT:
+        _attention_test_cases.append((AttentionTestConfig(name=name, **kwargs), lengths))
 
 
-_attention_test_cases = _build_test_cases()
+def _check_packed(
+    implementation: str,
+    config: AttentionTestConfig,
+    hidden_dim: TensorDim,
+    lengths: list[int],
+    attention_f32: Attention,
+    distributed_config: DistributedConfig,
+    distributed: Distributed,
+    hidden_states: torch.Tensor,
+    out_ref: torch.Tensor,
+    grads_ref: list[torch.Tensor],
+    out_rtol: float,
+    grad_rtol: float,
+) -> None:
+    attention_impl: Attention = config.get_attention_config(implementation).get_layer(
+        distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False
+    )
+    stage_impl = get_stage([attention_impl], distributed)
+    for param_impl, param_f32 in zip(attention_impl.parameters(), attention_f32.parameters(), strict=True):
+        param_impl.data.copy_(param_f32.data)
+    (model_input,) = LanguageModelBatch(
+        tokens=torch.empty(sum(lengths), dtype=torch.int64, device=hidden_states.device), lengths=lengths
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            **attention_impl.get_preprocessing_config(),
+        )
+    )
+    kwargs_impl = model_input.to_kwargs()
+    attention_impl.preprocess(kwargs_impl)
+    out_impl, context = stage_impl.forward(hidden_states, kwargs_impl)
+    stage_impl.backward(torch.ones_like(out_impl), context)
+    Assert.rms_close_relative(out_impl, out_ref, out_rtol, 1e-7)
+    for param_impl, grad_ref in zip(attention_impl.parameters(), grads_ref, strict=True):
+        Assert.rms_close_relative(param_impl.grad_buffer, grad_ref, grad_rtol, 1e-7, msg=implementation)
 
 
 def _run_per_seq_reference(
@@ -255,7 +315,6 @@ def _run_per_seq_reference(
     hidden_states: torch.Tensor,
     lengths: list[int],
     device: torch.device,
-    with_backward: bool = True,
 ) -> torch.Tensor:
     out_refs = []
     for length, hidden_slice in zip(lengths, torch.split(hidden_states, lengths, dim=0), strict=True):
@@ -271,20 +330,9 @@ def _run_per_seq_reference(
         kwargs = model_input.to_kwargs()
         attention.preprocess(kwargs)
         out, context = stage.forward(hidden_slice, kwargs)
-        if with_backward:
-            stage.backward(torch.ones_like(out), context)
+        stage.backward(torch.ones_like(out), context)
         out_refs.append(out.detach())
     return torch.cat(out_refs, dim=0)
-
-
-@contextlib.contextmanager
-def _no_tf32():
-    prev = torch.backends.cuda.matmul.allow_tf32
-    torch.backends.cuda.matmul.allow_tf32 = False
-    try:
-        yield
-    finally:
-        torch.backends.cuda.matmul.allow_tf32 = prev
 
 
 def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
@@ -357,50 +405,60 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
         Assert.rms_close_relative(param.grad_buffer, grad_ref, 1e-5, 1e-7, msg=name)
     stage.reset_gradients()
 
-    # Flash equivalence check: packed flash output must match per-sequence bfloat16 backup reference.
-    if _flash_available:
-        distributed_config_bf16 = DistributedConfig(compute_dtype=DataType.bfloat16, use_cuda=True)
-        distributed_bf16 = Distributed(distributed_config_bf16)
+    _check_packed(
+        "sdpa_dense",
+        config,
+        hidden_dim,
+        lengths,
+        attention,
+        distributed_config,
+        distributed,
+        hidden_states,
+        out_ref,
+        grads_ref,
+        1e-5,
+        1e-5,
+    )
 
-        attention_backup_bf16: Attention = config.get_attention_config("backup").get_layer(
-            distributed_config_bf16, hidden_dim, lr_scale=None, peft=None, return_bias=False
-        )
-        stage_backup_bf16 = get_stage([attention_backup_bf16], distributed_bf16)
-        for param_bf16, param_f32 in zip(attention_backup_bf16.parameters(), attention.parameters(), strict=True):
-            param_bf16.data.copy_(param_f32.data)
+    if not torch.cuda.is_available():
+        return
 
-        hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16)
-        out_ref_bf16 = _run_per_seq_reference(
-            attention_backup_bf16,
-            stage_backup_bf16,
-            distributed_config_bf16,
-            hidden_states_bf16,
+    distributed_config_bf16 = DistributedConfig(compute_dtype=DataType.bfloat16, use_cuda=True)
+    distributed_bf16 = Distributed(distributed_config_bf16)
+
+    attention_backup_bf16: Attention = config.get_attention_config("backup").get_layer(
+        distributed_config_bf16, hidden_dim, lr_scale=None, peft=None, return_bias=False
+    )
+    stage_backup_bf16 = get_stage([attention_backup_bf16], distributed_bf16)
+    for param_bf16, param_f32 in zip(attention_backup_bf16.parameters(), attention.parameters(), strict=True):
+        param_bf16.data.copy_(param_f32.data)
+
+    hidden_states_bf16 = hidden_states.detach().to(torch.bfloat16).requires_grad_()
+    out_ref_bf16 = _run_per_seq_reference(
+        attention_backup_bf16, stage_backup_bf16, distributed_config_bf16, hidden_states_bf16, lengths, device
+    )
+    grads_ref_bf16 = [param.grad_buffer.clone() for param in attention_backup_bf16.parameters()]
+
+    # bf16 grad rtol is looser than forward: reduction-order noise compounds through backward.
+    for implementation in ("sdpa_dense", "flash", "sdpa_nested"):
+        if implementation == "flash" and (not _flash_available or config.head_size > 256):
+            continue
+        if implementation == "sdpa_nested" and config.window_size is not None:
+            continue
+        _check_packed(
+            implementation,
+            config,
+            hidden_dim,
             lengths,
-            device,
-            with_backward=False,
+            attention,
+            distributed_config_bf16,
+            distributed_bf16,
+            hidden_states_bf16,
+            out_ref_bf16,
+            grads_ref_bf16,
+            5e-3,
+            1.5e-2,
         )
-
-        attention_flash: Attention = config.get_attention_config("flash").get_layer(
-            distributed_config_bf16, hidden_dim, lr_scale=None, peft=None, return_bias=False
-        )
-        stage_flash = get_stage([attention_flash], distributed_bf16)
-        for param_flash, param_f32 in zip(attention_flash.parameters(), attention.parameters(), strict=True):
-            param_flash.data.copy_(param_f32.data)
-
-        (model_input_flash,) = LanguageModelBatch(
-            tokens=torch.empty(num_tokens, dtype=torch.int64, device=device), lengths=lengths
-        ).get_model_inputs(
-            LanguageModelBatchPreprocessingConfig(
-                distributed=distributed_config_bf16,
-                predicted_tokens=0,
-                **attention_flash.get_preprocessing_config(),
-            )
-        )
-        kwargs_flash = model_input_flash.to_kwargs()
-        attention_flash.preprocess(kwargs_flash)
-        out_flash, _ = stage_flash.forward(hidden_states_bf16, kwargs_flash)
-
-        Assert.rms_close_relative(out_flash, out_ref_bf16, 5e-3, 1e-7)
 
 
 @pytest.mark.slow
@@ -409,5 +467,5 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     [pytest.param(config, lengths, id=f"{config.name}-{lengths}") for config, lengths in _attention_test_cases],
 )
 def test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
-    with _no_tf32():
+    with no_tf32():
         _test_attention(config, lengths)

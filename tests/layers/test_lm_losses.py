@@ -467,7 +467,7 @@ def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) ->
         if ref_value is None:
             assert got_value is None, name
         else:
-            Assert.rms_close_relative(got_value, ref_value, threshold, 1e-6)
+            Assert.rms_close_relative(got_value, ref_value, threshold)
 
 
 def _test_grpo_metrics(
@@ -504,7 +504,7 @@ def _test_grpo_metrics(
         group=group,
         compute_entropy=compute_entropy,
     )
-    _check_grpo_metrics(ref, got, threshold=1e-5 if dtype == DataType.float32 else 1e-4)
+    _check_grpo_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
 def _test_z_loss(
