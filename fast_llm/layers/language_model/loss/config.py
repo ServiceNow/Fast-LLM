@@ -260,6 +260,12 @@ class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig):
 
     _abstract: typing.ClassVar[bool] = False
 
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
     @property
     def loss_class(self) -> "type[LanguageModelGSPOLoss]":
         from fast_llm.layers.language_model.loss.policy_gradient import LanguageModelGSPOLoss

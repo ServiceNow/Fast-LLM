@@ -246,7 +246,13 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
             local_max = int(max_buffer.item())
         num_segments = local_max + 1
 
-        loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
+        if TritonConfig.enabled(logits.device, self._config.use_triton):
+            from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backward
+
+            fn = triton_gspo_loss_forward_backward
+        else:
+            fn = fused_gspo_loss_forward_backward
+        loss, grad, new_logprobs_mean = fn(
             logits,
             self._get_labels(kwargs, split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
