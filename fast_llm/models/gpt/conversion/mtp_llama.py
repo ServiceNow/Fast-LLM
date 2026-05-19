@@ -3,35 +3,27 @@ import typing
 from transformers import PretrainedConfig
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import WeightConverter
-from fast_llm.layers.block.config import FixedBlockSequenceConfig
-from fast_llm.layers.language_model.config import LanguageModelConfig, LanguageModelHeadConfig
+from fast_llm.engine.checkpoint.external import RenameConfigConverter, WeightConverter
+from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import MTPLlamaCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaBaseModelConverter,
-    LlamaDecoderConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
     get_parameter_converter,
 )
-from fast_llm.utils import Assert, safe_merge_dicts
+from fast_llm.utils import safe_merge_dicts
 
 
 class MTPLlamaHeadConverter(LlamaHeadConverter):
     @classmethod
-    def import_config(cls, config: dict) -> dict:
+    def _create_config_converters(cls) -> dict:
         return {
-            **super().import_config(config),
-            "prediction_heads": config["prediction_heads"],
+            **super()._create_config_converters(),
+            # MTP-Llama exposes the prediction-heads count via the HF config; Llama itself blanket-ignores it.
+            "prediction_heads": RenameConfigConverter(("prediction_heads",), ("prediction_heads",)),
         }
-
-    @classmethod
-    def export_config(cls, config: LanguageModelHeadConfig) -> dict:
-        return safe_merge_dicts(
-            super().export_config(config),
-            {"prediction_heads": config.prediction_heads},
-        )
 
     @classmethod
     def get_converters(
@@ -39,8 +31,8 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         config: LanguageModelConfig,
         exported_config: dict,
     ) -> list[WeightConverter]:
-        # Override: map head.final_norm to model.mtp_norms.0 (not model.norm as in standard Llama),
-        # since MTPLlamaModel uses mtp_norms[0] for the first prediction head.
+        # MTP-Llama uses ``model.mtp_norms.0`` for the first prediction head's final norm
+        # instead of the standard ``model.norm``.
         converters = [
             *cls.normalization_converter_class.get_converters(
                 config.head.normalization,
@@ -68,26 +60,7 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         return converters
 
 
-class MTPLlamaDecoderConverter(LlamaDecoderConverter):
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        return {
-            "block": cls.block_converter_class.import_config(config),
-            "num_blocks": config["num_hidden_layers"],
-        }
-
-    @classmethod
-    def export_config(cls, config: FixedBlockSequenceConfig) -> dict:
-        # TODO: Support PatternBlockSequenceConfig with compatible configs.
-        Assert.custom(isinstance, config, FixedBlockSequenceConfig)
-        return safe_merge_dicts(
-            cls.block_converter_class.export_config(config.block),
-            {"num_hidden_layers": config.num_blocks},
-        )
-
-
 class MTPLlamaBaseModelConverter(LlamaBaseModelConverter):
-    decoder_converter_class: typing.ClassVar[type[MTPLlamaDecoderConverter]] = MTPLlamaDecoderConverter
     head_converter_class: typing.ClassVar[type[MTPLlamaHeadConverter]] = MTPLlamaHeadConverter
 
 

@@ -34,12 +34,12 @@ class PatchEmbeddingsConfig(BlockConfig):
     patch_height: int = Field(
         default=16,
         desc="Height of image patches, in pixels.",
-        hint=FieldHint.core,
+        hint=FieldHint.architecture,
     )
     patch_width: int = Field(
         default=16,
         desc="Width of image patches, in pixels.",
-        hint=FieldHint.core,
+        hint=FieldHint.architecture,
     )
     full_precision_residual: bool = Field(
         default=False,

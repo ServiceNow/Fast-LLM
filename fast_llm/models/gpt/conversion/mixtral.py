@@ -1,54 +1,61 @@
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import SplitWeightConverter, WeightConverter
-from fast_llm.layers.decoder.mlp.config import MoEMLPConfig
+from fast_llm.engine.checkpoint.external import (
+    ConstantImportConfigConverter,
+    IgnoredConfigConverter,
+    RenameConfigConverter,
+    SplitWeightConverter,
+    WeightConverter,
+)
+from fast_llm.layers.decoder.mlp.config import MoEMLPConfig, RoutingType
 from fast_llm.models.gpt.conversion.config import MixtralCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import LlamaMLPConverter, MLPLayer2Converter, get_weight_and_bias_converters
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
-    MistralDecoderConverter,
     MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
-from fast_llm.utils import Assert, safe_merge_dicts
+from fast_llm.utils import Assert
 
 
 class MixtralMLPConverter(LlamaMLPConverter):
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        config["mlp_bias"] = False
-        return safe_merge_dicts(
-            super().import_config(config),
-            {
-                "type": "moe",
-                "experts": config["num_local_experts"],
-                "experts_per_token": config["num_experts_per_tok"],
-            },
-        )
+    fast_llm_config_class = MoEMLPConfig
 
     @classmethod
-    def export_config(cls, config: MoEMLPConfig) -> dict:
-        Assert.custom(isinstance, config, MoEMLPConfig)
-        assert not config.add_linear_biases
-        if config.router_normalization is not None:
-            raise NotImplementedError(f"`router_normalization` is not supported by `{cls.__name__}`.")
-        if config.router_scale.enabled:
-            raise NotImplementedError(f"`router_scale` is not supported by `{cls.__name__}`.")
-        if config.router_input_scale != 1.0:
-            raise NotImplementedError(f"`router_input_scale != 1.0` is not supported by `{cls.__name__}`.")
-        if config.router_per_expert_scale.enabled:
-            raise NotImplementedError(f"`router_per_expert_scale` is not supported by `{cls.__name__}`.")
-        out = super().export_config(config)
-        del out["mlp_bias"]
-        return safe_merge_dicts(
-            out,
-            {
-                "num_local_experts": config.experts,
-                "num_experts_per_tok": config.experts_per_token,
-            },
-        )
+    def _create_config_converters(cls) -> dict:
+        return {
+            **super()._create_config_converters(),
+            # Mixtral has no `mlp_bias` HF field; biases are always disabled.
+            "add_linear_biases": ConstantImportConfigConverter(("add_linear_biases",), False),
+            "experts": RenameConfigConverter(("experts",), ("num_local_experts",)),
+            "experts_per_token": RenameConfigConverter(("experts_per_token",), ("num_experts_per_tok",)),
+            # Mixtral has no shared experts and uses the topk default; assert on export, inject defaults on import.
+            "shared_experts": ConstantImportConfigConverter(("shared_experts",), 0),
+            "routing": ConstantImportConfigConverter(("routing",), RoutingType.topk),
+            # Mixtral has no HF representation for the router sub-config. The blanket consume satisfies
+            # architecture coverage; non-architecture fields (lr_scale, apply_peft, weight.initialization,
+            # weight.lr_scale) cannot round-trip through the HF format by design — Fast-LLM keeps them on
+            # the in-memory config independently. The only architecture-hint sub-field is ``router.weight``,
+            # a ParameterConfig with no architecture sub-fields, so the blanket carries no real risk.
+            "router": IgnoredConfigConverter(("router",)),
+            "router_normalization": ConstantImportConfigConverter(("router_normalization",), None),
+            "router_scale": IgnoredConfigConverter(("router_scale",)),
+            "router_input_scale": ConstantImportConfigConverter(("router_input_scale",), 1.0),
+            "router_per_expert_scale": IgnoredConfigConverter(("router_per_expert_scale",)),
+            # Router / inference toggles surfaced by HF but not consumed by Fast-LLM's MoEMLPConfig
+            # (auxiliary_loss_coefficient and jitter_eps are FieldHint.feature, not architecture).
+            "router_runtime_unsupported": IgnoredConfigConverter(
+                hf_paths=(("router_aux_loss_coef",), ("router_jitter_noise",), ("output_router_logits",)),
+            ),
+        }
+
+    @classmethod
+    def _validate_export(cls, config: MoEMLPConfig) -> None:
+        super()._validate_export(config)
+        Assert.custom(lambda v: not v, config.router_scale.enabled)
+        Assert.custom(lambda v: not v, config.router_per_expert_scale.enabled)
 
     @classmethod
     def get_converters(
@@ -87,16 +94,12 @@ class MixtralBlockConverter(MistralBlockConverter):
     mlp_converter_class: typing.ClassVar[type[MixtralMLPConverter]] = MixtralMLPConverter
 
 
-class MixtralDecoderConverter(MistralDecoderConverter):
-    block_converter_class: typing.ClassVar[type[MixtralBlockConverter]] = MixtralBlockConverter
-
-
 class MixtralHeadConverter(MistralHeadConverter):
     block_converter_class: typing.ClassVar[type[MixtralBlockConverter]] = MixtralBlockConverter
 
 
 class MixtralBaseModelConverter(MistralBaseModelConverter):
-    decoder_converter_class: typing.ClassVar[type[MixtralDecoderConverter]] = MixtralDecoderConverter
+    block_converter_class: typing.ClassVar[type[MixtralBlockConverter]] = MixtralBlockConverter
     head_converter_class: typing.ClassVar[type[MixtralHeadConverter]] = MixtralHeadConverter
 
 
