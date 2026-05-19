@@ -19,7 +19,6 @@ import fast_llm.models.multimodal.conversion.auto  # noqa: F401
 from fast_llm.engine.checkpoint.external import (
     ConfigSectionConverter,
     DispatchConfigConverter,
-    ListDispatchConfigConverter,
     NestedConfigConverter,
     OptionalConfigConverter,
     TypedDictContainerConfigConverter,
@@ -30,6 +29,7 @@ from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpoin
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
+from fast_llm.models.gpt.conversion.apriel import ListDispatchConfigConverter
 
 # Configs that don't default-construct cleanly need a minimal-valid factory.
 _DEFAULT_FACTORIES: dict[type, typing.Callable[[], typing.Any]] = {
