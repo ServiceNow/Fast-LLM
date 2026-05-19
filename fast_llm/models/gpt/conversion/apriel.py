@@ -584,9 +584,17 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
         decoder = config.decoder
+        if isinstance(decoder, FixedBlockSequenceConfig):
+            per_position_blocks = [decoder.block] * decoder.num_blocks
+        elif isinstance(decoder, PatternBlockSequenceConfig):
+            per_position_blocks = [
+                decoder.blocks[decoder.pattern[block_index % len(decoder.pattern)]]
+                for block_index in range(decoder.num_blocks)
+            ]
+        else:
+            raise NotImplementedError(type(decoder).__name__)
         converters = [*cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model")]
-        for block_index in range(decoder.num_blocks):
-            block_config = decoder.blocks[decoder.pattern[block_index % len(decoder.pattern)]]
+        for block_index, block_config in enumerate(per_position_blocks):
             converters += cls.block_dispatcher_class.get_converters(
                 block_config,
                 f"decoder.{block_index}",
