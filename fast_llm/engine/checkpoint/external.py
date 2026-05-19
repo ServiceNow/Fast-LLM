@@ -14,6 +14,7 @@ from fast_llm.engine.checkpoint.config import CheckpointLoadMetadataConfig
 from fast_llm.engine.checkpoint.state_dict import StateDictCheckpointHandler
 from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert
 
@@ -424,6 +425,88 @@ class DispatchConfigConverter(ConfigConverter):
         _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
 
+class ListDispatchConfigConverter(ConfigConverter):
+    """Polymorphic block-sequence dispatch driven by a positional HF list.
+
+    Models Apriel's hybrid-SSM shape: the HF config carries one entry per pipeline position in a
+    ``hybrid_block_layout: list[str]``, and the per-block HF keys live flat at the top level — each
+    registered block converter claims a disjoint subset (attention → flat top-level keys, mamba →
+    ``ssm_cfg.*``, gdn/kda → ``linear_attn_config.*``). On import, the layout list dispatches each
+    Fast-LLM block; on export, the block sequence (Fixed or Pattern) emits the union of each distinct
+    block's HF dict plus the layout and block count. Two registries are required because the format
+    distinguishes "which mixer classes appear at all" from "which mixer classes participate in the
+    config round-trip":
+
+    * ``registry``: mixer-config class → block ``ConfigSectionConverter``. Covers every block type
+      whose HF keys must be claimed by the coverage walker — including weight-side-only types whose
+      config-side layout name is absent (e.g. ``KimiDeltaAttentionConfig``).
+    * ``layout_names``: mixer-config class → layout discriminator string. Subset of ``registry`` keys
+      that participate in the config-side round-trip; classes absent here can't be config-exported
+      (no layout name to emit) or config-imported (no reverse-map entry).
+
+    Fast-LLM target is a :class:`FixedBlockSequenceConfig` when the layout has a single entry, a
+    :class:`PatternBlockSequenceConfig` otherwise. The same HF dict feeds every per-block import —
+    each block converter's declarations claim disjoint top-level keys, and shared top-level scalars
+    (e.g. ``rms_norm_eps``) cross-validate via the safe-set guard.
+    """
+
+    fast_llm_recurses: typing.ClassVar[bool] = True
+
+    def __init__(
+        self,
+        fast_llm_path: tuple[str, ...],
+        hf_layout_path: tuple[str, ...],
+        hf_num_blocks_path: tuple[str, ...],
+        registry: "dict[type[Config], type[ConfigSectionConverter]]",
+        layout_names: "dict[type[Config], str]",
+    ):
+        self.fast_llm_paths = (fast_llm_path,)
+        # Layout/num-blocks paths and per-block claims register through ``_consumed_hf_paths``.
+        self.hf_paths = ()
+        self._hf_layout_path = hf_layout_path
+        self._hf_num_blocks_path = hf_num_blocks_path
+        self._registry = registry
+        self._layout_names = layout_names
+        self._config_classes = {name: cls for cls, name in layout_names.items()}
+
+    def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
+        block_sequence = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
+        if type(block_sequence) is FixedBlockSequenceConfig:
+            distinct_blocks = [block_sequence.block]
+            pattern_blocks = [block_sequence.block]
+        elif type(block_sequence) is PatternBlockSequenceConfig:
+            distinct_blocks = list(block_sequence.blocks.values())
+            pattern_blocks = [block_sequence.blocks[name] for name in block_sequence.pattern]
+        else:
+            raise NotImplementedError(type(block_sequence).__name__)
+        for block_config in distinct_blocks:
+            converter_class = self._registry[type(block_config.mixer)]
+            sub_hf = converter_class.export_config(block_config)
+            for key, value in sub_hf.items():
+                _safe_set_nested_dict_value(hf_out, (key,), value)
+        layout = [self._layout_names[type(block_config.mixer)] for block_config in pattern_blocks]
+        _safe_set_nested_dict_value(hf_out, self._hf_layout_path, layout)
+        _safe_set_nested_dict_value(hf_out, self._hf_num_blocks_path, block_sequence.num_blocks)
+
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
+        layout = get_nested_dict_value(hf_dict, self._hf_layout_path)
+        num_blocks = get_nested_dict_value(hf_dict, self._hf_num_blocks_path)
+        if len(layout) == 1:
+            converter_class = self._registry[self._config_classes[layout[0]]]
+            sub_fast_llm = {"block": converter_class.import_config(hf_dict), "num_blocks": num_blocks}
+        else:
+            sub_fast_llm = {
+                "type": "pattern",
+                "blocks": {
+                    layout_name: self._registry[self._config_classes[layout_name]].import_config(hf_dict)
+                    for layout_name in set(layout)
+                },
+                "pattern": layout,
+                "num_blocks": num_blocks,
+            }
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
+
+
 class TypedDictContainerConfigConverter(ConfigConverter):
     """Maps a Fast-LLM ``dict[str, Config]`` field to an HF ``dict[str, dict]`` where each entry is round-tripped
     through a per-class section converter selected via the entry's runtime type (export) or HF discriminator (import).
@@ -610,6 +693,11 @@ class ConfigSectionConverter(abc.ABC):
                         paths |= sub_class._consumed_hf_paths()
             elif isinstance(declaration, TypedDictContainerConfigConverter):
                 paths.add(declaration.hf_paths[0])
+            elif isinstance(declaration, ListDispatchConfigConverter):
+                paths.add(declaration._hf_layout_path)
+                paths.add(declaration._hf_num_blocks_path)
+                for sub_class in declaration._registry.values():
+                    paths |= sub_class._consumed_hf_paths()
             else:
                 for path in declaration.hf_paths:
                     if path:
