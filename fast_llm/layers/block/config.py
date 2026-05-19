@@ -40,6 +40,8 @@ class BlockKwargs:
     # TODO: These are confusing
     sequence_length = "sequence_length"
     lengths = "lengths"
+    document_index_q = "document_index_q"
+    document_index_k = "document_index_k"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
     activation_distillation_targets = "activation_distillation_targets"
