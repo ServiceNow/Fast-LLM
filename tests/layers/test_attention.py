@@ -1,4 +1,3 @@
-import contextlib
 import dataclasses
 
 import pytest
@@ -14,7 +13,7 @@ from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.attention.attention import Attention, _flash_available
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.utils import Assert
-from tests.utils.utils import get_stage
+from tests.utils.utils import get_stage, no_tf32
 
 _HEADS = 4
 _KV_HEADS = 2
@@ -336,16 +335,6 @@ def _run_per_seq_reference(
     return torch.cat(out_refs, dim=0)
 
 
-@contextlib.contextmanager
-def _no_tf32():
-    prev = torch.backends.cuda.matmul.allow_tf32
-    torch.backends.cuda.matmul.allow_tf32 = False
-    try:
-        yield
-    finally:
-        torch.backends.cuda.matmul.allow_tf32 = prev
-
-
 def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     num_tokens = sum(lengths)
     hidden_dim = TensorDim("hidden", config.hidden_size)
@@ -478,5 +467,5 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     [pytest.param(config, lengths, id=f"{config.name}-{lengths}") for config, lengths in _attention_test_cases],
 )
 def test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
-    with _no_tf32():
+    with no_tf32():
         _test_attention(config, lengths)

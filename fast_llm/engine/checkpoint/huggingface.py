@@ -9,7 +9,12 @@ import torch
 
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointSaveMetadataConfig
-from fast_llm.engine.checkpoint.external import ExternalStateDictCheckpointHandler, WeightConverter, logger
+from fast_llm.engine.checkpoint.external import (
+    ConfigSectionConverter,
+    ExternalStateDictCheckpointHandler,
+    WeightConverter,
+    logger,
+)
 from fast_llm.engine.multi_stage.config import CheckpointMetadata, FastLLMModelConfig
 from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, safe_merge_dicts
@@ -120,10 +125,58 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             },
         )
 
+    # Top-level HF metadata keys that are always permitted, regardless of the converter tree.
+    # Covers transformers' generic ``PretrainedConfig`` fields (always present after ``to_dict()``)
+    # plus a handful of widely-shared metadata that Fast-LLM intentionally does not store.
+    _HF_METADATA_ALLOWLIST: typing.ClassVar[frozenset[str]] = frozenset(
+        {
+            # transformers PretrainedConfig
+            "_name_or_path",
+            "architectures",
+            "auto_map",
+            "chunk_size_feed_forward",
+            "dtype",
+            "id2label",
+            "is_encoder_decoder",
+            "label2id",
+            "model_type",
+            "output_attentions",
+            "output_hidden_states",
+            "problem_type",
+            "return_dict",
+            "torch_dtype",
+            "transformers_version",
+            "use_cache",
+            # Token ids — generation/inference, not architecture.
+            "bos_token_id",
+            "decoder_start_token_id",
+            "eos_token_id",
+            "pad_token_id",
+            "sep_token_id",
+            # Initialization / pretraining metadata Fast-LLM does not consume.
+            "initializer_range",
+            "max_position_embeddings",
+            "pretraining_tp",
+        }
+    )
+
+    @classmethod
+    def _check_hf_coverage(cls, config: dict[str, typing.Any]) -> None:
+        """Run the HF-side coverage check at the import boundary.
+
+        Skips silently when the format's base-model converter isn't a :class:`ConfigSectionConverter`
+        (e.g. multimodal aggregators built on top of imperative ``HuggingFaceBaseModelConverter``).
+        Subclasses that override :meth:`_import_config` should call this explicitly to keep the check
+        active.
+        """
+        if issubclass(cls.base_model_converter_class, ConfigSectionConverter):
+            cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._HF_METADATA_ALLOWLIST)
+
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> FastLLMModelConfig:
         Assert.eq(config["model_type"], cls.get_huggingface_model_type())
         Assert.eq(config["architectures"], [cls.architecture])
+        cls._check_hf_coverage(config)
         return cls._model_class.from_dict({"base_model": cls.base_model_converter_class.import_config(config)})
 
     def _create_weight_converters(self) -> list[WeightConverter]:
