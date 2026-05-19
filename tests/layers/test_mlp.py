@@ -1,4 +1,5 @@
 import dataclasses
+import types
 
 import pytest
 import torch
@@ -8,7 +9,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.decoder.mlp.config import HybridMoEMLPConfig
-from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP
+from fast_llm.layers.decoder.mlp.mixture_of_experts import HybridMoEMLP, MixtureOfExpertMLP
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage, no_tf32
 
@@ -22,6 +23,47 @@ def _norm() -> dict:
     # Fresh dict per call: `from_dict` consumes the `type` key during parsing, so a shared
     # module-level dict would silently become `{}` (i.e. default `layer_norm`) on second use.
     return {"type": "rms_norm"}
+
+
+class _RouterBridge(torch.autograd.Function):
+    """Catches the router's real output and incoming gradient for cross-side comparison and
+    substitutes deterministic mock data in both directions, so the assembly under test does
+    not depend on routing.
+
+    Forward: catches `real_logits`, returns `mock_logits` so the downstream `torch.topk` +
+    softmax + expert dispatch is deterministic regardless of ~1e-7 FP perturbations that
+    would otherwise flip top-k for near-boundary tokens.
+    Backward: catches the gradient computed against `mock_logits`, returns `mock_grad` to
+    `real_logits` so the router's parameters still receive a gradient through their normal
+    backward path.
+
+    `captured` is a mutable dict the caller passes in to receive both catches.
+    """
+
+    @staticmethod
+    def forward(ctx, real_logits, mock_logits, mock_grad, captured):
+        captured["real_logits"] = real_logits.detach()
+        ctx.save_for_backward(mock_grad)
+        ctx.captured = captured
+        return mock_logits.detach()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (mock_grad,) = ctx.saved_tensors
+        ctx.captured["mock_logits_grad"] = grad_output.detach()
+        return mock_grad, None, None, None
+
+
+def _wrap_router(routed: MixtureOfExpertMLP, mock_logits, mock_grad, captured) -> None:
+    if not hasattr(routed, "_orig_topk_routing"):
+        routed._orig_topk_routing = routed._topk_routing
+    real_topk = routed._orig_topk_routing
+
+    def _patched(self, logits, grad_scale=None, losses=None):
+        bridged = _RouterBridge.apply(logits, mock_logits, mock_grad, captured)
+        return real_topk(bridged, grad_scale, losses)
+
+    routed._topk_routing = types.MethodType(_patched, routed)
 
 
 @dataclasses.dataclass
@@ -67,18 +109,18 @@ class HybridMoEMLPTestConfig:
     def expected_output(self, hybrid: HybridMoEMLP, input_: torch.Tensor, kwargs: dict) -> torch.Tensor:
         # Hybrid-assembly test. The dense and routed branches are treated as black boxes (covered
         # by `MLP` and `MixtureOfExpertMLP` tests); pre/post norms are computed via
-        # `torch.rms_norm` so the wrapper's norms do not appear in their own reference.
+        # `torch.rms_norm` so the wrapper's norms do not appear in their own reference. Runs
+        # under autograd so the caller can backward through this reference.
         def _rms_norm(x: torch.Tensor, norm_module) -> torch.Tensor:
             return torch.rms_norm(x, x.shape[-1:], norm_module.weight, 1e-5)
 
-        with torch.no_grad():
-            shared = _rms_norm(input_, hybrid.pre_norm) if hybrid.pre_norm is not None else input_
-            dense_out, _ = hybrid.dense(shared, kwargs)
-            routed_out, _ = hybrid.routed(shared, kwargs)
-            out = dense_out + routed_out
-            if hybrid.post_norm is not None:
-                out = _rms_norm(out, hybrid.post_norm)
-            return out
+        shared = _rms_norm(input_, hybrid.pre_norm) if hybrid.pre_norm is not None else input_
+        dense_out, _ = hybrid.dense(shared, kwargs)
+        routed_out, _ = hybrid.routed(shared, kwargs)
+        out = dense_out + routed_out
+        if hybrid.post_norm is not None:
+            out = _rms_norm(out, hybrid.post_norm)
+        return out
 
 
 _test_configs = [
@@ -112,14 +154,44 @@ def test_hybrid_moe_mlp(config: HybridMoEMLPTestConfig) -> None:
     hybrid: HybridMoEMLP = config.get_mlp_config().get_layer(
         distributed_config, hidden_dim, lr_scale=None, peft=None, return_bias=False
     )
-    get_stage([hybrid], distributed)
-    hybrid.eval()
+    stage = get_stage([hybrid], distributed)
+    # Train mode so the codebase's custom-autograd kernels retain backward context. With
+    # dropout=0 and jitter_eps=0 (defaults), train mode is functionally identical to eval
+    # mode here — the only difference is context retention.
+    hybrid.train()
+
+    # Predetermined mock router output + incoming gradient, shared between actual and reference.
+    n_router_experts = hybrid.routed._config.unshared_experts
+    g = torch.Generator(device=device).manual_seed(0xB007)
+    mock_logits = torch.randn(_NUM_TOKENS, n_router_experts, device=device, generator=g)
+    mock_grad = torch.randn(_NUM_TOKENS, n_router_experts, device=device, generator=g)
 
     input_ = torch.randn(_NUM_TOKENS, _HIDDEN_SIZE, device=device)
     token_dim = TensorDim("tokens", _NUM_TOKENS)
     kwargs = {BlockKwargs.hidden_token_dim: token_dim}
 
-    with torch.no_grad(), no_tf32():
-        output = hybrid(input_, kwargs)
-        expected = config.expected_output(hybrid, input_, kwargs)
-    Assert.rms_close_relative(output, expected, 1e-5, 1e-7)
+    captures_actual: dict = {}
+    _wrap_router(hybrid.routed, mock_logits, mock_grad, captures_actual)
+    stage.reset_gradients()
+    with no_tf32():
+        input_actual = input_.clone().requires_grad_(True)
+        output = hybrid(input_actual, kwargs)
+        output.backward(torch.ones_like(output))
+        grad_actual = input_actual.grad.clone()
+
+    captures_ref: dict = {}
+    _wrap_router(hybrid.routed, mock_logits, mock_grad, captures_ref)
+    stage.reset_gradients()
+    with no_tf32():
+        input_ref = input_.clone().requires_grad_(True)
+        expected = config.expected_output(hybrid, input_ref, kwargs)
+        expected.backward(torch.ones_like(expected))
+        grad_ref = input_ref.grad.clone()
+
+    # 1e-4 absorbs FP32 noise from the wrapper pre-norm + post-norm Triton-vs-`torch.rms_norm`
+    # divergence propagated through matmuls (up to ~5e-5 observed for `wrapper_norms` /
+    # `all_norms`). All other configs are bit-exact or in the 1e-7 range, well below threshold.
+    Assert.rms_close_relative(output, expected, 1e-4, 1e-7)
+    Assert.rms_close_relative(grad_actual, grad_ref, 1e-4, 1e-7)
+    Assert.rms_close_relative(captures_actual["real_logits"], captures_ref["real_logits"], 1e-4, 1e-7)
+    Assert.rms_close_relative(captures_actual["mock_logits_grad"], captures_ref["mock_logits_grad"], 1e-4, 1e-7)

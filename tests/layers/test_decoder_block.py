@@ -64,36 +64,36 @@ class PostNormTestConfig:
         # Block-assembly test. The mixer and MLP are treated as black boxes (covered by
         # `test_attention` and `test_mlp` respectively); norms/residual/output_scale are computed
         # via `torch.rms_norm` so the assembly under test does not appear in its own reference.
+        # Runs under autograd so the caller can backward through this reference.
         def _rms_norm(x: torch.Tensor, norm_module) -> torch.Tensor:
             if isinstance(norm_module, NoNormalization):
                 return x
             return torch.rms_norm(x, x.shape[-1:], norm_module.weight, 1e-5)
 
-        with torch.no_grad():
-            norm1_out = _rms_norm(input_, block.norm_1)
-            mixer_hidden, mixer_bias = block.mixer(norm1_out, kwargs)
-            if block.post_mixer_norm is not None:
-                if mixer_bias is not None:
-                    mixer_hidden = mixer_hidden + mixer_bias
-                    mixer_bias = None
-                mixer_hidden = _rms_norm(mixer_hidden, block.post_mixer_norm)
+        norm1_out = _rms_norm(input_, block.norm_1)
+        mixer_hidden, mixer_bias = block.mixer(norm1_out, kwargs)
+        if block.post_mixer_norm is not None:
             if mixer_bias is not None:
                 mixer_hidden = mixer_hidden + mixer_bias
-            after_mixer = input_ + mixer_hidden
+                mixer_bias = None
+            mixer_hidden = _rms_norm(mixer_hidden, block.post_mixer_norm)
+        if mixer_bias is not None:
+            mixer_hidden = mixer_hidden + mixer_bias
+        after_mixer = input_ + mixer_hidden
 
-            norm2_out = _rms_norm(after_mixer, block.norm_2)
-            mlp_hidden, mlp_bias = block.mlp(norm2_out, kwargs)
-            if block.post_mlp_norm is not None:
-                if mlp_bias is not None:
-                    mlp_hidden = mlp_hidden + mlp_bias
-                    mlp_bias = None
-                mlp_hidden = _rms_norm(mlp_hidden, block.post_mlp_norm)
+        norm2_out = _rms_norm(after_mixer, block.norm_2)
+        mlp_hidden, mlp_bias = block.mlp(norm2_out, kwargs)
+        if block.post_mlp_norm is not None:
             if mlp_bias is not None:
                 mlp_hidden = mlp_hidden + mlp_bias
-            output = after_mixer + mlp_hidden
-            if self.output_scale is not None:
-                output = output * self.output_scale
-            return output
+                mlp_bias = None
+            mlp_hidden = _rms_norm(mlp_hidden, block.post_mlp_norm)
+        if mlp_bias is not None:
+            mlp_hidden = mlp_hidden + mlp_bias
+        output = after_mixer + mlp_hidden
+        if self.output_scale is not None:
+            output = output * self.output_scale
+        return output
 
 
 _base_post_norm_cases = [
@@ -129,8 +129,10 @@ def test_post_norms(test_config: PostNormTestConfig):
     block: DecoderBlock = test_config.get_block_config().get_layer(
         distributed_config, hidden_dim, lr_scale=None, peft=None
     )
-    get_stage([block], distributed)
-    block.eval()
+    stage = get_stage([block], distributed)
+    # Train mode so the codebase's custom-autograd kernels retain backward context. With
+    # dropout=0 (default), train mode is functionally identical to eval mode here.
+    block.train()
 
     device = distributed.device
     if test_config.output_scale is not None:
@@ -151,7 +153,19 @@ def test_post_norms(test_config: PostNormTestConfig):
     }
     block.preprocess(kwargs)
 
-    with torch.no_grad(), no_tf32():
-        output = block(input_, kwargs)
-        expected = test_config.expected_output(block, input_, kwargs)
+    stage.reset_gradients()
+    with no_tf32():
+        input_actual = input_.clone().requires_grad_(True)
+        output = block(input_actual, kwargs)
+        output.backward(torch.ones_like(output))
+        grad_actual = input_actual.grad.clone()
+
+    stage.reset_gradients()
+    with no_tf32():
+        input_ref = input_.clone().requires_grad_(True)
+        expected = test_config.expected_output(block, input_ref, kwargs)
+        expected.backward(torch.ones_like(expected))
+        grad_ref = input_ref.grad.clone()
+
     Assert.rms_close_relative(output, expected, _TOLERANCE, 1e-7)
+    Assert.rms_close_relative(grad_actual, grad_ref, _TOLERANCE, 1e-7)
