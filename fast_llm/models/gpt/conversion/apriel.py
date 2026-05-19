@@ -435,10 +435,12 @@ class ListDispatchConfigConverter(ConfigConverter):
     """Block-sequence dispatch driven by a positional HF list.
 
     The HF config carries one layout-discriminator string per pipeline position; each registered
-    block converter handles one mixer type, and their outputs flat-merge into the parent HF root
-    (each claims a disjoint subset of top-level keys; shared scalars cross-validate via the safe-set
-    guard). The Fast-LLM target is a :class:`FixedBlockSequenceConfig` when the layout has a single
-    entry, a :class:`PatternBlockSequenceConfig` otherwise.
+    block converter handles one mixer type, and their outputs flat-merge into the parent HF root.
+    Per-mixer nested subdicts (e.g. ``ssm_cfg`` for Mamba, ``linear_attn_config`` for GDN) are
+    disjoint across block types; shared top-level scalars are emitted by every block with the same
+    value and cross-validate via :func:`Assert.eq` inside ``_safe_set_nested_dict_value``. The
+    Fast-LLM target is a :class:`FixedBlockSequenceConfig` when the layout has a single entry, a
+    :class:`PatternBlockSequenceConfig` otherwise.
 
     Two registries:
 
@@ -460,7 +462,7 @@ class ListDispatchConfigConverter(ConfigConverter):
         registry: "dict[type[Config], type[ConfigSectionConverter]]",
         layout_names: "dict[type[Config], str]",
     ):
-        Assert.custom(lambda lns: set(lns) <= set(registry), layout_names)
+        Assert.custom(lambda names: set(names) <= set(registry), layout_names)
         self.fast_llm_paths = (fast_llm_path,)
         # Layout/num-blocks paths and per-block claims register through ``_consumed_hf_paths``.
         self.hf_paths = ()
@@ -479,7 +481,10 @@ class ListDispatchConfigConverter(ConfigConverter):
             distinct_blocks = block_sequence.blocks.values()
             pattern_blocks = [block_sequence.blocks[name] for name in block_sequence.pattern]
         else:
-            raise NotImplementedError(type(block_sequence).__name__)
+            raise NotImplementedError(
+                f"Unsupported block-sequence type {type(block_sequence).__name__} at "
+                f"{'.'.join(self.fast_llm_paths[0])}"
+            )
         for block_config in distinct_blocks:
             converter_class = self._registry[type(block_config.mixer)]
             sub_hf = converter_class.export_config(block_config)
@@ -587,10 +592,7 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
         if isinstance(decoder, FixedBlockSequenceConfig):
             per_position_blocks = [decoder.block] * decoder.num_blocks
         elif isinstance(decoder, PatternBlockSequenceConfig):
-            per_position_blocks = [
-                decoder.blocks[decoder.pattern[block_index % len(decoder.pattern)]]
-                for block_index in range(decoder.num_blocks)
-            ]
+            per_position_blocks = [decoder.blocks[block_name] for block_name in decoder.expanded_pattern]
         else:
             raise NotImplementedError(type(decoder).__name__)
         converters = [*cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model")]
