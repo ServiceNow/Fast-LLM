@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import typing
 
@@ -16,6 +17,21 @@ logger = logging.getLogger(__name__)
 
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 requires_triton = pytest.mark.skipif(not triton_available, reason="Triton is not available")
+
+
+@contextlib.contextmanager
+def no_tf32():
+    # TF32 (PyTorch's CUDA matmul default) has ~1e-3 mantissa precision, which amplifies
+    # sub-FP32 input perturbations (e.g. Triton-vs-`torch.rms_norm` differing by ~1e-7) into
+    # ~1e-5 output drift through matmuls. Disable for tests comparing block forward to an eager
+    # reference; otherwise mixing tile/batch sizes can produce ~1e-4 swings unrelated to the
+    # feature under test.
+    prev = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = prev
 
 
 @pytest.fixture(scope="session")
