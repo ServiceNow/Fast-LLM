@@ -10,7 +10,12 @@ from fast_llm.engine.config_utils.initialization import init_normal_
 from fast_llm.engine.config_utils.tensor_dim import CompositeTensorDim, ConcatenatedTensorDim, TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.functional.utils import wrap_forward_backward
-from fast_llm.layers.attention.config import AttentionConfig, AttentionImplementation, AttentionKwargs
+from fast_llm.layers.attention.config import (
+    _FLASH_MAX_HEAD_SIZE,
+    AttentionConfig,
+    AttentionImplementation,
+    AttentionKwargs,
+)
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
@@ -79,12 +84,22 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             peft=peft,
             return_bias=return_bias,
         )
+        # Two-stage resolution so callers can set `implementation=sdpa` to get the auto-picked SDPA flavor.
         self._implementation = self._config.implementation
         if self._implementation == AttentionImplementation.auto:
-            if _flash_available and self._distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16):
+            if (
+                _flash_available
+                and self._distributed_config.compute_dtype in (DataType.float16, DataType.bfloat16)
+                and self._config.head_size <= _FLASH_MAX_HEAD_SIZE
+            ):
                 self._implementation = AttentionImplementation.flash
             else:
-                self._implementation = AttentionImplementation.backup
+                self._implementation = AttentionImplementation.sdpa
+        if self._implementation == AttentionImplementation.sdpa:
+            if self._distributed_config.use_cuda and self._config.window_size is None:
+                self._implementation = AttentionImplementation.sdpa_nested
+            else:
+                self._implementation = AttentionImplementation.sdpa_dense
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         self._sequence_data_parallel_dim = self._distributed_config.get_distributed_dim(
@@ -258,6 +273,76 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             softmax_scale=self._softmax_scale,
         )
 
+    def _attn_sdpa(
+        self,
+        query: torch.Tensor,  # total_q, heads, head_size
+        key: torch.Tensor,  # total_k, head_groups, head_size (pre-GQA-expansion)
+        value: torch.Tensor,  # total_k, head_groups, head_size (pre-GQA-expansion)
+        kwargs: dict[str, typing.Any],
+    ) -> torch.Tensor:  # total_q, heads, head_size
+        # SDPA's fused kernels require Q/K/V to share heads, so we expand K/V across query heads.
+        # `enable_gqa=True` would handle this internally, but it forces a fallback to the MATH
+        # backend (which materializes the O(S^2) attention matrix) and is unsupported by the
+        # nested-jagged path entirely; manual `repeat_interleave` keeps EFFICIENT in play.
+        if self._local_heads_per_group > 1:
+            key = key.repeat_interleave(self._local_heads_per_group, dim=1)
+            value = value.repeat_interleave(self._local_heads_per_group, dim=1)
+
+        sdpa_args: dict[str, typing.Any] = {
+            "dropout_p": self._config.dropout if self.training else 0.0,
+            "scale": self._softmax_scale,
+        }
+        # Dispatch on whether the preprocessor materialized an explicit dense mask. The nested
+        # path uses `is_causal=True`, which PyTorch implements as TOP-LEFT (UPPER-LEFT) alignment
+        # and produces wrong results when any document straddles the current micro-sequence's
+        # start (seq_q < seq_k for the straddling doc — that doc needs BOTTOM-RIGHT). When the
+        # preprocessor detects straddling, it builds an explicit BOTTOM-RIGHT mask via
+        # `_preprocess_for_backup_attention`; we then fall back to the dense SDPA path.
+        if AttentionKwargs.attention_mask in kwargs:
+            # Dense + backup's preprocessed causal+document mask. Required on CPU (MATH rejects
+            # nested + is_causal), on CUDA with sliding window (the nested path can't express
+            # it), and on CUDA when any document straddles the current micro-sequence's start.
+            # Backup builds the mask as (1, sq, 1, sk); SDPA wants (B, H, sq, sk).
+            query = query.unsqueeze(0)
+            key = key.unsqueeze(0)
+            value = value.unsqueeze(0)
+            sdpa_args["attn_mask"] = kwargs[AttentionKwargs.attention_mask].transpose(1, 2)
+        else:
+            # Wrap each document as its own batch element via nested-jagged so cross-doc masking
+            # is structural and EFFICIENT skips materializing the attention mask. The dispatch
+            # otherwise reads `max_seqlen`/`min_seqlen` to host on every call; passing them in
+            # explicitly keeps the path sync-free.
+            # `nested_tensor_from_jagged` requires int64 offsets.
+            cu_seqlens_q = kwargs[AttentionKwargs.cu_seqlens_q].to(torch.int64)
+            cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k].to(torch.int64)
+            query = torch.nested.nested_tensor_from_jagged(
+                query,
+                cu_seqlens_q,
+                min_seqlen=kwargs[AttentionKwargs.min_seqlen_q],
+                max_seqlen=kwargs[AttentionKwargs.max_seqlen_q],
+            )
+            key = torch.nested.nested_tensor_from_jagged(
+                key,
+                cu_seqlens_k,
+                min_seqlen=kwargs[AttentionKwargs.min_seqlen_k],
+                max_seqlen=kwargs[AttentionKwargs.max_seqlen_k],
+            )
+            value = torch.nested.nested_tensor_from_jagged(
+                value,
+                cu_seqlens_k,
+                min_seqlen=kwargs[AttentionKwargs.min_seqlen_k],
+                max_seqlen=kwargs[AttentionKwargs.max_seqlen_k],
+            )
+            sdpa_args["is_causal"] = self._config.causal
+
+        output = torch.nn.functional.scaled_dot_product_attention(
+            query.transpose(1, 2),
+            key.transpose(1, 2),
+            value.transpose(1, 2),
+            **sdpa_args,
+        ).transpose(1, 2)
+        return output.values() if output.is_nested else output.squeeze(0)
+
     def _apply_norm_with_grad_capture(
         self, norm: torch.nn.Module, x: torch.Tensor
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
@@ -420,6 +505,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         with set_generator(self._distributed.tp_generator):
             if self._implementation == AttentionImplementation.flash:
                 input_ = self._attn_flash(query, key, value, kwargs)
+            elif self._implementation in (AttentionImplementation.sdpa_nested, AttentionImplementation.sdpa_dense):
+                input_ = self._attn_sdpa(query, key, value, kwargs)
             elif self._implementation == AttentionImplementation.backup:
                 # TODO: Avoid the flattens.
                 input_ = self._attn_backup(query, key, value, kwargs)
@@ -472,7 +559,11 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         attention_compute = sequence_q * sequence_k * attn_compute_base
 
-        if (not config.hardware) or self._implementation in AttentionImplementation.flash:
+        if (not config.hardware) or self._implementation in (
+            AttentionImplementation.flash,
+            AttentionImplementation.sdpa_nested,
+            AttentionImplementation.sdpa_dense,
+        ):
             # Remove non-causal part. (TODO: Support non-causal)
             # TODO: Compute is overestimated without cross-document attention.
             attention_compute -= (sequence_q * (sequence_q - 1) * attn_compute_base) // 2
@@ -498,20 +589,40 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         )
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
-        return (
-            {
+        if self._implementation == AttentionImplementation.flash:
+            return {
                 "return_cumulative_sequence_lengths": True,
                 "return_max_sequence_lengths": True,
                 "causal": self._config.causal,
             }
-            if self._implementation == AttentionImplementation.flash
-            else {"return_document_index": True, "causal": self._config.causal}
-        )
+        elif self._implementation == AttentionImplementation.sdpa_nested:
+            # `document_index` is needed for the dense fallback when a document straddles the
+            # current micro-sequence's start (PyTorch nested SDPA's `is_causal=True` does TOP-LEFT
+            # causal alignment, which is wrong for the straddling doc with `seq_q < seq_k`).
+            return {
+                "return_cumulative_sequence_lengths": True,
+                "return_max_sequence_lengths": True,
+                "return_min_sequence_lengths": True,
+                "return_document_index": True,
+                "causal": self._config.causal,
+            }
+        elif self._implementation in (AttentionImplementation.sdpa_dense, AttentionImplementation.backup):
+            return {"return_document_index": True, "causal": self._config.causal}
+        else:
+            raise NotImplementedError(self._implementation)
 
     def preprocess(self, kwargs: dict[str, typing.Any]) -> None:
         self._rotary.preprocess(kwargs)
-        if self._implementation == AttentionImplementation.backup:
+        if self._implementation in (AttentionImplementation.backup, AttentionImplementation.sdpa_dense):
             self._preprocess_for_backup_attention(kwargs)
+        elif self._implementation == AttentionImplementation.sdpa_nested:
+            # Detect cross-micro-sequence document straddle: PyTorch nested SDPA's `is_causal=True`
+            # does TOP-LEFT causal, but a straddling doc has `seq_q < seq_k` and needs BOTTOM-RIGHT.
+            # Materialize the dense mask in that case so `_attn_sdpa` falls back to dense SDPA.
+            first_document_begin = kwargs.get(AttentionKwargs.first_document_begin, 0)
+            sequence_k_past = kwargs[AttentionKwargs.sequence_k_dim].size - kwargs[AttentionKwargs.token_dim].size
+            if first_document_begin < sequence_k_past:
+                self._preprocess_for_backup_attention(kwargs)
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device

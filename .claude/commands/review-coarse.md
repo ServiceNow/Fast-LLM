@@ -26,6 +26,8 @@ On a follow-up review after fixes have been pushed, run `git diff <last-reviewed
 
 ## Output
 
+Begin with a single-line header: `## /review-coarse @ <short-sha>` (use `git rev-parse --short HEAD`). This identifies the output when pasted into another session for triage.
+
 Each numbered item must stand on its own as a concrete, actionable finding — a specific change to make or a clear problem to fix, phrased so `fix N` is a complete instruction. Prefer a single recommendation; only present alternatives ("either X or Y") when both are genuinely viable and you can't justify picking one.
 
 Keep each item's lead to **1–3 sentences**: location, what's wrong, what to do. Trust the reader to read the code — don't explain how the bug would manifest, walk through the data flow, justify why the current code is wrong beyond a brief phrase, or compare fix options inside the lead.
