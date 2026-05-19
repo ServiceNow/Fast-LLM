@@ -26,6 +26,7 @@ class MixerKwargs(BlockKwargs):
     document_index_q = "document_index_q"
     document_index_k = "document_index_k"
     position_ids = "position_ids"
+    first_document_begin = "first_document_begin"
 
 
 class AttentionKwargs(MixerKwargs):

@@ -292,7 +292,22 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             "dropout_p": self._config.dropout if self.training else 0.0,
             "scale": self._softmax_scale,
         }
-        if self._implementation == AttentionImplementation.sdpa_nested:
+        # Dispatch on whether the preprocessor materialized an explicit dense mask. The nested
+        # path uses `is_causal=True`, which PyTorch implements as TOP-LEFT (UPPER-LEFT) alignment
+        # and produces wrong results when any document straddles the current micro-sequence's
+        # start (seq_q < seq_k for the straddling doc — that doc needs BOTTOM-RIGHT). When the
+        # preprocessor detects straddling, it builds an explicit BOTTOM-RIGHT mask via
+        # `_preprocess_for_backup_attention`; we then fall back to the dense SDPA path.
+        if AttentionKwargs.attention_mask in kwargs:
+            # Dense + backup's preprocessed causal+document mask. Required on CPU (MATH rejects
+            # nested + is_causal), on CUDA with sliding window (the nested path can't express
+            # it), and on CUDA when any document straddles the current micro-sequence's start.
+            # Backup builds the mask as (1, sq, 1, sk); SDPA wants (B, H, sq, sk).
+            query = query.unsqueeze(0)
+            key = key.unsqueeze(0)
+            value = value.unsqueeze(0)
+            sdpa_args["attn_mask"] = kwargs[AttentionKwargs.attention_mask].transpose(1, 2)
+        else:
             # Wrap each document as its own batch element via nested-jagged so cross-doc masking
             # is structural and EFFICIENT skips materializing the attention mask. The dispatch
             # otherwise reads `max_seqlen`/`min_seqlen` to host on every call; passing them in
@@ -319,14 +334,6 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 max_seqlen=kwargs[AttentionKwargs.max_seqlen_k],
             )
             sdpa_args["is_causal"] = self._config.causal
-        else:
-            # Dense + backup's preprocessed causal+document mask. Required on CPU (MATH rejects
-            # nested + is_causal) and on CUDA with sliding window (the nested path can't express
-            # it). Backup builds the mask as (1, sq, 1, sk); SDPA wants (B, H, sq, sk).
-            query = query.unsqueeze(0)
-            key = key.unsqueeze(0)
-            value = value.unsqueeze(0)
-            sdpa_args["attn_mask"] = kwargs[AttentionKwargs.attention_mask].transpose(1, 2)
 
         output = torch.nn.functional.scaled_dot_product_attention(
             query.transpose(1, 2),
@@ -589,10 +596,14 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 "causal": self._config.causal,
             }
         elif self._implementation == AttentionImplementation.sdpa_nested:
+            # `document_index` is needed for the dense fallback when a document straddles the
+            # current micro-sequence's start (PyTorch nested SDPA's `is_causal=True` does TOP-LEFT
+            # causal alignment, which is wrong for the straddling doc with `seq_q < seq_k`).
             return {
                 "return_cumulative_sequence_lengths": True,
                 "return_max_sequence_lengths": True,
                 "return_min_sequence_lengths": True,
+                "return_document_index": True,
                 "causal": self._config.causal,
             }
         elif self._implementation in (AttentionImplementation.sdpa_dense, AttentionImplementation.backup):
@@ -604,6 +615,14 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         self._rotary.preprocess(kwargs)
         if self._implementation in (AttentionImplementation.backup, AttentionImplementation.sdpa_dense):
             self._preprocess_for_backup_attention(kwargs)
+        elif self._implementation == AttentionImplementation.sdpa_nested:
+            # Detect cross-micro-sequence document straddle: PyTorch nested SDPA's `is_causal=True`
+            # does TOP-LEFT causal, but a straddling doc has `seq_q < seq_k` and needs BOTTOM-RIGHT.
+            # Materialize the dense mask in that case so `_attn_sdpa` falls back to dense SDPA.
+            first_document_begin = kwargs.get(AttentionKwargs.first_document_begin, 0)
+            sequence_k_past = kwargs[AttentionKwargs.sequence_k_dim].size - kwargs[AttentionKwargs.token_dim].size
+            if first_document_begin < sequence_k_past:
+                self._preprocess_for_backup_attention(kwargs)
 
     def _preprocess_for_backup_attention(self, kwargs: dict[str, typing.Any]) -> None:
         device = kwargs[AttentionKwargs.device] if AttentionKwargs.device in kwargs else self._distributed.device

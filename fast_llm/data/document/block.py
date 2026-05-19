@@ -31,6 +31,7 @@ class BlockModelInput(ModelInput):
     document_index_q: torch.Tensor | None = None
     document_index_k: torch.Tensor | None = None
     position_index: torch.Tensor | None = None
+    first_document_begin: int = 0
 
     def to_kwargs(self) -> dict[str, typing.Any]:
         return {
@@ -51,6 +52,7 @@ class BlockModelInput(ModelInput):
             AttentionKwargs.document_index_q: self.document_index_q,
             AttentionKwargs.document_index_k: self.document_index_k,
             LanguageModelKwargs.position_ids: self.position_index,
+            AttentionKwargs.first_document_begin: self.first_document_begin,
         }
 
 
@@ -101,6 +103,7 @@ class LengthModelInputPreprocessor:
             # TODO: Support non-causal cropping (needs to know about the future too).
             Assert.eq(model_input.sequence_k_dim.global_size, self.last_document_end)
 
+        model_input.first_document_begin = self.first_document_begin
         if config.return_cumulative_sequence_lengths:
             model_input.cumulative_lengths_q, model_input.cumulative_lengths_k = self.cumulative_lengths
         if config.return_max_sequence_lengths or config.return_document_index:
