@@ -1,17 +1,21 @@
+import functools
 import typing
 
 from transformers import PretrainedConfig
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
-from fast_llm.engine.checkpoint.external import RenameConfigConverter, WeightConverter
-from fast_llm.layers.language_model.config import LanguageModelConfig
-from fast_llm.models.gpt.config import GPTModelConfig
+from fast_llm.engine.checkpoint.external import (
+    NestedWeightConverter,
+    OutputProjectionWeightConverter,
+    RenameConfigConverter,
+    WeightConverter,
+)
+from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import MTPLlamaCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaBaseModelConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
-    get_parameter_converter,
 )
 from fast_llm.utils import safe_merge_dicts
 
@@ -26,36 +30,40 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         }
 
     @classmethod
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # MTP-Llama places the first prediction head's final norm under ``model.mtp_norms.0`` instead
+        # of the standard ``model.norm``; the additional MTP blocks/norms come from the imperative
+        # ``get_converters`` override below since their count depends on ``head.prediction_heads``.
+        return {
+            "final_norm": NestedWeightConverter(
+                "final_norm", "model.mtp_norms.0", cls.normalization_converter_class, config_attr="normalization"
+            ),
+            "output_weights": OutputProjectionWeightConverter("output_weights", "lm_head.weight"),
+        }
+
+    @classmethod
     def get_converters(
         cls,
-        config: LanguageModelConfig,
+        config: GPTBaseModelConfig,
         exported_config: dict,
     ) -> list[WeightConverter]:
-        # MTP-Llama uses ``model.mtp_norms.0`` for the first prediction head's final norm
-        # instead of the standard ``model.norm``.
-        converters = [
-            *cls.normalization_converter_class.get_converters(
-                config.head.normalization,
-                "head.final_norm",
-                "model.mtp_norms.0",
-            ),
-            get_parameter_converter(
-                "head.output_weights",
-                "lm_head.weight",
-                drop_on_import=exported_config["tie_word_embeddings"],
-                drop_on_export=exported_config["tie_word_embeddings"],
-            ),
-        ]
+        converters = list(cls.emit_weight_converters(config.head, "head", "", root_config=config))
+        # Append the MTP fan-out: one block + one norm per extra prediction head. ``block_converter_class``
+        # comes from the parent ``LlamaHeadConverter`` ClassVar — the MTP block shape matches the main
+        # decoder block.
         for prediction_distance in range(2, config.head.prediction_heads + 1):
-            converters += cls.block_converter_class.get_converters(
+            converters += cls.block_converter_class.emit_weight_converters(
                 config.decoder.last_block_config,
-                f"multi_token_prediction.blocks.{prediction_distance-2}",
+                f"multi_token_prediction.blocks.{prediction_distance - 2}",
                 f"model.mtp_heads.{prediction_distance - 2}",
+                root_config=config,
             )
-            converters += cls.normalization_converter_class.get_converters(
+            converters += cls.normalization_converter_class.emit_weight_converters(
                 config.head.normalization,
                 f"multi_token_prediction.heads.{prediction_distance - 2}.final_norm",
                 f"model.mtp_norms.{prediction_distance - 1}",
+                root_config=config,
             )
         return converters
 

@@ -1,16 +1,19 @@
+import functools
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
     ConstantImportConfigConverter,
     IgnoredConfigConverter,
+    LinearWeightConverter,
     RenameConfigConverter,
     SplitWeightConverter,
+    TransposeSplitWeightConverter,
     WeightConverter,
 )
 from fast_llm.layers.decoder.mlp.config import MoEMLPConfig, RoutingType
 from fast_llm.models.gpt.conversion.config import MixtralCheckpointFormat
-from fast_llm.models.gpt.conversion.llama import LlamaMLPConverter, MLPLayer2Converter, get_weight_and_bias_converters
+from fast_llm.models.gpt.conversion.llama import LlamaMLPConverter
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
@@ -58,35 +61,21 @@ class MixtralMLPConverter(LlamaMLPConverter):
         Assert.custom(lambda v: not v, config.router_per_expert_scale.enabled)
 
     @classmethod
-    def get_converters(
-        cls,
-        config: MoEMLPConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.router",
-                f"{hf_prefix}.gate",
-                False,
-                drop_on_export=drop_on_export,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "router": LinearWeightConverter("router", "gate"),
+            "layer_1": LinearWeightConverter(
+                "layer_1",
+                lambda c: tuple(f"experts.{i}.{w}" for i in range(c.experts) for w in ("w1", "w3")),
+                transform=SplitWeightConverter,
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_1",
-                tuple(f"{hf_prefix}.experts.{i}.{w}" for i in range(config.experts) for w in ("w1", "w3")),
-                False,
-                SplitWeightConverter,
-                drop_on_export=drop_on_export,
+            "layer_2": LinearWeightConverter(
+                "layer_2",
+                lambda c: tuple(f"experts.{i}.w2" for i in range(c.experts)),
+                transform=TransposeSplitWeightConverter,
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_2",
-                tuple(f"{hf_prefix}.experts.{i}.w2" for i in range(config.experts)),
-                False,
-                MLPLayer2Converter,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+        }
 
 
 class MixtralBlockConverter(MistralBlockConverter):
