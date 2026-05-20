@@ -620,24 +620,6 @@ class ConfigSectionConverter(abc.ABC):
         return out
 
     @classmethod
-    def get_converters(
-        cls,
-        config: Config,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list["WeightConverter"]:
-        """Imperative-shape entry point — delegates to the declarative walker.
-
-        Section converters that haven't migrated override this with a custom body; migrated sections leave
-        it inherited. The ``drop_on_export`` parameter is accepted for signature compatibility with the
-        pre-migration shape but is unused — the walker handles tied embeddings via
-        :class:`OutputProjectionWeightConverter`. Once every consumer is migrated this shim and the
-        parameter are removed.
-        """
-        return cls.emit_weight_converters(config, fast_llm_prefix, hf_prefix)
-
-    @classmethod
     def emit_weight_converters(
         cls,
         config: Config,

@@ -56,82 +56,12 @@ def assert_no_peft(config: GPTBaseModelConfig) -> None:
 
 
 def effective_bias(layer_config: AffineLinearConfig, default: bool) -> bool:
-    """Resolve a layer's effective bias flag: explicit ``bias.enabled`` if set, else the parent default."""
+    """Resolve a layer's effective bias flag: explicit ``bias.enabled`` if set, else the parent default.
+
+    Used by Apriel and Apriel2 config-side ``CustomConfigConverter`` export_fns (which need to translate
+    a per-layer override into an HF-side bias flag) and by their ``LinearWeightConverter.bias_fn`` lambdas.
+    """
     return default if layer_config.bias.enabled is None else layer_config.bias.enabled
-
-
-# ============================================================
-# Legacy imperative weight-conversion helpers — kept for converters that haven't migrated to the
-# declarative shape yet. Deleted in the final cleanup commit once every consumer is on
-# ``_create_weight_converters``.
-# ============================================================
-
-
-# Re-export under the legacy name so callers that import ``MLPLayer2Converter`` from this module keep
-# working during migration.
-MLPLayer2Converter = TransposeSplitWeightConverter
-
-
-def get_parameter_converter(
-    fast_llm_name: str | tuple[str, ...],
-    hf_name: str | tuple[str, ...],
-    cls=WeightConverter,
-    config=None,
-    drop_on_export: bool = False,
-    drop_on_import: bool = False,
-) -> WeightConverter:
-    from fast_llm.engine.checkpoint.external import IgnoreExportWeightConverter, IgnoreImportWeightConverter
-
-    if isinstance(fast_llm_name, str):
-        fast_llm_name = (fast_llm_name,)
-    if isinstance(hf_name, str):
-        hf_name = (hf_name,)
-    if drop_on_export:
-        cls = IgnoreExportWeightConverter
-    if drop_on_import:
-        cls = IgnoreImportWeightConverter
-    return cls(
-        () if drop_on_import else fast_llm_name,
-        () if drop_on_export else hf_name,
-        config,
-    )
-
-
-def get_weight_and_bias_converters(
-    fast_llm_prefix: str | tuple[str, ...],
-    hf_prefix: str | tuple[str, ...],
-    use_bias: bool,
-    cls=WeightConverter,
-    config=None,
-    drop_on_export: bool = False,
-    drop_on_import: bool = False,
-) -> list[WeightConverter]:
-    if isinstance(fast_llm_prefix, str):
-        fast_llm_prefix = (fast_llm_prefix,)
-    if isinstance(hf_prefix, str):
-        hf_prefix = (hf_prefix,)
-    converters = [
-        get_parameter_converter(
-            () if drop_on_import else tuple(f"{prefix}.weight" for prefix in fast_llm_prefix),
-            () if drop_on_export else tuple(f"{prefix}.weight" for prefix in hf_prefix),
-            cls,
-            config,
-            drop_on_export,
-            drop_on_import,
-        )
-    ]
-    if use_bias:
-        converters.append(
-            get_parameter_converter(
-                () if drop_on_import else tuple(f"{prefix}.bias" for prefix in fast_llm_prefix),
-                () if drop_on_export else tuple(f"{prefix}.bias" for prefix in hf_prefix),
-                cls,
-                config,
-                drop_on_export,
-                drop_on_import,
-            )
-        )
-    return converters
 
 
 # ============================================================
