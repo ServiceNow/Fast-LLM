@@ -717,6 +717,11 @@ update_and_add_testing_config(
     "llama",
     "llama_gspo",
     updates={("model", "base_model", "head", "losses"): {"gspo": {"type": "gspo"}}},
+    # GSPO's per-document geometric mean can't be reconstructed from per-fragment
+    # `exp(mean)` values, so documents must not be split across separate kernel calls.
+    # `micro_batch_splits > 1` (the `ms*` variants) is the only mechanism that splits documents
+    # outside of a single kernel call's SDP/SP all-reduce.
+    skip_tests=("ms",),
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,

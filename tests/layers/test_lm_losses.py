@@ -195,18 +195,20 @@ def reference_gspo_loss(
     flat_advantages = advantages.reshape(-1)
 
     total = log_ratio.new_zeros(())
+    new_logprobs = log_ratio.new_zeros(())
     for segment in range(num_segments):
         in_segment = (flat_doc == segment) & flat_mask
         count = in_segment.sum()
         if int(count) == 0:
             continue
-        ratio = (flat_log_ratio[in_segment].sum() / count.float()).exp()
-        advantage = (flat_advantages[in_segment].sum() / count.float()).detach()
+        count_float = count.float()
+        ratio = (flat_log_ratio[in_segment].sum() / count_float).exp()
+        advantage = (flat_advantages[in_segment].sum() / count_float).detach()
         clipped_ratio = ratio.clamp(1 - epsilon_low, 1 + epsilon_high)
         total = total + -torch.minimum(ratio * advantage, clipped_ratio * advantage)
+        # Matches the kernel's `sum_t logprob_t * mask_t / N_d` — sum of per-document mean logprobs.
+        new_logprobs = new_logprobs + target_log_probabilities.reshape(-1)[in_segment].sum() / count_float
     total = total / num_segments
-
-    new_logprobs = (target_log_probabilities * loss_mask).sum() / max(float(loss_mask.sum()), 1.0)
     return total, new_logprobs
 
 
@@ -412,12 +414,14 @@ def _test_gspo_loss(
     span = max(seq_len // num_segments, 1)
     base = torch.arange(seq_len, device=target.device) // span
     document_index = base.clamp(max=num_segments - 1).expand(batch_shape).contiguous()
-    num_labels = int((target >= 0).sum().item())
-    num_labels_in_seq = torch.where(
-        target >= 0,
-        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
-        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    # Per-document labeled-token count broadcast per token, matching what the data
+    # preprocessor produces.
+    flat_doc = document_index.reshape(-1).long()
+    flat_target = target.reshape(-1)
+    labels_per_document = torch.zeros(num_segments, dtype=torch.int32, device=target.device).scatter_add(
+        0, flat_doc, (flat_target >= 0).to(torch.int32)
     )
+    num_labels_in_seq = labels_per_document[flat_doc].reshape(target.shape)
     _, ref_new_logprobs = reference_gspo_loss(
         logits,
         target,
