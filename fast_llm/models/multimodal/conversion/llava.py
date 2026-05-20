@@ -1,17 +1,21 @@
+import functools
 import typing
-
-import torch
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    BlockSequenceWeightConverter,
     ConfigSectionConverter,
     ConstantExportConfigConverter,
     ConstantImportConfigConverter,
     CustomConfigConverter,
     IgnoredConfigConverter,
     ImportOnlyConfigConverter,
+    LinearWeightConverter,
     NestedConfigConverter,
+    NestedWeightConverter,
+    PatchEmbeddingWeightConverter,
     RenameConfigConverter,
+    TransposeSplitWeightConverter,
     WeightConverter,
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
@@ -19,9 +23,7 @@ from fast_llm.engine.multi_stage.config import FastLLMModelConfig
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import Rotary2DConfig
-from fast_llm.layers.block.config import FixedBlockSequenceConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.language_model.config import LanguageModelConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.llama import (
     _TRANSFORMERS_V4,
@@ -29,15 +31,11 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaBlockConverter,
     LlamaDecoderConverter,
     LlamaNormalizationConverter,
-    MLPLayer2Converter,
-    get_parameter_converter,
-    get_weight_and_bias_converters,
 )
 from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter, MistralHeadConverter, MistralMLPConverter
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
 from fast_llm.models.multimodal.model import MultiModalModel
-from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, div
 
 
@@ -123,34 +121,6 @@ class PixtralEncoderConverter(LlamaDecoderConverter):
     block_converter_class: typing.ClassVar[type[PixtralBlockConverter]] = PixtralBlockConverter
 
 
-class PatchEmbeddingWeightConverter(WeightConverter):
-    _config: PatchEmbeddingsConfig
-
-    def export_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        return tuple(
-            weight_[:].view(
-                *weight_[:].shape[:-1],
-                self._config.input_channels,
-                self._config.patch_height,
-                self._config.patch_width,
-            )
-            for weight_ in weight
-        )
-
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        return tuple(
-            weight_[:].view(
-                *weight_[:].shape[:-3],
-                self._config.input_channels * self._config.patch_height * self._config.patch_width,
-            )
-            for weight_ in weight
-        )
-
-
 class PixtralEmbeddingsConverter(ConfigSectionConverter):
     """Converts ``PatchEmbeddingsConfig`` ↔ Pixtral HF flat fields (``patch_size`` / ``num_channels``).
 
@@ -184,21 +154,24 @@ class PixtralEmbeddingsConverter(ConfigSectionConverter):
         Assert.incl(config.patch_embeddings.bias.enabled, (None, False))
 
     @classmethod
-    def get_converters(
-        cls, config: PatchEmbeddingsConfig, fast_llm_prefix: str, hf_prefix: str
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.patch_embeddings",
-                f"{hf_prefix}.patch_conv",
-                False,
-                PatchEmbeddingWeightConverter,
-                config,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "patch_embeddings": LinearWeightConverter(
+                "patch_embeddings",
+                "patch_conv",
+                transform=PatchEmbeddingWeightConverter,
+                bias_fn=lambda c: False,
             ),
-            *cls.normalization_converter_class.get_converters(
-                config, f"{fast_llm_prefix}.normalization", f"{hf_prefix}.ln_pre"
+            # ``PixtralEmbeddingsConverter``'s section config IS the ``PatchEmbeddingsConfig`` (carries the
+            # normalization sub-config directly), so the nested ``LlamaNormalizationConverter`` reads from
+            # ``config_attr="normalization"`` — but the original code passed the *parent* config in. Mirror
+            # that by reading ``self`` (config_attr=""): the norm converter only needs ``.weight`` and the
+            # parent already exposes that field directly.
+            "normalization": NestedWeightConverter(
+                "normalization", "ln_pre", cls.normalization_converter_class, config_attr="normalization"
             ),
-        ]
+        }
 
 
 class LlavaVisionAdapterConverter(ConfigSectionConverter):
@@ -243,21 +216,12 @@ class LlavaVisionAdapterConverter(ConfigSectionConverter):
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
 
     @classmethod
-    def get_converters(cls, config: MLPConfig, fast_llm_prefix: str, hf_prefix: str) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_1",
-                f"{hf_prefix}.linear_1",
-                config.add_linear_biases,
-                WeightConverter,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_2",
-                f"{hf_prefix}.linear_2",
-                config.add_linear_biases,
-                MLPLayer2Converter,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "layer_1": LinearWeightConverter("layer_1", "linear_1"),
+            "layer_2": LinearWeightConverter("layer_2", "linear_2", transform=TransposeSplitWeightConverter),
+        }
 
 
 class LlavaVisionModelConverter(ConfigSectionConverter):
@@ -315,39 +279,36 @@ class LlavaVisionModelConverter(ConfigSectionConverter):
             Assert.eq(mixer.head_size * mixer.heads, config.hidden_size)
 
     @classmethod
-    def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
-        return [
-            *cls.embeddings_converter_class.get_converters(
-                config.embeddings, "vision_encoder.embeddings", "vision_tower"
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "embeddings": NestedWeightConverter("embeddings", "vision_tower", cls.embeddings_converter_class),
+            # The encoder section IS a FixedBlockSequenceConfig — fan out blocks via the dedicated primitive.
+            "encoder": NestedWeightConverter(
+                "encoder", "vision_tower.transformer.layers", cls.encoder_converter_class
             ),
-            *cls.encoder_converter_class.get_converters(
-                config.encoder, "vision_encoder.encoder", "vision_tower.transformer.layers"
-            ),
-            *LlavaVisionAdapterConverter.get_converters(
-                config.adapter, "vision_encoder.adapter", "multi_modal_projector"
-            ),
-        ]
+            "adapter": NestedWeightConverter("adapter", "multi_modal_projector", LlavaVisionAdapterConverter),
+        }
 
 
 class LlavaHeadConverter(MistralHeadConverter):
+    # Llava always writes ``lm_head.weight`` on export (never dropped, even when ``tied_embedding_weight=True``);
+    # the parent's :class:`OutputProjectionWeightConverter` would also drop on export, so we replace it with a
+    # plain rename. When the HF state-dict lacks ``lm_head.weight`` (tied case), the handler's per-converter
+    # ``all(name in state_dict)`` check makes the rename a silent no-op on import — equivalent to the previous
+    # ``drop_on_import=tied`` behaviour, without the extra parameter plumbing.
     @classmethod
-    def get_converters(
-        cls,
-        config: LanguageModelConfig,
-        exported_config: dict,
-    ) -> list[WeightConverter]:
-        return [
-            *cls.normalization_converter_class.get_converters(
-                config.head.normalization,
-                f"head.final_norm",
-                f"language_model.model.norm",
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "final_norm": NestedWeightConverter(
+                "final_norm",
+                "language_model.model.norm",
+                cls.normalization_converter_class,
+                config_attr="normalization",
             ),
-            get_parameter_converter(
-                f"head.output_weights",
-                "language_model.lm_head.weight",
-                drop_on_import=exported_config["tie_word_embeddings"],
-            ),
-        ]
+            "output_weights": WeightConverter("output_weights", "language_model.lm_head.weight"),
+        }
 
 
 class LlavaLanguageModelConverter(MistralBaseModelConverter):
@@ -428,26 +389,27 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
         assert config.image_token_index is not None, "Llava requires an image_token_index"
 
     @classmethod
-    def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         text_base_cls = cls.language_model_converter_class
-        decoder_config = config.decoder
-        block_config = (
-            decoder_config.block
-            if isinstance(decoder_config, FixedBlockSequenceConfig)
-            else next(iter(decoder_config.blocks.values()))
-        )
-        block_converters: list[WeightConverter] = []
-        for block_index in range(decoder_config.num_blocks):
-            block_converters += text_base_cls.block_converter_class.get_converters(
-                block_config, f"decoder.{block_index}", f"language_model.model.layers.{block_index}"
-            )
-        return [
-            *cls.vision_model_converter_class.get_converters(config.vision_encoder),
-            *text_base_cls.embeddings_converter_class.get_converters(
-                config.embeddings, "embeddings", "language_model.model"
+        return {
+            "vision_encoder": NestedWeightConverter("vision_encoder", "", cls.vision_model_converter_class),
+            "embeddings": NestedWeightConverter(
+                "embeddings", "language_model.model", text_base_cls.embeddings_converter_class
             ),
-            *block_converters,
-            *text_base_cls.head_converter_class.get_converters(config, {"tie_word_embeddings": False}),
+            "decoder": BlockSequenceWeightConverter(
+                "decoder", "language_model.model.layers", text_base_cls.block_converter_class
+            ),
+        }
+
+    @classmethod
+    def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+        # ``head`` is added at the aggregator level because the LlavaHead's plain WeightConverter for
+        # ``language_model.lm_head.weight`` doesn't fit a NestedWeightConverter under any HF prefix —
+        # it lives at the HF root, not inside ``language_model.model``.
+        return [
+            *cls.emit_weight_converters(config, "", ""),
+            *cls.language_model_converter_class.head_converter_class.get_converters(config, exported_config),
         ]
 
 
