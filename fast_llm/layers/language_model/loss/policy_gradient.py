@@ -221,6 +221,36 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
 class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageModelPolicyGradientLoss[ConfigType]):
     """GSPO: sequence-level geometric-mean IS-ratio clipping."""
 
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        *,
+        name: str,
+        prediction_distance: int = 1,
+        prediction_heads: int = 1,
+        vocab_parallel: bool = False,
+        num_splits: int = 1,
+        logits_scale_factor: float = 1.0,
+        weight: float = 1.0,
+        register_loss: bool = False,
+    ):
+        super().__init__(
+            config,
+            distributed_config,
+            name=name,
+            prediction_distance=prediction_distance,
+            prediction_heads=prediction_heads,
+            vocab_parallel=vocab_parallel,
+            num_splits=num_splits,
+            logits_scale_factor=logits_scale_factor,
+            weight=weight,
+            register_loss=register_loss,
+        )
+        # `cross_entropy_splits` chunks the sequence across forward calls; per-segment
+        # aggregation can't recombine across chunks since each call only sees a slice.
+        Assert.eq(self._num_splits, 1)
+
     def _forward_backward(
         self,
         logits: "torch.Tensor",
