@@ -237,14 +237,9 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         )
         # `document_index_q` is 1-based per the data preprocessor convention; shift to 0-based.
         document_index = document_index.long() - 1
-        # Buffer size must agree across SDP ranks (sharing the sequence) for the per-segment
-        # all-reduce inside the kernel; MAX-reduce the local max here.
-        local_max = int(document_index.max().item()) if document_index.numel() > 0 else -1
-        if self._sdp_active:
-            max_buffer = document_index.new_tensor(local_max)
-            torch.distributed.all_reduce(max_buffer, op=torch.distributed.ReduceOp.MAX, group=self._sdp_dim.group)
-            local_max = int(max_buffer.item())
-        num_segments = local_max + 1
+        # `lengths` is the CPU-side per-microbatch document list, identical across SDP ranks,
+        # so the buffer size is known host-side and matches the global segment count.
+        num_segments = len(kwargs[BlockKwargs.lengths])
 
         loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
             logits,
@@ -406,6 +401,7 @@ def fused_grpo_loss_forward_backward(
     return loss, grad_logits, new_logprobs_mean
 
 
+@torch.compile
 def fused_gspo_loss_forward_backward(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,)
@@ -413,6 +409,7 @@ def fused_gspo_loss_forward_backward(
     old_log_probabilities: torch.Tensor,  # (*batch,)
     document_index: torch.Tensor,  # (*batch,) int — 0-based segment ID per token
     num_segments: int,  # buffer size, ≥ document_index.max() + 1
+    divisor: float,
     grad_logits: torch.Tensor | None = None,
     grad_output: float | None = None,
     group: torch.distributed.ProcessGroup | None = None,  # TP vocab group
@@ -421,7 +418,6 @@ def fused_gspo_loss_forward_backward(
     epsilon_high: float = 0.2,
     logits_scale_factor: float = 1.0,
     num_labels_in_seq: torch.Tensor | None = None,
-    divisor: float | None = None,  # default: num_segments
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
     """GSPO loss: sequence-level geometric-mean IS-ratio clipping.
 
@@ -437,8 +433,6 @@ def fused_gspo_loss_forward_backward(
     Token-level contributions remain per-rank, so summing the kernel loss across SDP via SUM reduction
     matches the canonical single-rank result without further correction.
     """
-    if divisor is None:
-        divisor = float(num_segments) if num_segments > 0 else 1.0
     grad_output_scaled = None if grad_output is None else grad_output / divisor * logits_scale_factor
     loss_mask = target >= 0
 
