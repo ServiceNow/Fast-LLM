@@ -259,13 +259,12 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        document_index = self._prepare_target(
-            kwargs[BlockKwargs.document_index_q], split_index, split_by_distance=False
+        document_index_zero_based = (
+            self._prepare_target(kwargs[BlockKwargs.document_index_q], split_index, split_by_distance=False).long() - 1
         )
-        # `document_index_q` is 1-based per the data preprocessor convention; shift to 0-based.
-        document_index = document_index.long() - 1
         # `lengths` is the CPU-side per-microbatch document list, identical across SDP ranks,
         # so the buffer size is known host-side and matches the global segment count.
+        # `document_index_q` is 1-based per the data preprocessor convention; the kernel takes 0-based.
         num_segments = len(kwargs[BlockKwargs.lengths])
 
         loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
@@ -273,7 +272,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
             self._get_labels(kwargs, split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
             self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
-            document_index,
+            document_index_zero_based,
             num_segments,
             grad_logits=grad_logits,
             grad_output=self._get_grad_output(kwargs),
@@ -433,7 +432,7 @@ def fused_gspo_loss_forward_backward(
     target: torch.Tensor,  # (*batch,)
     advantages: torch.Tensor,  # (*batch,)
     old_log_probabilities: torch.Tensor,  # (*batch,)
-    document_index: torch.Tensor,  # (*batch,) int — 0-based segment ID per token
+    document_index_zero_based: torch.Tensor,  # (*batch,) int — segment ID per token, 0-based
     num_segments: int,  # buffer size, ≥ document_index.max() + 1
     divisor: float,
     num_labels_in_seq: torch.Tensor,  # (*batch,) — per-document labeled-token count broadcast per token
@@ -477,7 +476,7 @@ def fused_gspo_loss_forward_backward(
     new_log_probs = predicted_logits - sum_exp_logits.log()
     log_ratio = new_log_probs - old_log_probabilities
 
-    flat_document_index = document_index.reshape(-1).long()
+    flat_document_index = document_index_zero_based.reshape(-1).long()
     flat_mask = loss_mask.reshape(-1).to(log_ratio.dtype)
     # Per-token weight: mask / per-document label count, from the preprocessor.
     # Each labeled token contributes `1 / N_d` so all of doc d's tokens sum to 1 (across
