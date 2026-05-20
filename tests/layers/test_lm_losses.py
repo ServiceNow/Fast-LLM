@@ -204,10 +204,9 @@ def reference_gspo_loss(
         advantage = (flat_advantages[in_segment].sum() / count.float()).detach()
         clipped_ratio = ratio.clamp(1 - epsilon_low, 1 + epsilon_high)
         total = total + -torch.minimum(ratio * advantage, clipped_ratio * advantage)
-    total = total / max(num_segments, 1)
+    total = total / num_segments
 
-    log_probs = torch.nn.functional.log_softmax(logits_, -1).gather(-1, labels_safe.unsqueeze(-1)).squeeze(-1)
-    new_logprobs = (log_probs * loss_mask).sum() / max(float(loss_mask.sum()), 1.0)
+    new_logprobs = (target_log_probabilities * loss_mask).sum() / max(float(loss_mask.sum()), 1.0)
     return total, new_logprobs
 
 
@@ -413,6 +412,21 @@ def _test_gspo_loss(
     span = max(seq_len // num_segments, 1)
     base = torch.arange(seq_len, device=target.device) // span
     document_index = base.clamp(max=num_segments - 1).expand(batch_shape).contiguous()
+    num_labels = int((target >= 0).sum().item())
+    num_labels_in_seq = torch.where(
+        target >= 0,
+        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
+        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    )
+    _, ref_new_logprobs = reference_gspo_loss(
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        logits_scale_factor=logits_scale_factor,
+    )
     out_ref, grad_ref = loss_forward_backward(
         grad_output,
         lambda *args, **kwargs: reference_gspo_loss(*args, **kwargs)[0],
@@ -435,13 +449,15 @@ def _test_gspo_loss(
         old_log_probabilities,
         document_index,
         num_segments,
-        divisor=max(num_segments, 1),
+        divisor=num_segments,
         grad_logits=local_previous_grad.clone() if accumulate else None,
         grad_output=grad_output,
         group=group,
         logits_scale_factor=logits_scale_factor,
+        num_labels_in_seq=num_labels_in_seq,
     )
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
+    Assert.rms_close_relative(new_logprobs_fused, ref_new_logprobs, 1e-5, 1e-6)
 
 
 def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) -> None:

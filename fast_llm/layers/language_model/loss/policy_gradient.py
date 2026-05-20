@@ -252,6 +252,9 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
             grad_output=self._get_grad_output(kwargs),
             group=self._parallel_dim.group if self._vocab_parallel else None,
             sdp_group=self._sdp_dim.group if self._sdp_active else None,
+            # Sequence-parallel shards the sequence across the TP group, so per-segment
+            # buffers are partial on each rank and must be reduced over TP as well.
+            sp_group=self._parallel_dim.group if self._sequence_parallel else None,
             epsilon_low=self._config.epsilon_low,
             epsilon_high=self._config.epsilon_high,
             logits_scale_factor=self._logits_scale_factor,
@@ -414,6 +417,7 @@ def fused_gspo_loss_forward_backward(
     grad_output: float | None = None,
     group: torch.distributed.ProcessGroup | None = None,  # TP vocab group
     sdp_group: torch.distributed.ProcessGroup | None = None,  # SDP group for cross-rank segment aggregation
+    sp_group: torch.distributed.ProcessGroup | None = None,  # TP group when SP is sharding the sequence
     epsilon_low: float = 0.2,
     epsilon_high: float = 0.2,
     logits_scale_factor: float = 1.0,
@@ -429,9 +433,9 @@ def fused_gspo_loss_forward_backward(
     only with the per-token IS ratio replaced by the segment-broadcast R_s, the per-token advantage
     by the segment-mean A_s, and the loss mask scaled by 1 / token_count_s.
 
-    With `sdp_group`, segment sums are all-reduced so each rank computes the same global R_s/A_s.
-    Token-level contributions remain per-rank, so summing the kernel loss across SDP via SUM reduction
-    matches the canonical single-rank result without further correction.
+    With `sdp_group` and/or `sp_group`, segment sums are all-reduced over those groups so each rank
+    computes the same global R_s/A_s. Token-level contributions remain per-rank, so summing the
+    kernel loss across SDP/SP via SUM reduction matches the canonical single-rank result.
     """
     grad_output_scaled = None if grad_output is None else grad_output / divisor * logits_scale_factor
     loss_mask = target >= 0
@@ -454,10 +458,11 @@ def fused_gspo_loss_forward_backward(
         0, flat_doc, (advantages.reshape(-1) * flat_mask).to(advantages.dtype)
     )
     token_count = log_ratio.new_zeros(num_segments).index_add_(0, flat_doc, flat_mask)
-    if sdp_group is not None:
-        torch.distributed.all_reduce(log_ratio_sum, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
-        torch.distributed.all_reduce(advantage_sum, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
-        torch.distributed.all_reduce(token_count, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
+    for reduce_group in (sdp_group, sp_group):
+        if reduce_group is not None:
+            torch.distributed.all_reduce(log_ratio_sum, op=torch.distributed.ReduceOp.SUM, group=reduce_group)
+            torch.distributed.all_reduce(advantage_sum, op=torch.distributed.ReduceOp.SUM, group=reduce_group)
+            torch.distributed.all_reduce(token_count, op=torch.distributed.ReduceOp.SUM, group=reduce_group)
 
     safe_count = token_count.clamp(min=1)
     segment_ratio = (log_ratio_sum / safe_count).exp()  # (num_segments,) — geometric-mean IS ratio
