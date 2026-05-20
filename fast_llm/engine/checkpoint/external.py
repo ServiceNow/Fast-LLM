@@ -117,6 +117,15 @@ class ConfigConverter(abc.ABC):
     @abc.abstractmethod
     def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None: ...
 
+    def _consumed_hf_paths(self) -> frozenset[tuple[str, ...]]:
+        """HF paths this declaration claims for the section's coverage check.
+
+        Default: every non-empty entry in ``hf_paths``. Override when the claim set depends on
+        a sub-converter registry, a nested-path prefix, or a discriminator key (Nested, Dispatch,
+        TypedDictContainer, ListDispatch).
+        """
+        return frozenset(path for path in self.hf_paths if path)
+
 
 class RenameConfigConverter(ConfigConverter):
     """One-to-one rename between a Fast-LLM attribute path and an HF dict path."""
@@ -373,6 +382,21 @@ class NestedConfigConverter(ConfigConverter):
         sub_fast_llm = self._converter_class.import_config(sub_hf)
         _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
 
+    def _consumed_hf_paths(self) -> frozenset[tuple[str, ...]]:
+        sub_class = self._converter_class
+        if self._hf_path is None:
+            # Flat-merge: sub-converter shares the parent's HF namespace.
+            paths = set(sub_class._consumed_hf_paths())
+            if sub_class.hf_type_name is not None:
+                paths.add((self._hf_discriminator_key,))
+        else:
+            # Nested: prepend hf_path so the walker descends into the subdict and flags unknown keys.
+            prefix = self._hf_path
+            paths = {prefix + sub_path for sub_path in sub_class._consumed_hf_paths()}
+            if sub_class.hf_type_name is not None:
+                paths.add(prefix + (self._hf_discriminator_key,))
+        return frozenset(paths)
+
 
 class DispatchConfigConverter(ConfigConverter):
     """Polymorphic sub-config dispatch.
@@ -422,6 +446,23 @@ class DispatchConfigConverter(ConfigConverter):
             )
         sub_fast_llm = converter_class.import_config(sub_hf)
         _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
+
+    def _consumed_hf_paths(self) -> frozenset[tuple[str, ...]]:
+        # Union of all registered sub-classes' claims (under the shared hf_path prefix when present).
+        # At runtime only one sub-class fires; the static union is a safe over-claim — we only need to
+        # not flag known keys, never to flag missing ones.
+        paths: set[tuple[str, ...]] = set()
+        if self.hf_paths:
+            prefix = self.hf_paths[0]
+            paths.add(prefix + (self._hf_discriminator_key,))
+            for sub_class in self._registry.values():
+                for sub_path in sub_class._consumed_hf_paths():
+                    paths.add(prefix + sub_path)
+        else:
+            paths.add((self._hf_discriminator_key,))
+            for sub_class in self._registry.values():
+                paths |= sub_class._consumed_hf_paths()
+        return frozenset(paths)
 
 
 class TypedDictContainerConfigConverter(ConfigConverter):
@@ -487,6 +528,11 @@ class TypedDictContainerConfigConverter(ConfigConverter):
             sub_fast_llm = converter_class.import_config(sub_hf)
             out[name] = sub_fast_llm
         _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], out)
+
+    def _consumed_hf_paths(self) -> frozenset[tuple[str, ...]]:
+        # Blanket prefix: per-entry sub-dicts are user-named pattern keys; we can't statically
+        # enumerate which entries appear or what keys those entries claim.
+        return frozenset({self.hf_paths[0]})
 
 
 # ============================================================
@@ -569,51 +615,14 @@ class ConfigSectionConverter(abc.ABC):
         walker treats every entry as a *recursive prefix* — once an input path matches any prefix,
         descent into deeper sub-dicts stops.
 
-        Nested sub-converters (``NestedConfigConverter``/``DispatchConfigConverter`` with ``hf_path``
-        set) expand their sub-converter's claims under the nested prefix instead of contributing the
-        bare prefix, so the walker descends into the subdict and flags unknown keys inside it (e.g.
-        ``head.normalization.surprise_field``).
-
-        :class:`TypedDictContainerConfigConverter` keeps a blanket prefix because its per-entry sub-dicts
-        are user-named (pattern keys); we can't statically enumerate which entries will appear or what
-        keys those entries should claim.
+        Each declaration advertises its claims via :meth:`ConfigConverter._consumed_hf_paths`
+        (default: ``hf_paths``; overridden by primitives whose claims depend on a sub-converter
+        registry, a nested-path prefix, or a discriminator key). The aggregate is cached per
+        section class.
         """
         paths: set[tuple[str, ...]] = set()
         for declaration in cls._create_config_converters().values():
-            if isinstance(declaration, NestedConfigConverter):
-                sub_class = declaration._converter_class
-                if declaration._hf_path is None:
-                    # Flat-merge: sub-converter shares the parent's HF namespace.
-                    paths |= sub_class._consumed_hf_paths()
-                    if sub_class.hf_type_name is not None:
-                        paths.add((declaration._hf_discriminator_key,))
-                else:
-                    # Nested: prepend hf_path to each sub-claim so the walker recurses into the subdict.
-                    prefix = declaration._hf_path
-                    for sub_path in sub_class._consumed_hf_paths():
-                        paths.add(prefix + sub_path)
-                    if sub_class.hf_type_name is not None:
-                        paths.add(prefix + (declaration._hf_discriminator_key,))
-            elif isinstance(declaration, DispatchConfigConverter):
-                if declaration.hf_paths:
-                    # Nested dispatch: union of all registered sub-classes' claims under the shared
-                    # hf_path prefix. At runtime only one sub-class fires; the static union is a safe
-                    # over-claim (we only need to *not* flag known keys, never to flag missing ones).
-                    prefix = declaration.hf_paths[0]
-                    paths.add(prefix + (declaration._hf_discriminator_key,))
-                    for sub_class in declaration._registry.values():
-                        for sub_path in sub_class._consumed_hf_paths():
-                            paths.add(prefix + sub_path)
-                else:
-                    paths.add((declaration._hf_discriminator_key,))
-                    for sub_class in declaration._registry.values():
-                        paths |= sub_class._consumed_hf_paths()
-            elif isinstance(declaration, TypedDictContainerConfigConverter):
-                paths.add(declaration.hf_paths[0])
-            else:
-                for path in declaration.hf_paths:
-                    if path:
-                        paths.add(path)
+            paths |= declaration._consumed_hf_paths()
         return frozenset(paths)
 
     @classmethod
