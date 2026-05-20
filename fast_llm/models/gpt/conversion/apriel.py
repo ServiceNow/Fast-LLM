@@ -1,3 +1,4 @@
+import functools
 import math
 import typing
 
@@ -6,11 +7,13 @@ from transformers import PretrainedConfig
 from fast_llm.config import Config, get_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    BlockSequenceWeightConverter,
     ConfigConverter,
     ConfigSectionConverter,
     CustomConfigConverter,
     DefaultConfigConverter,
     IgnoredConfigConverter,
+    LinearWeightConverter,
     RenameConfigConverter,
     WeightConverter,
     _get_attr_path,
@@ -20,13 +23,9 @@ from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
-from fast_llm.models.gpt.conversion.llama import (
-    effective_bias,
-    get_parameter_converter,
-    get_weight_and_bias_converters,
-)
+from fast_llm.models.gpt.conversion.llama import effective_bias
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
@@ -132,56 +131,23 @@ class AprielMambaConverter(ConfigSectionConverter):
         Assert.incl(config.output_layer.bias.enabled, (None, config.add_linear_biases))
 
     @classmethod
-    def get_converters(
-        cls,
-        config: MambaConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            # TODO: Conv
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.in_proj",
-                f"{hf_prefix}.in_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "in_proj": LinearWeightConverter("in_proj", "in_proj"),
+            "dt_in_proj": LinearWeightConverter("dt_in_proj", "dt_in_proj"),
+            "dt_proj": LinearWeightConverter(
+                "dt_proj", "dt_proj", bias_fn=lambda c: effective_bias(c.dt_layer, c.add_linear_biases)
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.dt_in_proj",
-                f"{hf_prefix}.dt_in_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
+            "convolution": LinearWeightConverter(
+                "convolution",
+                "conv1d",
+                bias_fn=lambda c: effective_bias(c.convolution_layer, c.add_linear_biases),
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.dt_proj",
-                f"{hf_prefix}.dt_proj",
-                effective_bias(config.dt_layer, config.add_linear_biases),
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.convolution",
-                f"{hf_prefix}.conv1d",
-                effective_bias(config.convolution_layer, config.add_linear_biases),
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.A_log",
-                f"{hf_prefix}.A_log",
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.D",
-                f"{hf_prefix}.D",
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.out_proj",
-                f"{hf_prefix}.out_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+            "A_log": WeightConverter("A_log", "A_log"),
+            "D": WeightConverter("D", "D"),
+            "out_proj": LinearWeightConverter("out_proj", "out_proj"),
+        }
 
 
 class GatedDeltaNetConverter(ConfigSectionConverter):
@@ -223,55 +189,20 @@ class GatedDeltaNetConverter(ConfigSectionConverter):
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: GatedDeltaNetConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.in_proj_qkvz",
-                f"{hf_prefix}.in_proj_qkvz",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.in_proj_ba",
-                f"{hf_prefix}.in_proj_ba",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.convolution",
-                f"{hf_prefix}.convolution",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.out_proj",
-                f"{hf_prefix}.out_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.A_log",
-                f"{hf_prefix}.A_log",
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.dt_bias",
-                f"{hf_prefix}.dt_bias",
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.norm",
-                f"{hf_prefix}.norm",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # GDN has no linear biases — explicit ``bias_fn=lambda c: False`` since GatedDeltaNetConfig has
+        # no ``add_linear_biases`` field for the default to read.
+        no_bias = lambda c: False
+        return {
+            "in_proj_qkvz": LinearWeightConverter("in_proj_qkvz", "in_proj_qkvz", bias_fn=no_bias),
+            "in_proj_ba": LinearWeightConverter("in_proj_ba", "in_proj_ba", bias_fn=no_bias),
+            "convolution": LinearWeightConverter("convolution", "convolution", bias_fn=no_bias),
+            "out_proj": LinearWeightConverter("out_proj", "out_proj", bias_fn=no_bias),
+            "A_log": WeightConverter("A_log", "A_log"),
+            "dt_bias": WeightConverter("dt_bias", "dt_bias"),
+            "norm": LinearWeightConverter("norm", "norm", bias_fn=no_bias),
+        }
 
 
 class KimiDeltaAttentionConverter(ConfigSectionConverter):
@@ -317,103 +248,30 @@ class KimiDeltaAttentionConverter(ConfigSectionConverter):
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: KimiDeltaAttentionConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.q_proj",
-                f"{hf_prefix}.q_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.k_proj",
-                f"{hf_prefix}.k_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.v_proj",
-                f"{hf_prefix}.v_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.q_conv",
-                f"{hf_prefix}.q_conv",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.k_conv",
-                f"{hf_prefix}.k_conv",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.v_conv",
-                f"{hf_prefix}.v_conv",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.f_a_proj",
-                f"{hf_prefix}.f_a_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.f_b_proj",
-                f"{hf_prefix}.f_b_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.g_a_proj",
-                f"{hf_prefix}.g_a_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.g_b_proj",
-                f"{hf_prefix}.g_b_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.beta_proj",
-                f"{hf_prefix}.beta_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.o_proj",
-                f"{hf_prefix}.o_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.A_log",
-                f"{hf_prefix}.A_log",
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.dt_bias",
-                f"{hf_prefix}.dt_bias",
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.norm",
-                f"{hf_prefix}.norm",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # KimiDeltaAttention has no linear biases.
+        no_bias = lambda c: False
+        proj_names = (
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "q_conv",
+            "k_conv",
+            "v_conv",
+            "f_a_proj",
+            "f_b_proj",
+            "g_a_proj",
+            "g_b_proj",
+            "beta_proj",
+            "o_proj",
+        )
+        return {
+            **{name: LinearWeightConverter(name, name, bias_fn=no_bias) for name in proj_names},
+            "A_log": WeightConverter("A_log", "A_log"),
+            "dt_bias": WeightConverter("dt_bias", "dt_bias"),
+            "norm": LinearWeightConverter("norm", "norm", bias_fn=no_bias),
+        }
 
 
 class AprielKimiDeltaAttentionBlockConverter(MistralBlockConverter):
@@ -587,23 +445,18 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
         }
 
     @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        decoder = config.decoder
-        if isinstance(decoder, FixedBlockSequenceConfig):
-            per_position_blocks = [decoder.block] * decoder.num_blocks
-        elif isinstance(decoder, PatternBlockSequenceConfig):
-            per_position_blocks = [decoder.blocks[block_name] for block_name in decoder.expanded_pattern]
-        else:
-            raise NotImplementedError(type(decoder).__name__)
-        converters = [*cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model")]
-        for block_index, block_config in enumerate(per_position_blocks):
-            converters += cls.block_dispatcher_class.get_converters(
-                block_config,
-                f"decoder.{block_index}",
-                f"model.layers.{block_index}",
-            )
-        converters += cls.head_converter_class.get_converters(config, exported_config)
-        return converters
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # Override the parent's flat ``decoder`` entry with a per-position dispatch version that picks
+        # the right block converter from the dispatcher's registry based on the mixer's runtime type.
+        return {
+            **super()._create_weight_converters(),
+            "decoder": BlockSequenceWeightConverter(
+                "decoder",
+                "model.layers",
+                dispatch_registry=cls.block_dispatcher_class._converter_classes,
+            ),
+        }
 
 
 class AprielHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):

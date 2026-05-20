@@ -1031,11 +1031,15 @@ class BlockSequenceWeightConverter(WeightConverter):
         self,
         fast_llm_prefix: str,
         hf_prefix: str,
-        block_converter_class: type["ConfigSectionConverter"],
+        block_converter_class: type["ConfigSectionConverter"] | None = None,
         *,
         config_attr: str | None = None,
         dispatch_registry: dict[type[Config], type["ConfigSectionConverter"]] | None = None,
     ):
+        Assert.custom(
+            lambda pair: pair[0] is not None or pair[1] is not None,
+            (block_converter_class, dispatch_registry),
+        )
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
         self._hf_prefix = hf_prefix
@@ -1075,6 +1079,94 @@ class BlockSequenceWeightConverter(WeightConverter):
                 block,
                 f"{fast_llm_root}.{index}",
                 f"{hf_root}.{index}",
+                root_config=root_config,
+            )
+        return out
+
+
+class DispatchWeightConverter(WeightConverter):
+    """Dispatch a single sub-section converter based on the live config's runtime type.
+
+    Reads ``getattr(config, config_attr)`` (defaults to ``fast_llm_prefix``), looks up its type in
+    ``registry``, and recurses into that ConfigSectionConverter with the standard extended prefixes.
+    Mirrors :class:`DispatchConfigConverter` on the config side. Used when a single attribute holds one
+    of several alternative configs (e.g. Apriel2's block ``mixer`` may be attention/mamba/gdn/kda/stochastic;
+    its ``normalization`` may be RMS/Layer/None).
+    """
+
+    def __init__(
+        self,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        registry: dict[type[Config], type["ConfigSectionConverter"]],
+        *,
+        config_attr: str | None = None,
+    ):
+        super().__init__((), ())
+        self._fast_llm_prefix = fast_llm_prefix
+        self._hf_prefix = hf_prefix
+        self._registry = registry
+        self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
+
+    def _emit(
+        self,
+        config: Config,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        *,
+        root_config: Config,
+    ) -> list[WeightConverter]:
+        sub_config = getattr(config, self._config_attr)
+        sub_class = self._registry[type(sub_config)]
+        return sub_class.emit_weight_converters(
+            sub_config,
+            f"{fast_llm_prefix}.{self._fast_llm_prefix}" if fast_llm_prefix else self._fast_llm_prefix,
+            f"{hf_prefix}.{self._hf_prefix}" if hf_prefix and self._hf_prefix else (hf_prefix or self._hf_prefix),
+            root_config=root_config,
+        )
+
+
+class TypedDictWeightConverter(WeightConverter):
+    """Per-key dispatch over a ``dict[str, Config]`` attribute.
+
+    For each entry, looks up its type in ``registry`` and recurses into that converter with names
+    ``{fast_llm_prefix}.{key}`` / ``{hf_prefix}.{key}``. Mirrors
+    :class:`TypedDictContainerConfigConverter` on the config side. Used for collections of named sub-
+    configs (e.g. Apriel2 StochasticMixer's ``mixers`` dict).
+    """
+
+    def __init__(
+        self,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        registry: dict[type[Config], type["ConfigSectionConverter"]],
+        *,
+        config_attr: str | None = None,
+    ):
+        super().__init__((), ())
+        self._fast_llm_prefix = fast_llm_prefix
+        self._hf_prefix = hf_prefix
+        self._registry = registry
+        self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
+
+    def _emit(
+        self,
+        config: Config,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        *,
+        root_config: Config,
+    ) -> list[WeightConverter]:
+        attr_dict = getattr(config, self._config_attr)
+        fast_llm_root = f"{fast_llm_prefix}.{self._fast_llm_prefix}" if fast_llm_prefix else self._fast_llm_prefix
+        hf_root = f"{hf_prefix}.{self._hf_prefix}" if hf_prefix and self._hf_prefix else (hf_prefix or self._hf_prefix)
+        out: list[WeightConverter] = []
+        for name, sub_config in attr_dict.items():
+            sub_class = self._registry[type(sub_config)]
+            out += sub_class.emit_weight_converters(
+                sub_config,
+                f"{fast_llm_root}.{name}" if fast_llm_root else name,
+                f"{hf_root}.{name}" if hf_root else name,
                 root_config=root_config,
             )
         return out
