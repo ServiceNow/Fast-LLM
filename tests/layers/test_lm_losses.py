@@ -638,19 +638,7 @@ _GSPO_PARAMETERS = (
     (500, 4.0, 1.0, False, DataType.float32, 4, False),  # Grad scaling
     (500, 1.0, 1.0, True, DataType.float32, 4, False),  # Loss masking
     (500, 1.0, 1.0, False, DataType.float16, 4, False),  # Fp16
-    pytest.param(
-        500,
-        1.0,
-        1.0,
-        False,
-        DataType.float32,
-        1,
-        False,
-        marks=pytest.mark.skipif(
-            not torch.cuda.is_available(),
-            reason="torch._inductor CPU codegen fails on index_add_ into a size-1 buffer",
-        ),
-    ),  # One segment
+    (500, 1.0, 1.0, False, DataType.float32, 1, False),  # One segment
     (500, 1.0, 1.0, True, DataType.float32, 16, True),  # Many segments + masking + accumulate
 )
 

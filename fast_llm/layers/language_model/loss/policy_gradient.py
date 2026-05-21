@@ -426,7 +426,10 @@ def fused_grpo_loss_forward_backward(
     return loss, grad_logits, new_logprobs_mean
 
 
-@torch.compile
+# Not @torch.compile: dynamo lifts the Python-int `divisor` and `num_segments` args to symbolic
+# ints with no concrete hint, then trips on `grad_output / divisor` during trace evaluation
+# (`ZeroDivisionError` with hint=0). The Triton kernel is the actual GPU perf path; the eager
+# PyTorch fallback doesn't need to be compiled.
 def fused_gspo_loss_forward_backward(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,)
