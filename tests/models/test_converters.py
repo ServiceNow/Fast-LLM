@@ -18,10 +18,8 @@ import fast_llm.models.gpt.conversion.auto  # noqa: F401
 import fast_llm.models.multimodal.conversion.auto  # noqa: F401
 from fast_llm.engine.checkpoint.external import (
     ConfigSectionConverter,
-    DispatchConfigConverter,
     NestedConfigConverter,
     OptionalConfigConverter,
-    TypedDictContainerConfigConverter,
     _get_attr_path,
     _safe_set_nested_dict_value,
 )
@@ -82,7 +80,9 @@ def _children(node: type) -> list[type]:
         for declaration in node._create_config_converters().values():
             if isinstance(declaration, NestedConfigConverter):
                 out.append(declaration._converter_class)
-            elif isinstance(declaration, (DispatchConfigConverter, TypedDictContainerConfigConverter)):
+            elif isinstance(getattr(declaration, "_registry", None), dict):
+                # Dispatch / ListDispatch / TypedDictContainer (and any future dispatch primitive)
+                # share the ``_registry: dict[..., type[ConfigSectionConverter]]`` convention.
                 out.extend(declaration._registry.values())
     for name in dir(node):
         if name == "base_model_converter_class":
