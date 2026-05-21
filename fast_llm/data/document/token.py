@@ -10,7 +10,7 @@ from fast_llm.data.document.config import TokenPreprocessingConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import Assert
+from fast_llm.utils import Assert, padded_cumsum
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -98,14 +98,35 @@ class TokenBatch(Batch, TokenDocument):
 
         return lengths, first_document_begin, document_end
 
-    def _get_model_input(self, begin: int, end: int, config: TokenPreprocessingConfig):
+    def _get_model_input(self, begin: int, end: int, config: TokenPreprocessingConfig, *, is_first_for_rank: bool):
         model_input = self._model_input_class(tokens=self.tokens[begin:end])
         lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, end)
 
         if config.return_document_count:
+            # Set the global whole-batch count on every rank's first microbatch; `share_batch_data`
+            # will sum across DP via `batch_data_group`. (`begin == 0` would only set it on the
+            # SDP rank-0 first microbatch, leaving other SDP ranks with 0 after the DP-only sum.)
             # Exclude the padding "length" from the document count.
             model_input.num_documents = (
-                len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0) if begin == 0 else 0
+                len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0) if is_first_for_rank else 0
+            )
+
+        if config.return_document_index:
+            # Globally-consistent 1-based document index per token, computed from the unsliced
+            # batch's cumulative lengths. Same convention as `LengthModelInputPreprocessor.document_index`
+            # but the IDs match across SDP/SP ranks so GSPO's per-segment all-reduce is well-defined.
+            global_cumulative_lengths = torch.from_numpy(padded_cumsum(self.lengths)).to(
+                dtype=torch.int32, device=self.device
+            )
+            model_input.global_document_index_q = torch.searchsorted(
+                global_cumulative_lengths,
+                torch.arange(begin, end, device=self.device),
+                side="right",
+                out_int32=True,
+            )
+            # Exclude the padding "length" from the count.
+            model_input.num_documents_in_sequence = len(self.lengths) - (
+                1 if self.unpadded_length < len(self.tokens) else 0
             )
 
         LengthModelInputPreprocessor(

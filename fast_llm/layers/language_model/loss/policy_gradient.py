@@ -260,12 +260,15 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         document_index_zero_based = (
-            self._prepare_target(kwargs[BlockKwargs.document_index_q], split_index, split_by_distance=False).long() - 1
+            self._prepare_target(
+                kwargs[BlockKwargs.global_document_index_q], split_index, split_by_distance=False
+            ).long()
+            - 1
         )
-        # `lengths` is the CPU-side per-microbatch document list, identical across SDP ranks,
-        # so the buffer size is known host-side and matches the global segment count.
-        # `document_index_q` is 1-based per the data preprocessor convention; the kernel takes 0-based.
-        num_segments = len(kwargs[BlockKwargs.lengths])
+        # `global_document_index_q` is 1-based per the data preprocessor convention; the kernel takes 0-based.
+        # `num_documents_in_sequence` is the doc count for this DP rank's batch — identical across
+        # SDP/SP ranks within a DP rank, so per-segment buffers are sized consistently for all-reduce.
+        num_segments = kwargs[BlockKwargs.num_documents_in_sequence]
 
         loss, grad, new_logprobs_mean = fused_gspo_loss_forward_backward(
             logits,

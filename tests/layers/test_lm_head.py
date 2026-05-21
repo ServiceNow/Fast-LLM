@@ -163,9 +163,10 @@ class LMHeadTestConfig:
             )
         if self.gspo_loss is not False:
             document_length = NUM_TOKENS // GSPO_NUM_DOCUMENTS
-            kwargs[BlockKwargs.document_index_q] = torch.repeat_interleave(
+            kwargs[BlockKwargs.global_document_index_q] = torch.repeat_interleave(
                 torch.arange(1, GSPO_NUM_DOCUMENTS + 1, dtype=torch.int32, device=device), document_length
             )
+            kwargs[BlockKwargs.num_documents_in_sequence] = GSPO_NUM_DOCUMENTS
             kwargs[BlockKwargs.lengths] = [document_length] * GSPO_NUM_DOCUMENTS
             # Override label_counts: per-token broadcast of the containing document's masked-label count
             # (the kernel's per-document `new_logprobs` aggregation depends on this).
@@ -251,9 +252,9 @@ class LMHeadTestConfig:
                 labels,
                 kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
                 kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
-                # `document_index_q` is 1-based per the data preprocessor convention; the reference takes 0-based.
-                kwargs[BlockKwargs.document_index_q].long() - 1,
-                len(kwargs[BlockKwargs.lengths]),
+                # `global_document_index_q` is 1-based per the data preprocessor convention; the reference takes 0-based.
+                kwargs[BlockKwargs.global_document_index_q].long() - 1,
+                kwargs[BlockKwargs.num_documents_in_sequence],
             )
             # Average over documents of per-document mean log-prob — matches the kernel's
             # `sum_t logprob_t * mask_t / label_count_t` divided by `num_documents_in_batch`.
