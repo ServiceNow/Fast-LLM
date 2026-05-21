@@ -14,6 +14,7 @@ from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import MTPLlamaCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaBaseModelConverter,
+    LlamaBlockConverter,
     LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
 )
@@ -21,6 +22,9 @@ from fast_llm.utils import safe_merge_dicts
 
 
 class MTPLlamaHeadConverter(LlamaHeadConverter):
+    # The MTP block shape matches the main decoder block, so we plug ``LlamaBlockConverter`` in directly.
+    block_converter_class: typing.ClassVar[type[LlamaBlockConverter]] = LlamaBlockConverter
+
     @classmethod
     def _create_config_converters(cls) -> dict:
         return {
@@ -48,9 +52,7 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         config: GPTBaseModelConfig,
     ) -> list[WeightConverter]:
         converters = list(cls.emit_weight_converters(config.head, "head", "", root_config=config))
-        # Append the MTP fan-out: one block + one norm per extra prediction head. ``block_converter_class``
-        # comes from the parent ``LlamaHeadConverter`` ClassVar — the MTP block shape matches the main
-        # decoder block.
+        # Append the MTP fan-out: one block + one norm per extra prediction head.
         for prediction_distance in range(2, config.head.prediction_heads + 1):
             converters += cls.block_converter_class.emit_weight_converters(
                 config.decoder.last_block_config,

@@ -1,19 +1,25 @@
 """Gemma4 checkpoint format converter."""
 
+import functools
 import typing
+
+import torch
 
 from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    BlockSequenceWeightConverter,
     ConfigSectionConverter,
     ConstantExportConfigConverter,
     CustomConfigConverter,
     IgnoredConfigConverter,
-    KeyValueWeightConverter,
+    LinearWeightConverter,
+    NestedWeightConverter,
     RenameConfigConverter,
     SplitWeightConverter,
     TransposeSplitWeightConverter,
     WeightConverter,
+    _join_prefix,
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
 from fast_llm.functional.config import ActivationType
@@ -36,41 +42,6 @@ from fast_llm.models.gpt.conversion.llama import (
 )
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.utils import Assert, safe_merge_dicts
-
-
-def _linear_converters(
-    fast_llm_prefix: str,
-    hf_prefix: str | tuple[str, ...],
-    use_bias: bool,
-    transform: type[WeightConverter] = WeightConverter,
-    config=None,
-) -> list[WeightConverter]:
-    """Local helper: build ``.weight`` and (conditional) ``.bias`` converters for one linear layer.
-
-    Gemma4's helper classes don't inherit ``ConfigSectionConverter``, so the
-    :class:`LinearWeightConverter` declarative primitive doesn't apply directly — this is the
-    smallest helper that covers the Gemma4-specific imperative ``get_converters`` shape. ``config``
-    is forwarded to the transform constructor when the transform captures it
-    (e.g. :class:`KeyValueWeightConverter`).
-    """
-    hf_names = (hf_prefix,) if isinstance(hf_prefix, str) else tuple(hf_prefix)
-    converters = [
-        transform(
-            f"{fast_llm_prefix}.weight",
-            tuple(f"{name}.weight" for name in hf_names),
-            config,
-        )
-    ]
-    if use_bias:
-        converters.append(
-            transform(
-                f"{fast_llm_prefix}.bias",
-                tuple(f"{name}.bias" for name in hf_names),
-                config,
-            )
-        )
-    return converters
-
 
 _SLIDING_ATTENTION = "sliding_attention"
 _FULL_ATTENTION = "full_attention"
@@ -108,7 +79,110 @@ class Gemma4MoELayer2Converter(WeightConverter):
         return (w.permute(0, 2, 1).reshape(-1, w.shape[1]).contiguous(),)
 
 
-class Gemma4AttentionConverter:
+class _Gemma4BlockMLPWeightConverter(WeightConverter):
+    """Dispatch ``block.mlp`` to dense :class:`Gemma4MLPConverter` (under ``mlp.<...>``) or hybrid
+    :class:`Gemma4HybridMoEMLPConverter` (flat-merged into the block's HF root) based on the runtime
+    type of ``config.mlp``. The two targets diverge on HF prefix, which the generic
+    :class:`DispatchWeightConverter` doesn't accommodate.
+    """
+
+    def __init__(self) -> None:
+        super().__init__((), ())
+
+    def _emit(self, config, fast_llm_prefix, hf_prefix, *, root_config):
+        fast_llm_mlp = _join_prefix(fast_llm_prefix, "mlp")
+        if isinstance(config.mlp, HybridMoEMLPConfig):
+            return Gemma4HybridMoEMLPConverter.emit_weight_converters(
+                config.mlp, fast_llm_mlp, hf_prefix, root_config=root_config
+            )
+        return Gemma4MLPConverter.emit_weight_converters(
+            config.mlp, fast_llm_mlp, _join_prefix(hf_prefix, "mlp"), root_config=root_config
+        )
+
+
+class _Gemma4BlockNorm2WeightConverter(WeightConverter):
+    """Dense Gemma4 blocks store the pre-MLP norm at ``norm_2`` (drawn from the block's main
+    ``normalization`` config). MoE blocks suppress this — the routed/dense branches inside the
+    hybrid MoE own their own pre/post norms.
+    """
+
+    def __init__(self) -> None:
+        super().__init__((), ())
+
+    def _emit(self, config, fast_llm_prefix, hf_prefix, *, root_config):
+        if isinstance(config.mlp, HybridMoEMLPConfig):
+            return []
+        return LlamaNormalizationConverter.emit_weight_converters(
+            config.normalization,
+            _join_prefix(fast_llm_prefix, "norm_2"),
+            _join_prefix(hf_prefix, "pre_feedforward_layernorm"),
+            root_config=root_config,
+        )
+
+
+class _Gemma4HybridMoENormWeightConverter(WeightConverter):
+    """Emit a normalization config nested two attributes deep inside a hybrid MoE block
+    (e.g. ``config.dense.pre_norm``, ``config.routed.post_norm``). The single-level
+    :class:`NestedWeightConverter` can't express the chained descent — :class:`MLPConfig` and
+    :class:`MoEMLPConfig` each carry their own pre/post norms, but those branches live one level
+    below the hybrid MoE section root. Gemma4's hybrid MoE always sets these norms.
+    """
+
+    def __init__(self, branch: str, norm_attr: str, hf_name: str) -> None:
+        super().__init__((), ())
+        self._branch = branch
+        self._norm_attr = norm_attr
+        self._hf_name = hf_name
+
+    def _emit(self, config, fast_llm_prefix, hf_prefix, *, root_config):
+        norm_config = getattr(getattr(config, self._branch), self._norm_attr)
+        return LlamaNormalizationConverter.emit_weight_converters(
+            norm_config,
+            _join_prefix(fast_llm_prefix, f"{self._branch}.{self._norm_attr}"),
+            _join_prefix(hf_prefix, self._hf_name),
+            root_config=root_config,
+        )
+
+
+class _Gemma4SharedKeyValueWeightConverter(WeightConverter):
+    """``shared_key_value=True`` Gemma4 attention: Fast-LLM's ``key_value`` is a single K-shaped
+    tensor (V is reused at runtime) and maps to a single HF ``k_proj`` — plain rename. Falls back to
+    :class:`KeyValueWeightConverter` (chunk/cat across K and V) when not shared.
+    """
+
+    _config: AttentionConfig
+
+    def export_weight(self, weight):
+        if self._config.shared_key_value:
+            return weight
+        (key_value,) = weight
+        return key_value[:].chunk(2)
+
+    def import_weight(self, weight):
+        if self._config.shared_key_value:
+            return weight
+        key, value = weight
+        return (torch.cat([key[:], value[:]]),)
+
+
+class Gemma4AttentionConverter(ConfigSectionConverter):
+    """Gemma4's attention helper: ``import_config`` / ``export_config`` take non-standard arguments
+    (sliding/full discrimination, twin block exports) and are invoked imperatively from
+    :class:`Gemma4BlockConverter`. Only the weight side fits the standard declarative shape — biases
+    are always disabled, query/key norms are emitted only when present, and the K/V layout collapses
+    to a single ``k_proj`` when ``shared_key_value`` is set.
+
+    The config side is owned by :class:`Gemma4BaseModelConverter`'s ``decoder`` :class:`CustomConfigConverter`
+    (with ``fast_llm_recurses=True``); the blanket-claim below silences the static architecture-coverage
+    walker — Gemma4's sliding/full divergence prevents a uniform declarative shape per single block.
+    """
+
+    fast_llm_config_class = AttentionConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {"_blanket": IgnoredConfigConverter(())}
+
     @classmethod
     def import_config(cls, config: dict, is_sliding: bool) -> dict:
         eps = config["rms_norm_eps"]
@@ -187,57 +261,31 @@ class Gemma4AttentionConverter:
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: AttentionConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-    ) -> list[WeightConverter]:
-        if config.shared_key_value:
-            # K=V: single k_proj reused as value; no v_proj in HF
-            kv_converters = _linear_converters(
-                f"{fast_llm_prefix}.key_value",
-                f"{hf_prefix}.k_proj",
-                False,
-            )
-        else:
-            kv_converters = _linear_converters(
-                f"{fast_llm_prefix}.key_value",
-                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
-                False,
-                KeyValueWeightConverter,
-                config,
-            )
-        converters = [
-            *_linear_converters(
-                f"{fast_llm_prefix}.query",
-                f"{hf_prefix}.q_proj",
-                False,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "query": LinearWeightConverter("query", "q_proj", bias_fn=lambda c: False),
+            "key_value": LinearWeightConverter(
+                "key_value",
+                lambda c: "k_proj" if c.shared_key_value else ("k_proj", "v_proj"),
+                transform=_Gemma4SharedKeyValueWeightConverter,
+                bias_fn=lambda c: False,
             ),
-            *kv_converters,
-            *_linear_converters(
-                f"{fast_llm_prefix}.dense",
-                f"{hf_prefix}.o_proj",
-                False,
-            ),
-        ]
-        if config.query_norm is not None:
-            converters += LlamaNormalizationConverter.emit_weight_converters(
-                config.query_norm,
-                f"{fast_llm_prefix}.query_norm",
-                f"{hf_prefix}.q_norm",
-            )
-        if config.key_norm is not None:
-            converters += LlamaNormalizationConverter.emit_weight_converters(
-                config.key_norm,
-                f"{fast_llm_prefix}.key_norm",
-                f"{hf_prefix}.k_norm",
-            )
-        # value_norm is FixedRMSNorm — no learnable weight to convert
-        return converters
+            "dense": LinearWeightConverter("dense", "o_proj", bias_fn=lambda c: False),
+            # ``value_norm`` is :class:`FixedRMSNormConfig` (no learnable weight) — not declared.
+            "query_norm": NestedWeightConverter("query_norm", "q_norm", LlamaNormalizationConverter, optional=True),
+            "key_norm": NestedWeightConverter("key_norm", "k_norm", LlamaNormalizationConverter, optional=True),
+        }
 
 
-class Gemma4MLPConverter:
+class Gemma4MLPConverter(ConfigSectionConverter):
+    fast_llm_config_class = MLPConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        # Config side owned by the aggregator's ``decoder`` CustomConfigConverter; see Gemma4AttentionConverter.
+        return {"_blanket": IgnoredConfigConverter(())}
+
     @classmethod
     def import_config(cls, config: dict) -> dict:
         return {
@@ -260,29 +308,25 @@ class Gemma4MLPConverter:
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: MLPConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-    ) -> list[WeightConverter]:
-        return [
-            *_linear_converters(
-                f"{fast_llm_prefix}.layer_1",
-                (f"{hf_prefix}.gate_proj", f"{hf_prefix}.up_proj"),
-                False,
-                SplitWeightConverter,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "layer_1": LinearWeightConverter(
+                "layer_1", ("gate_proj", "up_proj"), transform=SplitWeightConverter, bias_fn=lambda c: False
             ),
-            *_linear_converters(
-                f"{fast_llm_prefix}.layer_2",
-                f"{hf_prefix}.down_proj",
-                False,
-                TransposeSplitWeightConverter,
+            "layer_2": LinearWeightConverter(
+                "layer_2", "down_proj", transform=TransposeSplitWeightConverter, bias_fn=lambda c: False
             ),
-        ]
+        }
 
 
-class Gemma4MoEMLPConverter:
+class Gemma4MoEMLPConverter(ConfigSectionConverter):
+    fast_llm_config_class = MoEMLPConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {"_blanket": IgnoredConfigConverter(())}
+
     @classmethod
     def import_config(cls, config: dict) -> dict:
         eps = config["rms_norm_eps"]
@@ -329,28 +373,25 @@ class Gemma4MoEMLPConverter:
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: MoEMLPConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-    ) -> list[WeightConverter]:
-        converters = [
-            *_linear_converters(
-                f"{fast_llm_prefix}.router",
-                f"{hf_prefix}.router.proj",
-                False,
-            ),
-            WeightConverter(f"{fast_llm_prefix}.router_scale", f"{hf_prefix}.router.scale"),
-            WeightConverter(f"{fast_llm_prefix}.router_per_expert_scale", f"{hf_prefix}.router.per_expert_scale"),
-            Gemma4MoELayer1Converter(f"{fast_llm_prefix}.layer_1.weight", f"{hf_prefix}.experts.gate_up_proj", config),
-            Gemma4MoELayer2Converter(f"{fast_llm_prefix}.layer_2.weight", f"{hf_prefix}.experts.down_proj", config),
-        ]
-        # router.norm is FixedRMSNorm — no learnable weight to convert.
-        return converters
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # ``router.norm`` is :class:`FixedRMSNormConfig` (no learnable weight) — not declared.
+        return {
+            "router": LinearWeightConverter("router", "router.proj", bias_fn=lambda c: False),
+            "router_scale": WeightConverter("router_scale", "router.scale"),
+            "router_per_expert_scale": WeightConverter("router_per_expert_scale", "router.per_expert_scale"),
+            "layer_1": Gemma4MoELayer1Converter("layer_1.weight", "experts.gate_up_proj"),
+            "layer_2": Gemma4MoELayer2Converter("layer_2.weight", "experts.down_proj"),
+        }
 
 
-class Gemma4HybridMoEMLPConverter:
+class Gemma4HybridMoEMLPConverter(ConfigSectionConverter):
+    fast_llm_config_class = HybridMoEMLPConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {"_blanket": IgnoredConfigConverter(())}
+
     @classmethod
     def import_config(cls, config: dict) -> dict:
         eps = config["rms_norm_eps"]
@@ -376,47 +417,32 @@ class Gemma4HybridMoEMLPConverter:
         )
 
     @classmethod
-    def get_converters(
-        cls,
-        config: HybridMoEMLPConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-    ) -> list[WeightConverter]:
-        return [
-            *Gemma4MLPConverter.get_converters(
-                config.dense,
-                f"{fast_llm_prefix}.dense",
-                f"{hf_prefix}.mlp",
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "dense": NestedWeightConverter("dense", "mlp", Gemma4MLPConverter),
+            # Routed branch lives at the block's HF root (sibling of ``mlp.<...>``).
+            "routed": NestedWeightConverter("routed", "", Gemma4MoEMLPConverter),
+            "dense_pre_norm": _Gemma4HybridMoENormWeightConverter("dense", "pre_norm", "pre_feedforward_layernorm"),
+            "dense_post_norm": _Gemma4HybridMoENormWeightConverter(
+                "dense", "post_norm", "post_feedforward_layernorm_1"
             ),
-            *Gemma4MoEMLPConverter.get_converters(
-                config.routed,
-                f"{fast_llm_prefix}.routed",
-                hf_prefix,
+            "routed_pre_norm": _Gemma4HybridMoENormWeightConverter(
+                "routed", "pre_norm", "pre_feedforward_layernorm_2"
             ),
-            *LlamaNormalizationConverter.emit_weight_converters(
-                config.dense.pre_norm,
-                f"{fast_llm_prefix}.dense.pre_norm",
-                f"{hf_prefix}.pre_feedforward_layernorm",
+            "routed_post_norm": _Gemma4HybridMoENormWeightConverter(
+                "routed", "post_norm", "post_feedforward_layernorm_2"
             ),
-            *LlamaNormalizationConverter.emit_weight_converters(
-                config.dense.post_norm,
-                f"{fast_llm_prefix}.dense.post_norm",
-                f"{hf_prefix}.post_feedforward_layernorm_1",
-            ),
-            *LlamaNormalizationConverter.emit_weight_converters(
-                config.routed.pre_norm,
-                f"{fast_llm_prefix}.routed.pre_norm",
-                f"{hf_prefix}.pre_feedforward_layernorm_2",
-            ),
-            *LlamaNormalizationConverter.emit_weight_converters(
-                config.routed.post_norm,
-                f"{fast_llm_prefix}.routed.post_norm",
-                f"{hf_prefix}.post_feedforward_layernorm_2",
-            ),
-        ]
+        }
 
 
-class Gemma4BlockConverter:
+class Gemma4BlockConverter(ConfigSectionConverter):
+    fast_llm_config_class = DecoderBlockConfig
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {"_blanket": IgnoredConfigConverter(())}
+
     @classmethod
     def import_config(cls, config: dict, is_sliding: bool) -> dict:
         def make_norm():
@@ -465,60 +491,41 @@ class Gemma4BlockConverter:
         return out
 
     @classmethod
-    def get_converters(
-        cls,
-        config: DecoderBlockConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-    ) -> list[WeightConverter]:
-        is_moe = isinstance(config.mlp, HybridMoEMLPConfig)
-        converters = [
-            *Gemma4AttentionConverter.get_converters(
-                config.mixer,
-                f"{fast_llm_prefix}.mixer",
-                f"{hf_prefix}.self_attn",
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "mixer": NestedWeightConverter("mixer", "self_attn", Gemma4AttentionConverter),
+            "mlp": _Gemma4BlockMLPWeightConverter(),
+            "norm_1": NestedWeightConverter(
+                "norm_1", "input_layernorm", LlamaNormalizationConverter, config_attr="normalization"
             ),
-        ]
-        if is_moe:
-            converters += Gemma4HybridMoEMLPConverter.get_converters(
-                config.mlp,
-                f"{fast_llm_prefix}.mlp",
-                hf_prefix,
-            )
-        else:
-            converters += Gemma4MLPConverter.get_converters(
-                config.mlp,
-                f"{fast_llm_prefix}.mlp",
-                f"{hf_prefix}.mlp",
-            )
-            converters += LlamaNormalizationConverter.emit_weight_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_2",
-                f"{hf_prefix}.pre_feedforward_layernorm",
-            )
-        converters += [
-            *LlamaNormalizationConverter.emit_weight_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_1",
-                f"{hf_prefix}.input_layernorm",
+            "norm_2": _Gemma4BlockNorm2WeightConverter(),
+            "post_mixer_norm": NestedWeightConverter(
+                "post_mixer_norm",
+                "post_attention_layernorm",
+                LlamaNormalizationConverter,
+                config_attr="post_mixer_normalization",
             ),
-            *LlamaNormalizationConverter.emit_weight_converters(
-                config.post_mixer_normalization,
-                f"{fast_llm_prefix}.post_mixer_norm",
-                f"{hf_prefix}.post_attention_layernorm",
+            "post_mlp_norm": NestedWeightConverter(
+                "post_mlp_norm",
+                "post_feedforward_layernorm",
+                LlamaNormalizationConverter,
+                config_attr="post_mlp_normalization",
             ),
-            *LlamaNormalizationConverter.emit_weight_converters(
-                config.post_mlp_normalization,
-                f"{fast_llm_prefix}.post_mlp_norm",
-                f"{hf_prefix}.post_feedforward_layernorm",
-            ),
-        ]
-        converters.append(WeightConverter(f"{fast_llm_prefix}.output_scale", f"{hf_prefix}.layer_scalar"))
-        return converters
+            # HF stores ``layer_scalar`` as a non-trained buffer; Fast-LLM mirrors it with a frozen
+            # ``output_scale`` (``lr_scale=0``).
+            "output_scale": WeightConverter("output_scale", "layer_scalar"),
+        }
 
 
-class Gemma4DecoderConverter:
+class Gemma4DecoderConverter(ConfigSectionConverter):
+    fast_llm_config_class = PatternBlockSequenceConfig
+
     block_converter_class: typing.ClassVar[type[Gemma4BlockConverter]] = Gemma4BlockConverter
+
+    @classmethod
+    def _create_config_converters(cls) -> dict:
+        return {"_blanket": IgnoredConfigConverter(())}
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -553,22 +560,11 @@ class Gemma4DecoderConverter:
         )
 
     @classmethod
-    def get_converters(
-        cls,
-        config: PatternBlockSequenceConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-    ) -> list[WeightConverter]:
-        Assert.custom(isinstance, config, PatternBlockSequenceConfig)
-        converters = []
-        for block_index in range(config.num_blocks):
-            block_config = config.blocks[config.expanded_pattern[block_index]]
-            converters += cls.block_converter_class.get_converters(
-                block_config,
-                f"{fast_llm_prefix}.{block_index}",
-                f"{hf_prefix}.{block_index}",
-            )
-        return converters
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, read_self=True),
+        }
 
 
 class Gemma4EmbeddingsConverter(LlamaEmbeddingsConverter):
@@ -737,7 +733,9 @@ class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConve
             *cls.embeddings_converter_class.emit_weight_converters(
                 config.embeddings, "embeddings", "model", root_config=config
             ),
-            *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
+            *cls.decoder_converter_class.emit_weight_converters(
+                config.decoder, "decoder", "model.layers", root_config=config
+            ),
             *cls.head_converter_class.get_converters(config),
         ]
 

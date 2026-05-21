@@ -17,7 +17,6 @@ from fast_llm.models.gpt.conversion.llama import LlamaMLPConverter
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
-    MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
 from fast_llm.utils import Assert
@@ -83,13 +82,8 @@ class MixtralBlockConverter(MistralBlockConverter):
     mlp_converter_class: typing.ClassVar[type[MixtralMLPConverter]] = MixtralMLPConverter
 
 
-class MixtralHeadConverter(MistralHeadConverter):
-    pass
-
-
 class MixtralBaseModelConverter(MistralBaseModelConverter):
     block_converter_class: typing.ClassVar[type[MixtralBlockConverter]] = MixtralBlockConverter
-    head_converter_class: typing.ClassVar[type[MixtralHeadConverter]] = MixtralHeadConverter
 
 
 class MixtralHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):

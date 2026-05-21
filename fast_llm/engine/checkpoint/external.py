@@ -824,42 +824,6 @@ class WeightConverter:
         ]
 
 
-class IgnoreImportWeightConverter(WeightConverter):
-    def __post_init__(self):
-        Assert.eq(len(self.fast_llm_name), 0)
-        Assert.gt(len(self.export_name), 0)
-
-    def export_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        raise RuntimeError(
-            f"IgnoreImportWeightConverter should not be used for export: {self.fast_llm_name}, {self.export_name}"
-        )
-
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        return ()
-
-
-class IgnoreExportWeightConverter(WeightConverter):
-    def __post_init__(self):
-        Assert.gt(len(self.fast_llm_name), 0)
-        Assert.eq(len(self.export_name), 0)
-
-    def export_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        return ()
-
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        raise RuntimeError(
-            f"IgnoreExportWeightConverter should not be used for import: {self.fast_llm_name}, {self.export_name}"
-        )
-
-
 class SplitWeightConverter(WeightConverter):
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
@@ -977,6 +941,9 @@ class NestedWeightConverter(WeightConverter):
 
     The separate ``config_attr`` covers cases like a block's single ``normalization`` config feeding two
     state-dict prefixes (``norm_1`` / ``norm_2``).
+
+    ``optional=True`` skips the recursion when the resolved sub-config is ``None`` — for optional
+    architecture sections like Llava's ``vision_encoder``.
     """
 
     def __init__(
@@ -986,12 +953,14 @@ class NestedWeightConverter(WeightConverter):
         sub_converter_class: type["ConfigSectionConverter"],
         *,
         config_attr: str | None = None,
+        optional: bool = False,
     ):
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
         self._hf_prefix = hf_prefix
         self._sub_converter_class = sub_converter_class
         self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
+        self._optional = optional
 
     def _emit(
         self,
@@ -1002,6 +971,8 @@ class NestedWeightConverter(WeightConverter):
         root_config: Config,
     ) -> list[WeightConverter]:
         sub_config = getattr(config, self._config_attr)
+        if self._optional and sub_config is None:
+            return []
         return self._sub_converter_class.emit_weight_converters(
             sub_config,
             _join_prefix(fast_llm_prefix, self._fast_llm_prefix),
@@ -1020,12 +991,12 @@ class BlockSequenceWeightConverter(WeightConverter):
     Handles both ``FixedBlockSequenceConfig`` (single repeated block) and ``PatternBlockSequenceConfig``
     (per-position blocks indexed via ``decoder.expanded_pattern``).
 
-    ``config_attr`` selects how the block sequence is reached from the parent config:
+    The block sequence is reached from the parent config in one of three ways:
 
-    * default (``None``) — read ``getattr(parent, fast_llm_prefix)``.
-    * explicit string — read ``getattr(parent, config_attr)``.
-    * empty string ``""`` — the *section* config is itself the block sequence (no parent attribute);
-      used when ``BlockSequenceWeightConverter`` is declared by a section converter whose
+    * default (``config_attr=None``) — read ``getattr(parent, fast_llm_prefix)``.
+    * explicit ``config_attr``-string — read ``getattr(parent, config_attr)``.
+    * ``read_self=True`` — the *section* config IS the block sequence (no parent attribute); used
+      when ``BlockSequenceWeightConverter`` is declared by a section converter whose
       ``fast_llm_config_class`` is a ``FixedBlockSequenceConfig`` directly (e.g.
       ``LlamaDecoderConverter`` plugged into the Pixtral vision encoder; Apriel2's vision encoder).
     """
@@ -1037,6 +1008,7 @@ class BlockSequenceWeightConverter(WeightConverter):
         block_converter_class: type["ConfigSectionConverter"] | None = None,
         *,
         config_attr: str | None = None,
+        read_self: bool = False,
         dispatch_registry: dict[type[Config], type["ConfigSectionConverter"]] | None = None,
     ):
         # Exactly one of the two must be set: the single-class path uses ``block_converter_class``;
@@ -1046,10 +1018,14 @@ class BlockSequenceWeightConverter(WeightConverter):
             lambda pair: (pair[0] is None) != (pair[1] is None),
             (block_converter_class, dispatch_registry),
         )
+        # ``config_attr`` and ``read_self`` are mutually exclusive — one tells us how to descend to the
+        # block sequence; the other says we're already there.
+        Assert.custom(lambda pair: not (pair[0] is not None and pair[1]), (config_attr, read_self))
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
         self._hf_prefix = hf_prefix
         self._block_converter_class = block_converter_class
+        self._read_self = read_self
         self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
         self._dispatch_registry = dispatch_registry
 
@@ -1064,7 +1040,7 @@ class BlockSequenceWeightConverter(WeightConverter):
         # Lazy import to keep external.py free of layers/ dependencies.
         from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 
-        block_sequence = config if self._config_attr == "" else getattr(config, self._config_attr)
+        block_sequence = config if self._read_self else getattr(config, self._config_attr)
         if isinstance(block_sequence, FixedBlockSequenceConfig):
             per_position_blocks = [block_sequence.block] * block_sequence.num_blocks
         elif isinstance(block_sequence, PatternBlockSequenceConfig):

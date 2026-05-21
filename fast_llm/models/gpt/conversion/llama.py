@@ -363,11 +363,11 @@ class LlamaDecoderConverter(ConfigSectionConverter):
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         # The section config IS a ``FixedBlockSequenceConfig`` (no parent attribute holding it) —
-        # ``config_attr=""`` tells ``BlockSequenceWeightConverter`` to read the section config directly.
+        # ``read_self=True`` tells ``BlockSequenceWeightConverter`` to read the section config directly.
         # Used by Pixtral's vision encoder and Apriel2's vision encoder; text formats inline the dispatch
         # at the base-model converter instead.
         return {
-            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, config_attr=""),
+            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, read_self=True),
         }
 
 
@@ -405,8 +405,6 @@ class LlamaHeadConverter(ConfigSectionConverter):
     fast_llm_config_class = LanguageModelHeadConfig
 
     normalization_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaNormalizationConverter
-    # Used by MTP-Llama subclass to emit per-prediction-head block weight converters; Llama itself doesn't read it.
-    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaBlockConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:

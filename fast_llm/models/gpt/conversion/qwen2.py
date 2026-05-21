@@ -18,7 +18,6 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
     LlamaBaseModelConverter,
     LlamaBlockConverter,
-    LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
     LlamaMLPConverter,
 )
@@ -101,10 +100,6 @@ class Qwen2BlockConverter(LlamaBlockConverter):
     mlp_converter_class: typing.ClassVar[type[Qwen2MLPConverter]] = Qwen2MLPConverter
 
 
-class Qwen2HeadConverter(LlamaHeadConverter):
-    pass
-
-
 def _qwen2_mrope_guard_import(hf_dict: dict) -> dict:
     if hf_dict.get("use_mrope") is True:
         raise NotImplementedError("MRoPE (use_mrope=True) is not supported by the Qwen2 converter")
@@ -113,7 +108,6 @@ def _qwen2_mrope_guard_import(hf_dict: dict) -> dict:
 
 class Qwen2BaseModelConverter(LlamaBaseModelConverter):
     block_converter_class: typing.ClassVar[type[Qwen2BlockConverter]] = Qwen2BlockConverter
-    head_converter_class: typing.ClassVar[type[Qwen2HeadConverter]] = Qwen2HeadConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:

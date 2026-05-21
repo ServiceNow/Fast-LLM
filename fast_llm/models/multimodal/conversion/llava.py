@@ -30,9 +30,10 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaAttentionConverter,
     LlamaBlockConverter,
     LlamaDecoderConverter,
+    LlamaHeadConverter,
     LlamaNormalizationConverter,
 )
-from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter, MistralHeadConverter, MistralMLPConverter
+from fast_llm.models.gpt.conversion.mistral import MistralBaseModelConverter, MistralMLPConverter
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.models.multimodal.conversion.config import LlavaCheckpointFormat
 from fast_llm.models.multimodal.model import MultiModalModel
@@ -164,10 +165,8 @@ class PixtralEmbeddingsConverter(ConfigSectionConverter):
                 bias_fn=lambda c: False,
             ),
             # ``PixtralEmbeddingsConverter``'s section config IS the ``PatchEmbeddingsConfig`` (carries the
-            # normalization sub-config directly), so the nested ``LlamaNormalizationConverter`` reads from
-            # ``config_attr="normalization"`` — but the original code passed the *parent* config in. Mirror
-            # that by reading ``self`` (config_attr=""): the norm converter only needs ``.weight`` and the
-            # parent already exposes that field directly.
+            # ``normalization`` sub-config directly), so the nested ``LlamaNormalizationConverter`` reads
+            # ``getattr(section_config, "normalization")``.
             "normalization": NestedWeightConverter(
                 "normalization", "ln_pre", cls.normalization_converter_class, config_attr="normalization"
             ),
@@ -291,7 +290,7 @@ class LlavaVisionModelConverter(ConfigSectionConverter):
         }
 
 
-class LlavaHeadConverter(MistralHeadConverter):
+class LlavaHeadConverter(LlamaHeadConverter):
     # Llava always writes ``lm_head.weight`` on export (never dropped, even when ``tied_embedding_weight=True``);
     # the parent's :class:`OutputProjectionWeightConverter` would also drop on export, so we replace it with a
     # plain rename. When the HF state-dict lacks ``lm_head.weight`` (tied case), the handler's per-converter
@@ -400,17 +399,14 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
             "decoder": BlockSequenceWeightConverter(
                 "decoder", "language_model.model.layers", text_base_cls.block_converter_class
             ),
+            # ``LlavaHeadConverter``'s leaf converters use absolute HF paths (``language_model.lm_head.weight``,
+            # ``language_model.model.norm``), so an empty ``hf_prefix`` lets them land verbatim.
+            "head": NestedWeightConverter("head", "", text_base_cls.head_converter_class),
         }
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig) -> list[WeightConverter]:
-        # ``head`` is added at the aggregator level because the LlavaHead's plain WeightConverter for
-        # ``language_model.lm_head.weight`` doesn't fit a NestedWeightConverter under any HF prefix —
-        # it lives at the HF root, not inside ``language_model.model``.
-        return [
-            *cls.emit_weight_converters(config, "", ""),
-            *cls.language_model_converter_class.head_converter_class.get_converters(config),
-        ]
+        return cls.emit_weight_converters(config, "", "")
 
 
 class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):

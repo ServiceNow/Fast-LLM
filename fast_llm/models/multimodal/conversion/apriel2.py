@@ -253,10 +253,10 @@ class Apriel2VisionEncoderConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # The section config IS the FixedBlockSequenceConfig — ``config_attr=""`` makes
+        # The section config IS the FixedBlockSequenceConfig — ``read_self=True`` makes
         # BlockSequenceWeightConverter read the section config directly instead of via ``getattr``.
         return {
-            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, config_attr=""),
+            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, read_self=True),
         }
 
 
@@ -485,6 +485,11 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         return {
+            # Vision encoder is optional — ``optional=True`` skips the recursion when
+            # ``config.vision_encoder is None`` (text-only checkpoints).
+            "vision_encoder": NestedWeightConverter(
+                "vision_encoder", "", cls.vision_model_converter_class, optional=True
+            ),
             # ``embeddings`` flat-merges into ``model``; vision_encoder writes to its own absolute prefix.
             "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
             "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", cls.block_converter_class),
@@ -493,19 +498,7 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
 
     @classmethod
     def get_converters(cls, config: MultiModalBaseModelConfig) -> list[WeightConverter]:
-        converters = list(cls.emit_weight_converters(config, "", ""))
-        if config.vision_encoder is not None:
-            # Vision encoder is optional — emit only when present. The Nested declaration in
-            # :meth:`_create_weight_converters` couldn't conditionally fire on a None attribute.
-            converters = (
-                list(
-                    cls.vision_model_converter_class.emit_weight_converters(
-                        config.vision_encoder, "vision_encoder", "", root_config=config
-                    )
-                )
-                + converters
-            )
-        return converters
+        return cls.emit_weight_converters(config, "", "")
 
 
 class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):

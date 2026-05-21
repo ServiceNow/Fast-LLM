@@ -28,7 +28,6 @@ from fast_llm.models.gpt.conversion.llama import effective_bias
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
-    MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
 from fast_llm.utils import Assert, safe_merge_dicts
@@ -400,10 +399,6 @@ class AprielBlockConverter:
     }
 
 
-class AprielHeadConverter(MistralHeadConverter):
-    pass
-
-
 class AprielBaseModelConverter(MistralBaseModelConverter):
     """Section converter for the Apriel hybrid-SSM base model.
 
@@ -412,7 +407,6 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
     HF keys flat-merge into the parent HF root.
     """
 
-    head_converter_class: typing.ClassVar[type[AprielHeadConverter]] = AprielHeadConverter
     # Distinct from the parent's ``block_converter_class`` (a single ``ConfigSectionConverter``); this
     # one holds the per-mixer-type dispatch registries that :class:`ListDispatchConfigConverter` and
     # the weight-side loop below consume.
