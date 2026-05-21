@@ -214,4 +214,6 @@ class UltravoxHuggingfaceCheckpointHandler(AyraHuggingfaceCheckpointHandler):
         import json
         import pathlib
 
-        return json.loads((pathlib.Path(directory) / "config.json").read_text())
+        config = json.loads((pathlib.Path(directory) / "config.json").read_text())
+        cls._last_loaded_hf_config = config
+        return config

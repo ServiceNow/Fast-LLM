@@ -207,3 +207,8 @@ class AudioPreprocessor:
         kwargs[MixerKwargs.cu_seqlens_k] = cu_seqlens
         kwargs[MixerKwargs.max_seqlen_q] = T
         kwargs[MixerKwargs.max_seqlen_k] = T
+        # The audio K buffer holds only audio frames and starts at index 0; the LM-side
+        # offset (first_document_begin under sequence-data-parallelism) is meaningless
+        # here and, if inherited, makes _attn_flash narrow into garbage and feed flash-attn
+        # a negative cu_seqlens_k → cudaErrorIllegalAddress.
+        kwargs[MixerKwargs.sequence_k_offset] = 0

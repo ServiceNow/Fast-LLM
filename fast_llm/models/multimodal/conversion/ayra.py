@@ -74,8 +74,14 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     format: typing.ClassVar[type[CheckpointFormat]] = AyraCheckpointFormat
     architecture: typing.ClassVar[str] = "AyraAudioModel"
     audio_encoder_converter_class: typing.ClassVar = AyraAudioEncoderConverter
-    # Name of the text handler registered in the auto registry (e.g. "llama" or "mistral")
+    # Fallback text handler used when the checkpoint's ``text_config.model_type``
+    # is missing or doesn't match any registered GPT handler's HF model_type.
     text_handler_name: typing.ClassVar[str] = "llama"
+    # Cache of the most recent HF config loaded by ``_load_config``. ``__init__``
+    # builds weight converters before the path/config is otherwise available, so
+    # the cache bridges ``_load_config`` -> ``_create_weight_converters``. Set
+    # sequentially per checkpoint load; not safe under concurrent loads.
+    _last_loaded_hf_config: typing.ClassVar[dict | None] = None
     # HF state-dict prefixes for the three weight namespaces.
     hf_audio_encoder_prefix: typing.ClassVar[str] = "encoder"
     hf_audio_projector_prefix: typing.ClassVar[str] = "encoder_projector"
@@ -91,24 +97,34 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     def _load_config(cls, directory) -> dict:
         import transformers
 
-        return transformers.AutoConfig.from_pretrained(directory, trust_remote_code=True).to_dict()
+        config = transformers.AutoConfig.from_pretrained(directory, trust_remote_code=True).to_dict()
+        cls._last_loaded_hf_config = config
+        return config
+
+    @classmethod
+    def _resolve_text_handler_cls(cls, hf_model_type: str | None):
+        """Pick the GPT handler whose ``get_huggingface_model_type()`` matches ``hf_model_type``.
+
+        ``CheckpointFormat.name`` (handler_map key) and ``get_huggingface_model_type()`` can
+        diverge (e.g. gemma4 vs gemma4_text), so direct map lookup is wrong in general.
+        """
+        from fast_llm.models.gpt.conversion.auto import AutoGPTHuggingfaceCheckpointHandler
+
+        if hf_model_type is not None:
+            for handler_cls in AutoGPTHuggingfaceCheckpointHandler.handler_map.values():
+                if handler_cls.get_huggingface_model_type() == hf_model_type:
+                    return handler_cls
+        return AutoGPTHuggingfaceCheckpointHandler.get_handler_class(cls.text_handler_name)
 
     @classmethod
     def _import_config(cls, config: dict) -> "FastLLMModelConfig":
-        from fast_llm.models.gpt.conversion.auto import AutoGPTHuggingfaceCheckpointHandler
-
         audio_config = config.get("audio_config", {})
         text_config = config.get("text_config", {})
 
-        # Import LLM config from text handler.
-        # In main's API, _import_config returns a FastLLMModelConfig, not a dict.
-        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(
-            text_config.get("model_type", cls.text_handler_name)
-        )
+        text_handler_cls = cls._resolve_text_handler_cls(text_config.get("model_type"))
         gpt_model_config = text_handler_cls._import_config(text_config)
         base_model_dict = gpt_model_config.base_model.to_dict()
 
-        # Import audio encoder config and merge into base_model dict
         base_model_dict["audio_encoder"] = cls.audio_encoder_converter_class.import_config(audio_config, config)
         return cls._model_class.from_dict({"base_model": base_model_dict})
 
@@ -122,12 +138,9 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
         pass
 
     def _create_weight_converters(self) -> list[WeightConverter]:
-        from fast_llm.models.gpt.conversion.auto import AutoGPTHuggingfaceCheckpointHandler
-
         base_config = self._model.config.base_model
         audio_encoder_config = base_config.audio_encoder
 
-        # Audio encoder weights: HF prefix controlled by ClassVars.
         converters = self.audio_encoder_converter_class.get_converters(
             audio_encoder_config,
             fast_llm_prefix="audio_encoder",
@@ -135,8 +148,10 @@ class AyraHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
             hf_projector_prefix=self.hf_audio_projector_prefix,
         )
 
-        # LLM weights: HF prefix controlled by ClassVar (e.g. "llm" for Ayra, "language_model" for Ultravox).
-        text_handler_cls = AutoGPTHuggingfaceCheckpointHandler.get_handler_class(self.text_handler_name)
+        cached_hf_config = self._last_loaded_hf_config or {}
+        text_handler_cls = self._resolve_text_handler_cls(
+            cached_hf_config.get("text_config", {}).get("model_type")
+        )
         text_handler = text_handler_cls(self._model)
         for converter in text_handler._create_weight_converters():
             new_export_names = tuple(
