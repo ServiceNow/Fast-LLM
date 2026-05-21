@@ -102,7 +102,7 @@ class Qwen2BlockConverter(LlamaBlockConverter):
 
 
 class Qwen2HeadConverter(LlamaHeadConverter):
-    block_converter_class: typing.ClassVar[type[Qwen2BlockConverter]] = Qwen2BlockConverter
+    pass
 
 
 def _qwen2_mrope_guard_import(hf_dict: dict) -> dict:

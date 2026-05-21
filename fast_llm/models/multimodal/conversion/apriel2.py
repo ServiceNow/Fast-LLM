@@ -253,11 +253,11 @@ class Apriel2VisionEncoderConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # The section config IS the FixedBlockSequenceConfig — use the LlamaDecoderConverter pattern of a
-        # custom fan-out primitive that reads ``config.block`` and ``config.num_blocks`` directly.
-        from fast_llm.models.gpt.conversion.llama import _FixedBlockFanoutWeightConverter
-
-        return {"blocks": _FixedBlockFanoutWeightConverter(cls.block_converter_class)}
+        # The section config IS the FixedBlockSequenceConfig — ``config_attr=""`` makes
+        # BlockSequenceWeightConverter read the section config directly instead of via ``getattr``.
+        return {
+            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, config_attr=""),
+        }
 
 
 class Apriel2EmbeddingsConverter(ConfigSectionConverter):
@@ -431,6 +431,7 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
     text_base_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BaseModelConverter
     vision_model_converter_class: typing.ClassVar[type[Apriel2VisionModelConverter]] = Apriel2VisionModelConverter
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
     head_converter_class: typing.ClassVar[type[Apriel2MultimodalHeadConverter]] = Apriel2MultimodalHeadConverter
 
     @classmethod
@@ -486,12 +487,12 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
         return {
             # ``embeddings`` flat-merges into ``model``; vision_encoder writes to its own absolute prefix.
             "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
-            "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", Apriel2BlockConverter),
+            "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", cls.block_converter_class),
             "head": NestedWeightConverter("head", "", cls.head_converter_class),
         }
 
     @classmethod
-    def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+    def get_converters(cls, config: MultiModalBaseModelConfig) -> list[WeightConverter]:
         converters = list(cls.emit_weight_converters(config, "", ""))
         if config.vision_encoder is not None:
             # Vision encoder is optional — emit only when present. The Nested declaration in

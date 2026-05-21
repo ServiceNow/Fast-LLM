@@ -403,13 +403,13 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
         }
 
     @classmethod
-    def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+    def get_converters(cls, config: MultiModalBaseModelConfig) -> list[WeightConverter]:
         # ``head`` is added at the aggregator level because the LlavaHead's plain WeightConverter for
         # ``language_model.lm_head.weight`` doesn't fit a NestedWeightConverter under any HF prefix —
         # it lives at the HF root, not inside ``language_model.model``.
         return [
             *cls.emit_weight_converters(config, "", ""),
-            *cls.language_model_converter_class.head_converter_class.get_converters(config, exported_config),
+            *cls.language_model_converter_class.head_converter_class.get_converters(config),
         ]
 
 

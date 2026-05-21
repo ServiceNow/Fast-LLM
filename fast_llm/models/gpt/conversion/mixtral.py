@@ -84,7 +84,7 @@ class MixtralBlockConverter(MistralBlockConverter):
 
 
 class MixtralHeadConverter(MistralHeadConverter):
-    block_converter_class: typing.ClassVar[type[MixtralBlockConverter]] = MixtralBlockConverter
+    pass
 
 
 class MixtralBaseModelConverter(MistralBaseModelConverter):

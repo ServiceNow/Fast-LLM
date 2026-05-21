@@ -693,6 +693,7 @@ class Apriel2BaseModelConverter(ConfigSectionConverter):
     fast_llm_config_class = GPTBaseModelConfig
 
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
     head_converter_class: typing.ClassVar[type[Apriel2HeadConverter]] = Apriel2HeadConverter
 
     @classmethod
@@ -726,12 +727,12 @@ class Apriel2BaseModelConverter(ConfigSectionConverter):
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         return {
             "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
-            "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", Apriel2BlockConverter),
+            "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", cls.block_converter_class),
             "head": NestedWeightConverter("head", "", cls.head_converter_class),
         }
 
     @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+    def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
         return cls.emit_weight_converters(config, "", "")
 
 

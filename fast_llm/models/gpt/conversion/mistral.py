@@ -40,7 +40,7 @@ class MistralBlockConverter(LlamaBlockConverter):
 
 
 class MistralHeadConverter(LlamaHeadConverter):
-    block_converter_class: typing.ClassVar[type[MistralBlockConverter]] = MistralBlockConverter
+    pass
 
 
 class MistralBaseModelConverter(LlamaBaseModelConverter):

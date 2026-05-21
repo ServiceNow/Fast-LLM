@@ -732,13 +732,13 @@ class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConve
         }
 
     @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+    def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
         return [
             *cls.embeddings_converter_class.emit_weight_converters(
                 config.embeddings, "embeddings", "model", root_config=config
             ),
             *cls.decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
-            *cls.head_converter_class.get_converters(config, exported_config),
+            *cls.head_converter_class.get_converters(config),
         ]
 
 

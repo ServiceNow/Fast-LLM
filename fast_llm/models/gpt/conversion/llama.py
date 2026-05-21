@@ -362,35 +362,13 @@ class LlamaDecoderConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # ``BlockSequenceWeightConverter`` works on parent-level (decoder lives one level up); here the
-        # section IS the block sequence, so emit a flat fan-out keyed by block index.
-        # Used only by Pixtral's vision encoder (the standard text formats inline the block dispatch at
-        # the base-model converter instead).
-        return {"blocks": _FixedBlockFanoutWeightConverter(cls.block_converter_class)}
-
-
-class _FixedBlockFanoutWeightConverter(WeightConverter):
-    """Emit one set of block-sub-converter declarations per position of a ``FixedBlockSequenceConfig``.
-
-    Lives here because ``LlamaDecoderConverter``'s section config *is* the block sequence — there is no
-    parent attribute to read via the generic :class:`BlockSequenceWeightConverter` shape.
-    """
-
-    def __init__(self, block_converter_class: type[ConfigSectionConverter]):
-        super().__init__((), ())
-        self._block_converter_class = block_converter_class
-
-    def _emit(self, config, fast_llm_prefix, hf_prefix, *, root_config):
-        Assert.is_(type(config), FixedBlockSequenceConfig)
-        out: list[WeightConverter] = []
-        for index in range(config.num_blocks):
-            out += self._block_converter_class.emit_weight_converters(
-                config.block,
-                f"{fast_llm_prefix}.{index}" if fast_llm_prefix else str(index),
-                f"{hf_prefix}.{index}" if hf_prefix else str(index),
-                root_config=root_config,
-            )
-        return out
+        # The section config IS a ``FixedBlockSequenceConfig`` (no parent attribute holding it) —
+        # ``config_attr=""`` tells ``BlockSequenceWeightConverter`` to read the section config directly.
+        # Used by Pixtral's vision encoder and Apriel2's vision encoder; text formats inline the dispatch
+        # at the base-model converter instead.
+        return {
+            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, config_attr=""),
+        }
 
 
 class LlamaEmbeddingsConverter(ConfigSectionConverter):
@@ -459,12 +437,11 @@ class LlamaHeadConverter(ConfigSectionConverter):
     def get_converters(
         cls,
         config: GPTBaseModelConfig,
-        exported_config: dict,
     ) -> list[WeightConverter]:
-        """Aggregator-shape shim: non-migrated base-model converters pass the full
-        :class:`GPTBaseModelConfig` plus the exported HF dict. Translates to the declarative walker —
-        the tied-embedding handling now lives on :class:`OutputProjectionWeightConverter` and reads
-        ``root_config.tied_embedding_weight`` directly, so ``exported_config`` is unused.
+        """Aggregator entry-point: the base-model converter passes the full :class:`GPTBaseModelConfig`
+        so subclasses (e.g. MTP-Llama) can read ``config.decoder.last_block_config`` /
+        ``config.head.prediction_heads`` when extending the head's weights. Tied-embedding handling
+        lives on :class:`OutputProjectionWeightConverter` and reads ``root_config.tied_embedding_weight``.
         """
         return cls.emit_weight_converters(config.head, "head", "", root_config=config)
 
@@ -528,18 +505,18 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         # ``head`` is added at the aggregator level (in :meth:`get_converters`) because the head
-        # converter's signature takes the root config + the exported HF dict so subclasses can
-        # extend it (e.g. MTP-Llama fans out per-prediction-head blocks and norms).
+        # converter takes the full base-model config so subclasses can extend it (e.g. MTP-Llama
+        # fans out per-prediction-head blocks and norms).
         return {
             "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
             "decoder": BlockSequenceWeightConverter("decoder", "model.layers", cls.block_converter_class),
         }
 
     @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
+    def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
         return [
             *cls.emit_weight_converters(config, "", ""),
-            *cls.head_converter_class.get_converters(config, exported_config),
+            *cls.head_converter_class.get_converters(config),
         ]
 
 

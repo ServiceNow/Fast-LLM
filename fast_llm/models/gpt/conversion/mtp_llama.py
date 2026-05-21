@@ -46,7 +46,6 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
     def get_converters(
         cls,
         config: GPTBaseModelConfig,
-        exported_config: dict,
     ) -> list[WeightConverter]:
         converters = list(cls.emit_weight_converters(config.head, "head", "", root_config=config))
         # Append the MTP fan-out: one block + one norm per extra prediction head. ``block_converter_class``

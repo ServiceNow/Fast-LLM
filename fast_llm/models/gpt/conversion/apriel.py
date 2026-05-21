@@ -21,7 +21,6 @@ from fast_llm.engine.checkpoint.external import (
 )
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
@@ -400,21 +399,9 @@ class AprielBlockConverter:
         GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
     }
 
-    @classmethod
-    def get_converters(
-        cls,
-        config: DecoderBlockConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return cls._converter_classes[type(config.mixer)].get_converters(
-            config, fast_llm_prefix, hf_prefix, drop_on_export=drop_on_export
-        )
-
 
 class AprielHeadConverter(MistralHeadConverter):
-    block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
+    pass
 
 
 class AprielBaseModelConverter(MistralBaseModelConverter):
