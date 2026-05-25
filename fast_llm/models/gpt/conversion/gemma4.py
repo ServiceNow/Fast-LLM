@@ -218,14 +218,14 @@ class Gemma4AttentionConverter(ConfigSectionConverter):
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         return {
-            "query": LinearWeightConverter("query", "q_proj", bias_fn=lambda c: False),
+            "query": LinearWeightConverter("query", "q_proj", bias_fn=False),
             "key_value": LinearWeightConverter(
                 "key_value",
                 lambda c: "k_proj" if c.shared_key_value else ("k_proj", "v_proj"),
                 transform=_Gemma4SharedKeyValueWeightConverter,
-                bias_fn=lambda c: False,
+                bias_fn=False,
             ),
-            "dense": LinearWeightConverter("dense", "o_proj", bias_fn=lambda c: False),
+            "dense": LinearWeightConverter("dense", "o_proj", bias_fn=False),
             # ``value_norm`` is :class:`FixedRMSNormConfig` (no learnable weight) — not declared.
             "query_norm": NestedWeightConverter("query_norm", "q_norm", LlamaNormalizationConverter, optional=True),
             "key_norm": NestedWeightConverter("key_norm", "k_norm", LlamaNormalizationConverter, optional=True),
@@ -263,10 +263,10 @@ class Gemma4MLPConverter(ConfigSectionConverter):
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         return {
             "layer_1": LinearWeightConverter(
-                "layer_1", ("gate_proj", "up_proj"), transform=SplitWeightConverter, bias_fn=lambda c: False
+                "layer_1", ("gate_proj", "up_proj"), transform=SplitWeightConverter, bias_fn=False
             ),
             "layer_2": LinearWeightConverter(
-                "layer_2", "down_proj", transform=TransposeSplitWeightConverter, bias_fn=lambda c: False
+                "layer_2", "down_proj", transform=TransposeSplitWeightConverter, bias_fn=False
             ),
         }
 
@@ -326,7 +326,7 @@ class Gemma4MoEMLPConverter(ConfigSectionConverter):
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         # ``router.norm`` is :class:`FixedRMSNormConfig` (no learnable weight) — not declared.
         return {
-            "router": LinearWeightConverter("router", "router.proj", bias_fn=lambda c: False),
+            "router": LinearWeightConverter("router", "router.proj", bias_fn=False),
             "router_scale": WeightConverter("router_scale", "router.scale"),
             "router_per_expert_scale": WeightConverter("router_per_expert_scale", "router.per_expert_scale"),
             "layer_1": Gemma4MoELayer1Converter("layer_1.weight", "experts.gate_up_proj"),

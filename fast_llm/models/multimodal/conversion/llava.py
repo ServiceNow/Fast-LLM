@@ -162,7 +162,7 @@ class PixtralEmbeddingsConverter(ConfigSectionConverter):
                 "patch_embeddings",
                 "patch_conv",
                 transform=PatchEmbeddingWeightConverter,
-                bias_fn=lambda c: False,
+                bias_fn=False,
             ),
             # ``PixtralEmbeddingsConverter``'s section config IS the ``PatchEmbeddingsConfig`` (carries the
             # ``normalization`` sub-config directly), so the nested ``LlamaNormalizationConverter`` reads
@@ -291,11 +291,9 @@ class LlavaVisionModelConverter(ConfigSectionConverter):
 
 
 class LlavaHeadConverter(LlamaHeadConverter):
-    # Llava always writes ``lm_head.weight`` on export (never dropped, even when ``tied_embedding_weight=True``);
-    # the parent's :class:`OutputProjectionWeightConverter` would also drop on export, so we replace it with a
-    # plain rename. When the HF state-dict lacks ``lm_head.weight`` (tied case), the handler's per-converter
-    # ``all(name in state_dict)`` check makes the rename a silent no-op on import — equivalent to the previous
-    # ``drop_on_import=tied`` behaviour, without the extra parameter plumbing.
+    # Llava always emits a separate ``language_model.lm_head.weight`` declaration even when
+    # ``tied_embedding_weight=True``, so the head uses a plain rename instead of
+    # :class:`OutputProjectionWeightConverter` (which drops on export under the tied flag).
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:

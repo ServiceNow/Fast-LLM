@@ -308,7 +308,7 @@ class Apriel2EmbeddingsConverter(ConfigSectionConverter):
                 "patch_embeddings",
                 "patch_embeddings",
                 transform=PatchEmbeddingWeightConverter,
-                bias_fn=lambda c: False,
+                bias_fn=False,
             ),
             "normalization": NestedWeightConverter(
                 "normalization", "normalization", LlamaNormalizationConverter, config_attr="normalization"
@@ -541,7 +541,3 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
     def _import_config(cls, config: dict[str, typing.Any]) -> dict[str, typing.Any]:
         cls._check_hf_coverage(config)
         return {"base_model": cls.base_model_converter_class.import_config(config)}
-
-    @classmethod
-    def _get_weight_converters(cls, config: MultiModalModelConfig, export_config: dict) -> list[WeightConverter]:
-        return cls.base_model_converter_class.get_converters(config.base_model, export_config)

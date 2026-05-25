@@ -10,7 +10,6 @@ import torch
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointSaveMetadataConfig
 from fast_llm.engine.checkpoint.external import (
-    ConfigSectionConverter,
     ExternalStateDictCheckpointHandler,
     WeightConverter,
     logger,
@@ -165,13 +164,10 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     def _check_hf_coverage(cls, config: dict[str, typing.Any]) -> None:
         """Run the HF-side coverage check at the import boundary.
 
-        Skips silently when the format's base-model converter isn't a :class:`ConfigSectionConverter`
-        (e.g. multimodal aggregators built on top of imperative ``HuggingFaceBaseModelConverter``).
         Subclasses that override :meth:`_import_config` should call this explicitly to keep the check
         active.
         """
-        if issubclass(cls.base_model_converter_class, ConfigSectionConverter):
-            cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._HF_METADATA_ALLOWLIST)
+        cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._HF_METADATA_ALLOWLIST)
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> FastLLMModelConfig:

@@ -928,8 +928,7 @@ class OutputProjectionWeightConverter(WeightConverter):
     """Marker for the LM-head output projection (typically ``head.output_weights`` ↔ ``lm_head.weight``).
 
     When the root config has ``tied_embedding_weight=True``, the walker drops this declaration entirely —
-    HF stores tied embeddings as just ``embed_tokens.weight`` with no separate ``lm_head.weight``. Replaces
-    the per-call ``drop_on_export=exported_config["tie_word_embeddings"]`` plumbing.
+    HF stores tied embeddings as just ``embed_tokens.weight`` with no separate ``lm_head.weight``.
     """
 
     def _emit(
@@ -1237,16 +1236,14 @@ class TypedDictWeightConverter(WeightConverter):
 class LinearWeightConverter(WeightConverter):
     """Bundle a linear layer's ``.weight`` and (conditionally) ``.bias`` declarations into one entry.
 
-    Bias presence is resolved at emission time from the live section config: ``bias_fn(config)`` returns
-    a bool. The default reads ``config.add_linear_biases`` — the shared flag every Llama-style attention/MLP
-    section carries. Sections with per-layer overrides (e.g. Apriel Mamba's ``dt_layer`` / ``convolution_layer``)
-    pass a lambda that resolves the override.
+    Bias presence is resolved at emission time from the live section config: ``bias_fn`` is either a bool
+    literal (always / never) or a callable returning a bool. The default reads ``config.add_linear_biases`` —
+    the shared flag every Llama-style attention/MLP section carries. Sections with per-layer overrides (e.g.
+    Apriel Mamba's ``dt_layer`` / ``convolution_layer``) pass a lambda that resolves the override.
 
     ``transform`` selects the leaf class for both weight and bias: :class:`WeightConverter` for plain rename
     (the default), :class:`SplitWeightConverter` for fused → split, :class:`KeyValueWeightConverter` for
     fused KV → separate K/V, :class:`TransposeSplitWeightConverter` for MLP down-projection.
-
-    Replaces the imperative ``get_weight_and_bias_converters`` / ``effective_bias`` helpers.
     """
 
     def __init__(
@@ -1255,7 +1252,7 @@ class LinearWeightConverter(WeightConverter):
         hf_prefix: str | tuple[str, ...] | typing.Callable[[Config], str | tuple[str, ...]],
         *,
         transform: type[WeightConverter] = WeightConverter,
-        bias_fn: typing.Callable[[Config], bool] = lambda c: c.add_linear_biases,
+        bias_fn: bool | typing.Callable[[Config], bool] = lambda c: c.add_linear_biases,
     ):
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
@@ -1278,7 +1275,8 @@ class LinearWeightConverter(WeightConverter):
         weight_fast_llm = prepend_prefix(fast_llm_prefix, (f"{self._fast_llm_prefix}.weight",))
         weight_hf = prepend_prefix(hf_prefix, tuple(f"{p}.weight" for p in hf_prefixes))
         emitted: list[WeightConverter] = [self._transform(weight_fast_llm, weight_hf, config)]
-        if self._bias_fn(config):
+        has_bias = self._bias_fn if isinstance(self._bias_fn, bool) else self._bias_fn(config)
+        if has_bias:
             bias_fast_llm = prepend_prefix(fast_llm_prefix, (f"{self._fast_llm_prefix}.bias",))
             bias_hf = prepend_prefix(hf_prefix, tuple(f"{p}.bias" for p in hf_prefixes))
             emitted.append(self._transform(bias_fast_llm, bias_hf, config))

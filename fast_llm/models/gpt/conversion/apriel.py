@@ -189,17 +189,15 @@ class GatedDeltaNetConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # GDN has no linear biases — explicit ``bias_fn=lambda c: False`` since GatedDeltaNetConfig has
-        # no ``add_linear_biases`` field for the default to read.
-        no_bias = lambda c: False
+        # GDN has no ``add_linear_biases`` field; pass ``bias_fn=False`` so the default isn't consulted.
         return {
-            "in_proj_qkvz": LinearWeightConverter("in_proj_qkvz", "in_proj_qkvz", bias_fn=no_bias),
-            "in_proj_ba": LinearWeightConverter("in_proj_ba", "in_proj_ba", bias_fn=no_bias),
-            "convolution": LinearWeightConverter("convolution", "convolution", bias_fn=no_bias),
-            "out_proj": LinearWeightConverter("out_proj", "out_proj", bias_fn=no_bias),
+            "in_proj_qkvz": LinearWeightConverter("in_proj_qkvz", "in_proj_qkvz", bias_fn=False),
+            "in_proj_ba": LinearWeightConverter("in_proj_ba", "in_proj_ba", bias_fn=False),
+            "convolution": LinearWeightConverter("convolution", "convolution", bias_fn=False),
+            "out_proj": LinearWeightConverter("out_proj", "out_proj", bias_fn=False),
             "A_log": WeightConverter("A_log", "A_log"),
             "dt_bias": WeightConverter("dt_bias", "dt_bias"),
-            "norm": LinearWeightConverter("norm", "norm", bias_fn=no_bias),
+            "norm": LinearWeightConverter("norm", "norm", bias_fn=False),
         }
 
 
@@ -249,7 +247,6 @@ class KimiDeltaAttentionConverter(ConfigSectionConverter):
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         # KimiDeltaAttention has no linear biases.
-        no_bias = lambda c: False
         proj_names = (
             "q_proj",
             "k_proj",
@@ -265,10 +262,10 @@ class KimiDeltaAttentionConverter(ConfigSectionConverter):
             "o_proj",
         )
         return {
-            **{name: LinearWeightConverter(name, name, bias_fn=no_bias) for name in proj_names},
+            **{name: LinearWeightConverter(name, name, bias_fn=False) for name in proj_names},
             "A_log": WeightConverter("A_log", "A_log"),
             "dt_bias": WeightConverter("dt_bias", "dt_bias"),
-            "norm": LinearWeightConverter("norm", "norm", bias_fn=no_bias),
+            "norm": LinearWeightConverter("norm", "norm", bias_fn=False),
         }
 
 

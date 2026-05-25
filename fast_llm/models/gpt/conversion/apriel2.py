@@ -48,8 +48,8 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaEmbeddingsConverter,
     LlamaNormalizationConverter,
     assert_no_peft,
+    effective_bias,
 )
-from fast_llm.models.gpt.conversion.llama import effective_bias as _effective_bias
 from fast_llm.models.gpt.model import GPTModel
 from fast_llm.utils import Assert, safe_merge_dicts
 
@@ -185,23 +185,23 @@ class Apriel2AttentionConverter(ConfigSectionConverter):
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         # Each linear layer carries its own ``bias.enabled`` override; the default falls back to the
-        # mixer-wide ``add_linear_biases`` via :func:`_effective_bias`. ``key_value`` is biased only when
+        # mixer-wide ``add_linear_biases`` via :func:`effective_bias`. ``key_value`` is biased only when
         # both K and V agree (Fast-LLM packs them as a single tensor).
         return {
             "query": LinearWeightConverter(
-                "query", "q_proj", bias_fn=lambda c: _effective_bias(c.query_layer, c.add_linear_biases)
+                "query", "q_proj", bias_fn=lambda c: effective_bias(c.query_layer, c.add_linear_biases)
             ),
             "key_value": LinearWeightConverter(
                 "key_value",
                 ("k_proj", "v_proj"),
                 transform=KeyValueWeightConverter,
                 bias_fn=lambda c: (
-                    _effective_bias(c.key_layer, c.add_linear_biases)
-                    and _effective_bias(c.value_layer, c.add_linear_biases)
+                    effective_bias(c.key_layer, c.add_linear_biases)
+                    and effective_bias(c.value_layer, c.add_linear_biases)
                 ),
             ),
             "dense": LinearWeightConverter(
-                "dense", "o_proj", bias_fn=lambda c: _effective_bias(c.dense_layer, c.add_linear_biases)
+                "dense", "o_proj", bias_fn=lambda c: effective_bias(c.dense_layer, c.add_linear_biases)
             ),
         }
 
@@ -316,14 +316,13 @@ class Apriel2GatedDeltaNetConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        no_bias = lambda c: False
         return {
-            "in_proj_qkvz": LinearWeightConverter("in_proj_qkvz", "in_proj_qkvz", bias_fn=no_bias),
-            "in_proj_ba": LinearWeightConverter("in_proj_ba", "in_proj_ba", bias_fn=no_bias),
+            "in_proj_qkvz": LinearWeightConverter("in_proj_qkvz", "in_proj_qkvz", bias_fn=False),
+            "in_proj_ba": LinearWeightConverter("in_proj_ba", "in_proj_ba", bias_fn=False),
             "convolution": LinearWeightConverter(
                 "convolution", "convolution", bias_fn=lambda c: c.convolution_layer.bias.enabled
             ),
-            "out_proj": LinearWeightConverter("out_proj", "out_proj", bias_fn=no_bias),
+            "out_proj": LinearWeightConverter("out_proj", "out_proj", bias_fn=False),
             "dt_bias": WeightConverter("dt_bias", "dt_bias"),
             "A_log": WeightConverter("A_log", "A_log"),
             "norm": NestedWeightConverter("norm", "norm", LlamaNormalizationConverter, config_attr="normalization"),
@@ -376,7 +375,6 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        no_bias = lambda c: False
         proj_names = (
             "q_proj",
             "k_proj",
@@ -392,7 +390,7 @@ class Apriel2KimiDeltaAttentionConverter(ConfigSectionConverter):
             "o_proj",
         )
         return {
-            **{name: LinearWeightConverter(name, name, bias_fn=no_bias) for name in proj_names},
+            **{name: LinearWeightConverter(name, name, bias_fn=False) for name in proj_names},
             "A_log": WeightConverter("A_log", "A_log"),
             "dt_bias": WeightConverter("dt_bias", "dt_bias"),
             "norm": NestedWeightConverter("norm", "norm", LlamaNormalizationConverter, config_attr="normalization"),
@@ -533,13 +531,13 @@ class Apriel2MLPConverter(ConfigSectionConverter):
                 "layer_1",
                 lambda c: ("gate_proj", "up_proj") if c.gated else ("up_proj",),
                 transform=SplitWeightConverter,
-                bias_fn=lambda c: _effective_bias(c.layer_1, c.add_linear_biases),
+                bias_fn=lambda c: effective_bias(c.layer_1, c.add_linear_biases),
             ),
             "layer_2": LinearWeightConverter(
                 "layer_2",
                 "down_proj",
                 transform=TransposeSplitWeightConverter,
-                bias_fn=lambda c: _effective_bias(c.layer_2, c.add_linear_biases),
+                bias_fn=lambda c: effective_bias(c.layer_2, c.add_linear_biases),
             ),
         }
 
@@ -598,6 +596,10 @@ class Apriel2BlockConverter(ConfigSectionConverter):
 
 
 class Apriel2FixedDecoderConverter(ConfigSectionConverter):
+    """Config-only section: block fan-out lives on the base-model converter via
+    :class:`BlockSequenceWeightConverter`. This class exists for the config-side
+    :class:`DispatchConfigConverter` between Fixed and Pattern decoder shapes."""
+
     fast_llm_config_class = FixedBlockSequenceConfig
     hf_type_name = "fixed"
     block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
@@ -609,13 +611,10 @@ class Apriel2FixedDecoderConverter(ConfigSectionConverter):
             "block": NestedConfigConverter(("block",), cls.block_converter_class, hf_path=("block",)),
         }
 
-    # The block fan-out lives on the base-model converter, which uses :class:`BlockSequenceWeightConverter`
-    # directly (Fixed/Pattern dispatch and block iteration share one primitive). The Fixed/Pattern decoder
-    # section converters exist for the config side (dispatch via :class:`DispatchConfigConverter`) and
-    # contribute no weights of their own.
-
 
 class Apriel2PatternDecoderConverter(ConfigSectionConverter):
+    """Config-only section; see :class:`Apriel2FixedDecoderConverter`."""
+
     fast_llm_config_class = PatternBlockSequenceConfig
     hf_type_name = "pattern"
     block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
@@ -632,23 +631,11 @@ class Apriel2PatternDecoderConverter(ConfigSectionConverter):
             ),
         }
 
-    # See note on :class:`Apriel2FixedDecoderConverter` — block fan-out lives on the base-model converter.
-
 
 APRIEL2_DECODER_REGISTRY: dict[type[Config], type[ConfigSectionConverter]] = {
     FixedBlockSequenceConfig: Apriel2FixedDecoderConverter,
     PatternBlockSequenceConfig: Apriel2PatternDecoderConverter,
 }
-
-
-def get_apriel2_decoder_converter(
-    decoder_config: FixedBlockSequenceConfig | PatternBlockSequenceConfig,
-) -> type[ConfigSectionConverter]:
-    """Look up the Apriel2 per-shape decoder converter for a given decoder config instance."""
-    converter_class = APRIEL2_DECODER_REGISTRY.get(type(decoder_config))
-    if converter_class is None:
-        raise NotImplementedError(f"Unsupported decoder type: {type(decoder_config).__name__}")
-    return converter_class
 
 
 class Apriel2HeadConverter(ConfigSectionConverter):
@@ -775,7 +762,3 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
     def _import_config(cls, config: dict[str, typing.Any]) -> dict[str, typing.Any]:
         cls._check_hf_coverage(config)
         return {"base_model": cls.base_model_converter_class.import_config(config)}
-
-    @classmethod
-    def _get_weight_converters(cls, config: GPTModelConfig, export_config: dict) -> list[WeightConverter]:
-        return cls.base_model_converter_class.get_converters(config.base_model, export_config)

@@ -81,7 +81,7 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
             "key_value": LinearWeightConverter(
                 "key_value", ("k_proj", "v_proj"), transform=KeyValueWeightConverter, bias_fn=lambda c: True
             ),
-            "dense": LinearWeightConverter("dense", "o_proj", bias_fn=lambda c: False),
+            "dense": LinearWeightConverter("dense", "o_proj", bias_fn=False),
         }
 
 
