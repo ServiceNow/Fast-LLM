@@ -7,11 +7,11 @@ from transformers import PretrainedConfig
 from fast_llm.config import Config, get_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
-    BlockSequenceWeightConverter,
     ConfigConverter,
     ConfigSectionConverter,
     CustomConfigConverter,
     DefaultConfigConverter,
+    DispatchBlockSequenceWeightConverter,
     IgnoredConfigConverter,
     LinearWeightConverter,
     RenameConfigConverter,
@@ -376,14 +376,14 @@ class ListDispatchConfigConverter(ConfigConverter):
 
 
 class AprielBlockConverter:
-    """Per-mixer-type Apriel block-converter registries plus a weight-side dispatch helper.
+    """Registry holder for Apriel's per-mixer-type block converters.
 
     ``layout_names`` maps the mixer-config classes that participate in Apriel's
-    ``hybrid_block_layout`` discriminator to their string layout names. ``_converter_classes``
-    maps every mixer-config class whose weights can appear in an Apriel checkpoint to its block
-    converter — a superset of ``layout_names`` keys that adds ``KimiDeltaAttentionConfig`` for
-    weight-only coverage. :meth:`get_converters` picks the right block converter from
-    ``_converter_classes`` by the mixer's runtime type.
+    ``hybrid_block_layout`` discriminator to their string layout names — consumed by
+    :class:`ListDispatchConfigConverter` on the config side. ``_converter_classes`` maps every
+    mixer-config class whose weights can appear in an Apriel checkpoint to its block converter
+    (a superset of ``layout_names`` keys that adds ``KimiDeltaAttentionConfig`` for weight-only
+    coverage) — consumed by ``DispatchBlockSequenceWeightConverter`` on the weight side.
     """
 
     layout_names: typing.ClassVar[dict[type[Config], str]] = {
@@ -432,10 +432,10 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
         # the right block converter from the dispatcher's registry based on the mixer's runtime type.
         return {
             **super()._create_weight_converters(),
-            "decoder": BlockSequenceWeightConverter(
+            "decoder": DispatchBlockSequenceWeightConverter(
                 "decoder",
                 "model.layers",
-                dispatch_registry=cls.block_dispatcher_class._converter_classes,
+                cls.block_dispatcher_class._converter_classes,
             ),
         }
 

@@ -20,6 +20,7 @@ from fast_llm.engine.checkpoint.external import (
     NestedWeightConverter,
     OutputProjectionWeightConverter,
     RenameConfigConverter,
+    SelfBlockSequenceWeightConverter,
     SplitWeightConverter,
     TransposeSplitWeightConverter,
     WeightConverter,
@@ -362,12 +363,11 @@ class LlamaDecoderConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # The section config IS a ``FixedBlockSequenceConfig`` (no parent attribute holding it) —
-        # ``read_self=True`` tells ``BlockSequenceWeightConverter`` to read the section config directly.
-        # Used by Pixtral's vision encoder and Apriel2's vision encoder; text formats inline the dispatch
-        # at the base-model converter instead.
+        # The section config IS a ``FixedBlockSequenceConfig`` (no parent attribute holding it). Used by
+        # Pixtral's vision encoder and Apriel2's vision encoder; text formats inline the dispatch at the
+        # base-model converter instead.
         return {
-            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, read_self=True),
+            "blocks": SelfBlockSequenceWeightConverter(cls.block_converter_class),
         }
 
 

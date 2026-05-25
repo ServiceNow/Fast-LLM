@@ -8,18 +8,19 @@ import torch
 from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
-    BlockSequenceWeightConverter,
     ConfigSectionConverter,
     ConstantExportConfigConverter,
     CustomConfigConverter,
+    DispatchWeightConverter,
     IgnoredConfigConverter,
     LinearWeightConverter,
     NestedWeightConverter,
     RenameConfigConverter,
+    SelfBlockSequenceWeightConverter,
     SplitWeightConverter,
     TransposeSplitWeightConverter,
     WeightConverter,
-    _join_prefix,
+    join_prefix,
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
 from fast_llm.functional.config import ActivationType
@@ -79,31 +80,11 @@ class Gemma4MoELayer2Converter(WeightConverter):
         return (w.permute(0, 2, 1).reshape(-1, w.shape[1]).contiguous(),)
 
 
-class _Gemma4BlockMLPWeightConverter(WeightConverter):
-    """Dispatch ``block.mlp`` to dense :class:`Gemma4MLPConverter` (under ``mlp.<...>``) or hybrid
-    :class:`Gemma4HybridMoEMLPConverter` (flat-merged into the block's HF root) based on the runtime
-    type of ``config.mlp``. The two targets diverge on HF prefix, which the generic
-    :class:`DispatchWeightConverter` doesn't accommodate.
-    """
-
-    def __init__(self) -> None:
-        super().__init__((), ())
-
-    def _emit(self, config, fast_llm_prefix, hf_prefix, *, root_config):
-        fast_llm_mlp = _join_prefix(fast_llm_prefix, "mlp")
-        if isinstance(config.mlp, HybridMoEMLPConfig):
-            return Gemma4HybridMoEMLPConverter.emit_weight_converters(
-                config.mlp, fast_llm_mlp, hf_prefix, root_config=root_config
-            )
-        return Gemma4MLPConverter.emit_weight_converters(
-            config.mlp, fast_llm_mlp, _join_prefix(hf_prefix, "mlp"), root_config=root_config
-        )
-
-
 class _Gemma4BlockNorm2WeightConverter(WeightConverter):
     """Dense Gemma4 blocks store the pre-MLP norm at ``norm_2`` (drawn from the block's main
     ``normalization`` config). MoE blocks suppress this — the routed/dense branches inside the
-    hybrid MoE own their own pre/post norms.
+    hybrid MoE own their own pre/post norms. The conditional emit reads a sibling attribute
+    (``config.mlp``) and can't be expressed via :class:`NestedWeightConverter.optional`.
     """
 
     def __init__(self) -> None:
@@ -114,32 +95,8 @@ class _Gemma4BlockNorm2WeightConverter(WeightConverter):
             return []
         return LlamaNormalizationConverter.emit_weight_converters(
             config.normalization,
-            _join_prefix(fast_llm_prefix, "norm_2"),
-            _join_prefix(hf_prefix, "pre_feedforward_layernorm"),
-            root_config=root_config,
-        )
-
-
-class _Gemma4HybridMoENormWeightConverter(WeightConverter):
-    """Emit a normalization config nested two attributes deep inside a hybrid MoE block
-    (e.g. ``config.dense.pre_norm``, ``config.routed.post_norm``). The single-level
-    :class:`NestedWeightConverter` can't express the chained descent — :class:`MLPConfig` and
-    :class:`MoEMLPConfig` each carry their own pre/post norms, but those branches live one level
-    below the hybrid MoE section root. Gemma4's hybrid MoE always sets these norms.
-    """
-
-    def __init__(self, branch: str, norm_attr: str, hf_name: str) -> None:
-        super().__init__((), ())
-        self._branch = branch
-        self._norm_attr = norm_attr
-        self._hf_name = hf_name
-
-    def _emit(self, config, fast_llm_prefix, hf_prefix, *, root_config):
-        norm_config = getattr(getattr(config, self._branch), self._norm_attr)
-        return LlamaNormalizationConverter.emit_weight_converters(
-            norm_config,
-            _join_prefix(fast_llm_prefix, f"{self._branch}.{self._norm_attr}"),
-            _join_prefix(hf_prefix, self._hf_name),
+            join_prefix(fast_llm_prefix, "norm_2"),
+            join_prefix(hf_prefix, "pre_feedforward_layernorm"),
             root_config=root_config,
         )
 
@@ -423,15 +380,29 @@ class Gemma4HybridMoEMLPConverter(ConfigSectionConverter):
             "dense": NestedWeightConverter("dense", "mlp", Gemma4MLPConverter),
             # Routed branch lives at the block's HF root (sibling of ``mlp.<...>``).
             "routed": NestedWeightConverter("routed", "", Gemma4MoEMLPConverter),
-            "dense_pre_norm": _Gemma4HybridMoENormWeightConverter("dense", "pre_norm", "pre_feedforward_layernorm"),
-            "dense_post_norm": _Gemma4HybridMoENormWeightConverter(
-                "dense", "post_norm", "post_feedforward_layernorm_1"
+            "dense_pre_norm": NestedWeightConverter(
+                "dense.pre_norm",
+                "pre_feedforward_layernorm",
+                LlamaNormalizationConverter,
+                config_attr=("dense", "pre_norm"),
             ),
-            "routed_pre_norm": _Gemma4HybridMoENormWeightConverter(
-                "routed", "pre_norm", "pre_feedforward_layernorm_2"
+            "dense_post_norm": NestedWeightConverter(
+                "dense.post_norm",
+                "post_feedforward_layernorm_1",
+                LlamaNormalizationConverter,
+                config_attr=("dense", "post_norm"),
             ),
-            "routed_post_norm": _Gemma4HybridMoENormWeightConverter(
-                "routed", "post_norm", "post_feedforward_layernorm_2"
+            "routed_pre_norm": NestedWeightConverter(
+                "routed.pre_norm",
+                "pre_feedforward_layernorm_2",
+                LlamaNormalizationConverter,
+                config_attr=("routed", "pre_norm"),
+            ),
+            "routed_post_norm": NestedWeightConverter(
+                "routed.post_norm",
+                "post_feedforward_layernorm_2",
+                LlamaNormalizationConverter,
+                config_attr=("routed", "post_norm"),
             ),
         }
 
@@ -495,7 +466,13 @@ class Gemma4BlockConverter(ConfigSectionConverter):
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         return {
             "mixer": NestedWeightConverter("mixer", "self_attn", Gemma4AttentionConverter),
-            "mlp": _Gemma4BlockMLPWeightConverter(),
+            # Dense MLP lands under ``mlp.<...>``; hybrid MoE flat-merges into the block's HF root.
+            "mlp": DispatchWeightConverter(
+                "mlp",
+                "mlp",
+                registry={MLPConfig: Gemma4MLPConverter, HybridMoEMLPConfig: Gemma4HybridMoEMLPConverter},
+                hf_prefix_overrides={HybridMoEMLPConfig: ""},
+            ),
             "norm_1": NestedWeightConverter(
                 "norm_1", "input_layernorm", LlamaNormalizationConverter, config_attr="normalization"
             ),
@@ -563,7 +540,7 @@ class Gemma4DecoderConverter(ConfigSectionConverter):
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         return {
-            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, read_self=True),
+            "blocks": SelfBlockSequenceWeightConverter(cls.block_converter_class),
         }
 
 

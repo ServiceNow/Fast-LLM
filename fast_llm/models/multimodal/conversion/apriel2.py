@@ -18,6 +18,7 @@ from fast_llm.engine.checkpoint.external import (
     OutputProjectionWeightConverter,
     PatchEmbeddingWeightConverter,
     RenameConfigConverter,
+    SelfBlockSequenceWeightConverter,
     TransposeSplitWeightConverter,
     WeightConverter,
 )
@@ -253,10 +254,10 @@ class Apriel2VisionEncoderConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # The section config IS the FixedBlockSequenceConfig — ``read_self=True`` makes
-        # BlockSequenceWeightConverter read the section config directly instead of via ``getattr``.
+        # The section config IS the FixedBlockSequenceConfig — SelfBlockSequenceWeightConverter reads
+        # the section config directly instead of via ``getattr``.
         return {
-            "blocks": BlockSequenceWeightConverter("", "", cls.block_converter_class, read_self=True),
+            "blocks": SelfBlockSequenceWeightConverter(cls.block_converter_class),
         }
 
 
@@ -495,10 +496,6 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
             "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", cls.block_converter_class),
             "head": NestedWeightConverter("head", "", cls.head_converter_class),
         }
-
-    @classmethod
-    def get_converters(cls, config: MultiModalBaseModelConfig) -> list[WeightConverter]:
-        return cls.emit_weight_converters(config, "", "")
 
 
 class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):

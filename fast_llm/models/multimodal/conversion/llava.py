@@ -404,10 +404,6 @@ class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
             "head": NestedWeightConverter("head", "", text_base_cls.head_converter_class),
         }
 
-    @classmethod
-    def get_converters(cls, config: MultiModalBaseModelConfig) -> list[WeightConverter]:
-        return cls.emit_weight_converters(config, "", "")
-
 
 class LlavaHuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
     _model: MultiModalModel

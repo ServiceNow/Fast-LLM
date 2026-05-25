@@ -754,14 +754,14 @@ class ConfigSectionConverter(abc.ABC):
             )
 
 
-def _prepend_prefix(prefix: str, names: tuple[str, ...]) -> tuple[str, ...]:
+def prepend_prefix(prefix: str, names: tuple[str, ...]) -> tuple[str, ...]:
     """Prepend ``prefix`` to each name. Empty ``prefix`` is a no-op; empty ``names`` (drop side) stays empty."""
     if not prefix:
         return names
     return tuple(f"{prefix}.{name}" for name in names)
 
 
-def _join_prefix(parent: str, own: str) -> str:
+def join_prefix(parent: str, own: str) -> str:
     """Join two dot-separated prefixes, tolerating either being empty.
 
     Structural primitives (Nested/BlockSequence/Dispatch/TypedDict) call this when building the
@@ -817,8 +817,8 @@ class WeightConverter:
         """
         return [
             type(self)(
-                _prepend_prefix(fast_llm_prefix, self.fast_llm_name),
-                _prepend_prefix(hf_prefix, self.export_name),
+                prepend_prefix(fast_llm_prefix, self.fast_llm_name),
+                prepend_prefix(hf_prefix, self.export_name),
                 config,
             )
         ]
@@ -934,13 +934,16 @@ class OutputProjectionWeightConverter(WeightConverter):
 class NestedWeightConverter(WeightConverter):
     """Recurse into a sub-section's weight declarations.
 
-    The sub-section's config is read from ``getattr(config, config_attr)`` (defaults to ``fast_llm_prefix``
-    when the state-dict prefix and the parent's attribute name agree). The walker descends into
-    ``sub_converter_class._create_weight_converters()`` with extended prefixes. Mirrors
-    :class:`NestedConfigConverter` on the config side.
+    The sub-section's config is read by chained ``getattr`` from ``config`` via ``config_attr``:
 
-    The separate ``config_attr`` covers cases like a block's single ``normalization`` config feeding two
-    state-dict prefixes (``norm_1`` / ``norm_2``).
+    * ``None`` (default) — single attribute named after ``fast_llm_prefix`` (e.g. ``getattr(config, "mixer")``).
+    * single string — single attribute (covers a block's ``normalization`` config feeding two state-dict
+      prefixes ``norm_1`` / ``norm_2``).
+    * tuple of strings — chained descent (e.g. ``("dense", "pre_norm")`` ↦ ``config.dense.pre_norm`` for
+      Gemma4's hybrid-MoE inner norms).
+
+    The walker descends into ``sub_converter_class._create_weight_converters()`` with extended prefixes.
+    Mirrors :class:`NestedConfigConverter` on the config side.
 
     ``optional=True`` skips the recursion when the resolved sub-config is ``None`` — for optional
     architecture sections like Llava's ``vision_encoder``.
@@ -952,14 +955,19 @@ class NestedWeightConverter(WeightConverter):
         hf_prefix: str,
         sub_converter_class: type["ConfigSectionConverter"],
         *,
-        config_attr: str | None = None,
+        config_attr: str | tuple[str, ...] | None = None,
         optional: bool = False,
     ):
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
         self._hf_prefix = hf_prefix
         self._sub_converter_class = sub_converter_class
-        self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
+        if config_attr is None:
+            self._config_attrs: tuple[str, ...] = (fast_llm_prefix,)
+        elif isinstance(config_attr, str):
+            self._config_attrs = (config_attr,)
+        else:
+            self._config_attrs = config_attr
         self._optional = optional
 
     def _emit(
@@ -970,64 +978,57 @@ class NestedWeightConverter(WeightConverter):
         *,
         root_config: Config,
     ) -> list[WeightConverter]:
-        sub_config = getattr(config, self._config_attr)
+        sub_config: typing.Any = config
+        for attr in self._config_attrs:
+            sub_config = getattr(sub_config, attr)
         if self._optional and sub_config is None:
             return []
         return self._sub_converter_class.emit_weight_converters(
             sub_config,
-            _join_prefix(fast_llm_prefix, self._fast_llm_prefix),
-            _join_prefix(hf_prefix, self._hf_prefix),
+            join_prefix(fast_llm_prefix, self._fast_llm_prefix),
+            join_prefix(hf_prefix, self._hf_prefix),
             root_config=root_config,
         )
 
 
+def _expand_block_sequence(block_sequence: Config) -> list[Config]:
+    """Materialize a ``Fixed``/``PatternBlockSequenceConfig`` into a per-position list of block configs.
+
+    ``FixedBlockSequenceConfig``: single repeated block. ``PatternBlockSequenceConfig``: per-position
+    blocks indexed via ``decoder.expanded_pattern``.
+    """
+    # Lazy import to keep external.py free of layers/ dependencies.
+    from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
+
+    if isinstance(block_sequence, FixedBlockSequenceConfig):
+        return [block_sequence.block] * block_sequence.num_blocks
+    if isinstance(block_sequence, PatternBlockSequenceConfig):
+        return [block_sequence.blocks[name] for name in block_sequence.expanded_pattern]
+    raise NotImplementedError(type(block_sequence).__name__)
+
+
 class BlockSequenceWeightConverter(WeightConverter):
-    """Fan out a per-block sub-section across every position in a block sequence.
+    """Fan a single block converter across every position in a block sequence reached via attribute access.
 
-    The sub-section's converter class is resolved per-position from ``block_converter_class``: by default,
-    the same class for every position; when ``dispatch_registry`` is provided, the per-position config is
-    matched against the registry keys (Apriel's hybrid-block dispatch — different mixer types per layer).
-
-    Handles both ``FixedBlockSequenceConfig`` (single repeated block) and ``PatternBlockSequenceConfig``
-    (per-position blocks indexed via ``decoder.expanded_pattern``).
-
-    The block sequence is reached from the parent config in one of three ways:
-
-    * default (``config_attr=None``) — read ``getattr(parent, fast_llm_prefix)``.
-    * explicit ``config_attr``-string — read ``getattr(parent, config_attr)``.
-    * ``read_self=True`` — the *section* config IS the block sequence (no parent attribute); used
-      when ``BlockSequenceWeightConverter`` is declared by a section converter whose
-      ``fast_llm_config_class`` is a ``FixedBlockSequenceConfig`` directly (e.g.
-      ``LlamaDecoderConverter`` plugged into the Pixtral vision encoder; Apriel2's vision encoder).
+    Reads the block sequence from ``getattr(parent, config_attr)`` (defaults to ``fast_llm_prefix``).
+    For per-position type dispatch (different mixer types per layer) use
+    :class:`DispatchBlockSequenceWeightConverter` instead; when the section config IS the block sequence
+    use :class:`SelfBlockSequenceWeightConverter`.
     """
 
     def __init__(
         self,
         fast_llm_prefix: str,
         hf_prefix: str,
-        block_converter_class: type["ConfigSectionConverter"] | None = None,
+        block_converter_class: type["ConfigSectionConverter"],
         *,
         config_attr: str | None = None,
-        read_self: bool = False,
-        dispatch_registry: dict[type[Config], type["ConfigSectionConverter"]] | None = None,
     ):
-        # Exactly one of the two must be set: the single-class path uses ``block_converter_class``;
-        # the per-position-type-dispatch path uses ``dispatch_registry``. Passing both would silently
-        # ignore ``block_converter_class`` since ``_emit`` prefers the registry.
-        Assert.custom(
-            lambda pair: (pair[0] is None) != (pair[1] is None),
-            (block_converter_class, dispatch_registry),
-        )
-        # ``config_attr`` and ``read_self`` are mutually exclusive — one tells us how to descend to the
-        # block sequence; the other says we're already there.
-        Assert.custom(lambda pair: not (pair[0] is not None and pair[1]), (config_attr, read_self))
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
         self._hf_prefix = hf_prefix
         self._block_converter_class = block_converter_class
-        self._read_self = read_self
         self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
-        self._dispatch_registry = dispatch_registry
 
     def _emit(
         self,
@@ -1037,30 +1038,88 @@ class BlockSequenceWeightConverter(WeightConverter):
         *,
         root_config: Config,
     ) -> list[WeightConverter]:
-        # Lazy import to keep external.py free of layers/ dependencies.
-        from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
-
-        block_sequence = config if self._read_self else getattr(config, self._config_attr)
-        if isinstance(block_sequence, FixedBlockSequenceConfig):
-            per_position_blocks = [block_sequence.block] * block_sequence.num_blocks
-        elif isinstance(block_sequence, PatternBlockSequenceConfig):
-            per_position_blocks = [block_sequence.blocks[name] for name in block_sequence.expanded_pattern]
-        else:
-            raise NotImplementedError(type(block_sequence).__name__)
-
-        fast_llm_root = _join_prefix(fast_llm_prefix, self._fast_llm_prefix)
-        hf_root = _join_prefix(hf_prefix, self._hf_prefix)
+        fast_llm_root = join_prefix(fast_llm_prefix, self._fast_llm_prefix)
+        hf_root = join_prefix(hf_prefix, self._hf_prefix)
         out: list[WeightConverter] = []
-        for index, block in enumerate(per_position_blocks):
-            block_class = (
-                self._dispatch_registry[type(block.mixer)]
-                if self._dispatch_registry is not None
-                else self._block_converter_class
+        for index, block in enumerate(_expand_block_sequence(getattr(config, self._config_attr))):
+            out += self._block_converter_class.emit_weight_converters(
+                block,
+                f"{fast_llm_root}.{index}",
+                f"{hf_root}.{index}",
+                root_config=root_config,
             )
+        return out
+
+
+class DispatchBlockSequenceWeightConverter(WeightConverter):
+    """Fan a per-position-dispatched block converter across every position in a block sequence.
+
+    Each position's block config is matched against ``dispatch_registry`` keys by its mixer type
+    (``type(block.mixer)``) — Apriel's hybrid-block dispatch.
+    """
+
+    def __init__(
+        self,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        dispatch_registry: dict[type[Config], type["ConfigSectionConverter"]],
+        *,
+        config_attr: str | None = None,
+    ):
+        super().__init__((), ())
+        self._fast_llm_prefix = fast_llm_prefix
+        self._hf_prefix = hf_prefix
+        self._dispatch_registry = dispatch_registry
+        self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
+
+    def _emit(
+        self,
+        config: Config,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        *,
+        root_config: Config,
+    ) -> list[WeightConverter]:
+        fast_llm_root = join_prefix(fast_llm_prefix, self._fast_llm_prefix)
+        hf_root = join_prefix(hf_prefix, self._hf_prefix)
+        out: list[WeightConverter] = []
+        for index, block in enumerate(_expand_block_sequence(getattr(config, self._config_attr))):
+            block_class = self._dispatch_registry[type(block.mixer)]
             out += block_class.emit_weight_converters(
                 block,
                 f"{fast_llm_root}.{index}",
                 f"{hf_root}.{index}",
+                root_config=root_config,
+            )
+        return out
+
+
+class SelfBlockSequenceWeightConverter(WeightConverter):
+    """Fan a single block converter across the section config when *the section IS the block sequence*.
+
+    Used when the declaring section's ``fast_llm_config_class`` is itself a ``FixedBlockSequenceConfig``
+    or ``PatternBlockSequenceConfig`` (e.g. ``LlamaDecoderConverter`` plugged into the Pixtral vision
+    encoder; Apriel2 and Gemma4's decoders). Weights land directly under the section's outer prefixes.
+    """
+
+    def __init__(self, block_converter_class: type["ConfigSectionConverter"]):
+        super().__init__((), ())
+        self._block_converter_class = block_converter_class
+
+    def _emit(
+        self,
+        config: Config,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        *,
+        root_config: Config,
+    ) -> list[WeightConverter]:
+        out: list[WeightConverter] = []
+        for index, block in enumerate(_expand_block_sequence(config)):
+            out += self._block_converter_class.emit_weight_converters(
+                block,
+                f"{fast_llm_prefix}.{index}",
+                f"{hf_prefix}.{index}",
                 root_config=root_config,
             )
         return out
@@ -1074,6 +1133,9 @@ class DispatchWeightConverter(WeightConverter):
     Mirrors :class:`DispatchConfigConverter` on the config side. Used when a single attribute holds one
     of several alternative configs (e.g. Apriel2's block ``mixer`` may be attention/mamba/gdn/kda/stochastic;
     its ``normalization`` may be RMS/Layer/None).
+
+    ``hf_prefix_overrides`` lets individual branches replace the shared ``hf_prefix`` (e.g. Gemma4's
+    hybrid MoE flat-merges into the block root while dense MLP lands under ``mlp.<...>``).
     """
 
     def __init__(
@@ -1083,12 +1145,14 @@ class DispatchWeightConverter(WeightConverter):
         registry: dict[type[Config], type["ConfigSectionConverter"]],
         *,
         config_attr: str | None = None,
+        hf_prefix_overrides: dict[type[Config], str] | None = None,
     ):
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
         self._hf_prefix = hf_prefix
         self._registry = registry
         self._config_attr = config_attr if config_attr is not None else fast_llm_prefix
+        self._hf_prefix_overrides = hf_prefix_overrides or {}
 
     def _emit(
         self,
@@ -1099,11 +1163,13 @@ class DispatchWeightConverter(WeightConverter):
         root_config: Config,
     ) -> list[WeightConverter]:
         sub_config = getattr(config, self._config_attr)
-        sub_class = self._registry[type(sub_config)]
+        sub_type = type(sub_config)
+        sub_class = self._registry[sub_type]
+        own_hf_prefix = self._hf_prefix_overrides.get(sub_type, self._hf_prefix)
         return sub_class.emit_weight_converters(
             sub_config,
-            _join_prefix(fast_llm_prefix, self._fast_llm_prefix),
-            _join_prefix(hf_prefix, self._hf_prefix),
+            join_prefix(fast_llm_prefix, self._fast_llm_prefix),
+            join_prefix(hf_prefix, own_hf_prefix),
             root_config=root_config,
         )
 
@@ -1140,15 +1206,15 @@ class TypedDictWeightConverter(WeightConverter):
         root_config: Config,
     ) -> list[WeightConverter]:
         attr_dict = getattr(config, self._config_attr)
-        fast_llm_root = _join_prefix(fast_llm_prefix, self._fast_llm_prefix)
-        hf_root = _join_prefix(hf_prefix, self._hf_prefix)
+        fast_llm_root = join_prefix(fast_llm_prefix, self._fast_llm_prefix)
+        hf_root = join_prefix(hf_prefix, self._hf_prefix)
         out: list[WeightConverter] = []
         for name, sub_config in attr_dict.items():
             sub_class = self._registry[type(sub_config)]
             out += sub_class.emit_weight_converters(
                 sub_config,
-                _join_prefix(fast_llm_root, name),
-                _join_prefix(hf_root, name),
+                join_prefix(fast_llm_root, name),
+                join_prefix(hf_root, name),
                 root_config=root_config,
             )
         return out
@@ -1195,12 +1261,12 @@ class LinearWeightConverter(WeightConverter):
     ) -> list[WeightConverter]:
         resolved = self._hf_prefix(config) if callable(self._hf_prefix) else self._hf_prefix
         hf_prefixes: tuple[str, ...] = (resolved,) if isinstance(resolved, str) else tuple(resolved)
-        weight_fast_llm = _prepend_prefix(fast_llm_prefix, (f"{self._fast_llm_prefix}.weight",))
-        weight_hf = _prepend_prefix(hf_prefix, tuple(f"{p}.weight" for p in hf_prefixes))
+        weight_fast_llm = prepend_prefix(fast_llm_prefix, (f"{self._fast_llm_prefix}.weight",))
+        weight_hf = prepend_prefix(hf_prefix, tuple(f"{p}.weight" for p in hf_prefixes))
         emitted: list[WeightConverter] = [self._transform(weight_fast_llm, weight_hf, config)]
         if self._bias_fn(config):
-            bias_fast_llm = _prepend_prefix(fast_llm_prefix, (f"{self._fast_llm_prefix}.bias",))
-            bias_hf = _prepend_prefix(hf_prefix, tuple(f"{p}.bias" for p in hf_prefixes))
+            bias_fast_llm = prepend_prefix(fast_llm_prefix, (f"{self._fast_llm_prefix}.bias",))
+            bias_hf = prepend_prefix(hf_prefix, tuple(f"{p}.bias" for p in hf_prefixes))
             emitted.append(self._transform(bias_fast_llm, bias_hf, config))
         return emitted
 

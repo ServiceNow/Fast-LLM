@@ -35,9 +35,14 @@ class HuggingFaceBaseModelConverter:
         pass
 
     @classmethod
-    @abc.abstractmethod
     def get_converters(cls, config: BaseModelConfig) -> list[WeightConverter]:
-        pass
+        """Default: walk the section's weight declarations from the root.
+
+        Subclasses with constructs that don't fit the standard declaration walk override — e.g.
+        :class:`LlamaBaseModelConverter` splices the head's weights separately so MTP-Llama's
+        per-prediction-head fan-out has access to the full base-model config.
+        """
+        return cls.emit_weight_converters(config, "", "")  # type: ignore[attr-defined]
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):

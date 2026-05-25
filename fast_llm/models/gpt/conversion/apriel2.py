@@ -28,7 +28,7 @@ from fast_llm.engine.checkpoint.external import (
     TypedDictWeightConverter,
     WeightConverter,
 )
-from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
 from fast_llm.functional.config import ActivationType
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.attention.rotary.config import DefaultRotaryConfig, Llama3RotaryConfig, YarnRotaryConfig
@@ -689,7 +689,7 @@ class Apriel2HeadConverter(ConfigSectionConverter):
         }
 
 
-class Apriel2BaseModelConverter(ConfigSectionConverter):
+class Apriel2BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
     fast_llm_config_class = GPTBaseModelConfig
 
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
@@ -730,10 +730,6 @@ class Apriel2BaseModelConverter(ConfigSectionConverter):
             "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", cls.block_converter_class),
             "head": NestedWeightConverter("head", "", cls.head_converter_class),
         }
-
-    @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
-        return cls.emit_weight_converters(config, "", "")
 
 
 class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
