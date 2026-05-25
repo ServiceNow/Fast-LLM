@@ -494,8 +494,10 @@ def fused_gspo_loss_forward_backward(
     mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
         0, flat_document_index, log_ratio.reshape(-1) * token_weight
     )
-    mean_advantage_per_segment = advantages.new_zeros(num_segments).index_add_(
-        0, flat_document_index, (advantages.reshape(-1) * token_weight).to(advantages.dtype)
+    # Accumulate in `log_ratio.dtype` (fp32). Casting the product back to `advantages.dtype`
+    # before summing would round each token's contribution to a possibly-low input dtype.
+    mean_advantage_per_segment = log_ratio.new_zeros(num_segments).index_add_(
+        0, flat_document_index, advantages.reshape(-1).to(log_ratio.dtype) * token_weight
     )
     for reduce_group in (sdp_group, sp_group):
         if reduce_group is not None:
