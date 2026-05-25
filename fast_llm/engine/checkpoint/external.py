@@ -559,6 +559,12 @@ class ConfigSectionConverter(abc.ABC):
 
     fast_llm_config_class: typing.ClassVar[type[Config]]
     hf_type_name: typing.ClassVar[str | None] = None
+    weight_only: typing.ClassVar[bool] = False
+    """When ``True``, the section contributes weight conversions only — its config side is owned by an
+    ancestor (typically via :class:`CustomConfigConverter` with ``fast_llm_recurses=True``).
+    :meth:`_create_config_converters` defaults to no declarations and :meth:`check_architecture_coverage`
+    short-circuits, so the section does not need to claim its own architecture leaves.
+    """
 
     @classmethod
     @functools.cache
@@ -568,7 +574,10 @@ class ConfigSectionConverter(abc.ABC):
         Cached per class — declarations are immutable and depend only on ``cls``. Subclasses must build
         and return a *fresh* dict (idiomatically ``{**super()._create_config_converters(), ...}``); mutating
         the returned dict in place would corrupt the parent's cache entry for every subsequent caller.
+        Weight-only sections (``weight_only=True``) inherit the empty default.
         """
+        if cls.weight_only:
+            return {}
         raise NotImplementedError
 
     @classmethod
@@ -718,7 +727,12 @@ class ConfigSectionConverter(abc.ABC):
         Invoked from a test fixture (``tests/models/test_converters.py``) — not from the production
         export/import paths. Architecture coverage is a structural invariant of the converter declarations,
         so it only needs to hold once per (converter, config-class) pair, not on every save.
+
+        Short-circuits for weight-only sections (``weight_only=True``): the config side is owned by an
+        ancestor declaration, so the architecture leaves are claimed there.
         """
+        if cls.weight_only:
+            return
         Assert.is_(type(config), cls.fast_llm_config_class)
         declarations = cls._create_config_converters()
         explicit_paths: set[tuple[str, ...]] = set()

@@ -130,15 +130,12 @@ class Gemma4AttentionConverter(ConfigSectionConverter):
     to a single ``k_proj`` when ``shared_key_value`` is set.
 
     The config side is owned by :class:`Gemma4BaseModelConverter`'s ``decoder`` :class:`CustomConfigConverter`
-    (with ``fast_llm_recurses=True``); the blanket-claim below silences the static architecture-coverage
-    walker — Gemma4's sliding/full divergence prevents a uniform declarative shape per single block.
+    (with ``fast_llm_recurses=True``); the ``weight_only`` flag below signals that — Gemma4's sliding/full
+    divergence prevents a uniform declarative shape per single block.
     """
 
     fast_llm_config_class = AttentionConfig
-
-    @classmethod
-    def _create_config_converters(cls) -> dict:
-        return {"_blanket": IgnoredConfigConverter(())}
+    weight_only: typing.ClassVar[bool] = True
 
     @classmethod
     def import_config(cls, config: dict, is_sliding: bool) -> dict:
@@ -236,12 +233,9 @@ class Gemma4AttentionConverter(ConfigSectionConverter):
 
 
 class Gemma4MLPConverter(ConfigSectionConverter):
+    # Config side owned by the aggregator's ``decoder`` CustomConfigConverter; see Gemma4AttentionConverter.
     fast_llm_config_class = MLPConfig
-
-    @classmethod
-    def _create_config_converters(cls) -> dict:
-        # Config side owned by the aggregator's ``decoder`` CustomConfigConverter; see Gemma4AttentionConverter.
-        return {"_blanket": IgnoredConfigConverter(())}
+    weight_only: typing.ClassVar[bool] = True
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -278,11 +272,9 @@ class Gemma4MLPConverter(ConfigSectionConverter):
 
 
 class Gemma4MoEMLPConverter(ConfigSectionConverter):
+    # Config side owned by the aggregator's ``decoder`` CustomConfigConverter; see Gemma4AttentionConverter.
     fast_llm_config_class = MoEMLPConfig
-
-    @classmethod
-    def _create_config_converters(cls) -> dict:
-        return {"_blanket": IgnoredConfigConverter(())}
+    weight_only: typing.ClassVar[bool] = True
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -343,11 +335,9 @@ class Gemma4MoEMLPConverter(ConfigSectionConverter):
 
 
 class Gemma4HybridMoEMLPConverter(ConfigSectionConverter):
+    # Config side owned by the aggregator's ``decoder`` CustomConfigConverter; see Gemma4AttentionConverter.
     fast_llm_config_class = HybridMoEMLPConfig
-
-    @classmethod
-    def _create_config_converters(cls) -> dict:
-        return {"_blanket": IgnoredConfigConverter(())}
+    weight_only: typing.ClassVar[bool] = True
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
@@ -408,11 +398,9 @@ class Gemma4HybridMoEMLPConverter(ConfigSectionConverter):
 
 
 class Gemma4BlockConverter(ConfigSectionConverter):
+    # Config side owned by the aggregator's ``decoder`` CustomConfigConverter; see Gemma4AttentionConverter.
     fast_llm_config_class = DecoderBlockConfig
-
-    @classmethod
-    def _create_config_converters(cls) -> dict:
-        return {"_blanket": IgnoredConfigConverter(())}
+    weight_only: typing.ClassVar[bool] = True
 
     @classmethod
     def import_config(cls, config: dict, is_sliding: bool) -> dict:
@@ -496,13 +484,11 @@ class Gemma4BlockConverter(ConfigSectionConverter):
 
 
 class Gemma4DecoderConverter(ConfigSectionConverter):
+    # Config side owned by the aggregator's ``decoder`` CustomConfigConverter; see Gemma4AttentionConverter.
     fast_llm_config_class = PatternBlockSequenceConfig
+    weight_only: typing.ClassVar[bool] = True
 
     block_converter_class: typing.ClassVar[type[Gemma4BlockConverter]] = Gemma4BlockConverter
-
-    @classmethod
-    def _create_config_converters(cls) -> dict:
-        return {"_blanket": IgnoredConfigConverter(())}
 
     @classmethod
     def import_config(cls, config: dict) -> dict:
