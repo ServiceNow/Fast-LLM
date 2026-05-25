@@ -714,6 +714,26 @@ update_and_add_testing_config(
 
 
 update_and_add_testing_config(
+    "llama",
+    "llama_gspo",
+    updates={("model", "base_model", "head", "losses"): {"gspo": {"type": "gspo"}}},
+    # `ms*` (micro_batch_splits>1) and `ce*` (cross_entropy_splits>1) both produce
+    # multiple kernel calls per micro-batch; GSPO's per-document geometric mean can't be
+    # reconstructed from per-fragment `exp(mean)` values, so we skip these variants.
+    skip_tests=("ms", "ce"),
+    groups={
+        ModelTestingGroup.basic: ModelTestingGroupAction.normal,
+        ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.convert: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
+        ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
+        ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
+    },
+)
+
+
+update_and_add_testing_config(
     # Tests apriel 2 basic conversion.
     "llama",
     "apriel2_attn",
