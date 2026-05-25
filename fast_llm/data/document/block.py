@@ -9,6 +9,7 @@ from fast_llm.data.document.config import LengthPreprocessingConfig
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedDimNames
 from fast_llm.layers.attention.config import AttentionKwargs
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.utils import Assert, padded_cumsum
 
@@ -30,6 +31,8 @@ class BlockModelInput(ModelInput):
     min_length_k: int | None = None
     document_index_q: torch.Tensor | None = None
     document_index_k: torch.Tensor | None = None
+    global_document_index_q: torch.Tensor | None = None
+    num_documents_in_sequence: int | None = None
     position_index: torch.Tensor | None = None
     first_document_begin: int = 0
 
@@ -51,6 +54,8 @@ class BlockModelInput(ModelInput):
             AttentionKwargs.min_seqlen_k: self.min_length_k,
             AttentionKwargs.document_index_q: self.document_index_q,
             AttentionKwargs.document_index_k: self.document_index_k,
+            BlockKwargs.global_document_index_q: self.global_document_index_q,
+            BlockKwargs.num_documents_in_sequence: self.num_documents_in_sequence,
             LanguageModelKwargs.position_ids: self.position_index,
             AttentionKwargs.first_document_begin: self.first_document_begin,
         }

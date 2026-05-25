@@ -7,17 +7,19 @@ import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.layers.attention.config import AttentionKwargs
+from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
-from tests.layers.test_lm_losses import reference_grpo_loss
+from tests.layers.test_lm_losses import reference_grpo_loss, reference_gspo_loss
 from tests.utils.utils import get_base_model, get_stage
 
 NUM_TOKENS = 200
 HIDDEN_SIZE = 256
 VOCAB_SIZE = 500
+GSPO_NUM_DOCUMENTS = 4
 
 
 @dataclasses.dataclass
@@ -27,6 +29,7 @@ class LMHeadTestConfig:
     distillation_loss: bool | float = False
     z_loss: bool | float = False
     grpo_loss: bool | float = False
+    gspo_loss: bool | float = False
     logits_scale_factor: float = 1.0
     final_logit_softcap: float | None = None
     compute_dtype: DataType = DataType.float32
@@ -44,6 +47,7 @@ class LMHeadTestConfig:
             and self.distillation_loss is False
             and self.z_loss is False
             and self.grpo_loss is False
+            and self.gspo_loss is False
             else self.label_loss
         )
 
@@ -73,6 +77,10 @@ class LMHeadTestConfig:
             losses["grpo_loss"] = {"type": "grpo"}
             if isinstance(self.grpo_loss, float):
                 losses["grpo_loss"]["weight"] = self.grpo_loss
+        if self.gspo_loss is not False:
+            losses["gspo_loss"] = {"type": "gspo"}
+            if isinstance(self.gspo_loss, float):
+                losses["gspo_loss"]["weight"] = self.gspo_loss
         if losses:
             head_config["losses"] = losses
 
@@ -110,7 +118,7 @@ class LMHeadTestConfig:
             ]
         else:
             kwargs[LanguageModelKwargs.num_labels_in_batch] = [NUM_TOKENS for _ in range(self.prediction_heads)]
-        if self.actual_label_loss is not False or self.grpo_loss is not False:
+        if self.actual_label_loss is not False or self.grpo_loss is not False or self.gspo_loss is not False:
             labels = [
                 torch.randint(
                     0,
@@ -137,7 +145,7 @@ class LMHeadTestConfig:
                     device=device,
                 )
             }
-        if self.grpo_loss is not False:
+        if self.grpo_loss is not False or self.gspo_loss is not False:
             kwargs[LanguageModelLossKwargs.advantages] = [
                 torch.randn(input_.shape[:-1], dtype=torch.float32, device=device)
                 for _ in range(self.prediction_heads)
@@ -150,7 +158,26 @@ class LMHeadTestConfig:
                 torch.full(input_.shape[:-1], float((labels_ >= 0).sum()), dtype=torch.float32, device=device)
                 for labels_ in kwargs[LanguageModelKwargs.labels]
             ]
-            kwargs[LanguageModelKwargs.num_documents_in_batch] = 1
+            kwargs[LanguageModelKwargs.num_documents_in_batch] = (
+                GSPO_NUM_DOCUMENTS if self.gspo_loss is not False else 1
+            )
+        if self.gspo_loss is not False:
+            document_length = NUM_TOKENS // GSPO_NUM_DOCUMENTS
+            kwargs[BlockKwargs.global_document_index_q] = torch.repeat_interleave(
+                torch.arange(1, GSPO_NUM_DOCUMENTS + 1, dtype=torch.int32, device=device), document_length
+            )
+            kwargs[BlockKwargs.num_documents_in_sequence] = GSPO_NUM_DOCUMENTS
+            kwargs[BlockKwargs.lengths] = [document_length] * GSPO_NUM_DOCUMENTS
+            # Override label_counts: per-token broadcast of the containing document's masked-label count
+            # (the kernel's per-document `new_logprobs` aggregation depends on this).
+            kwargs[LanguageModelLossKwargs.label_counts] = [
+                (labels_ >= 0)
+                .view(GSPO_NUM_DOCUMENTS, document_length)
+                .sum(-1)
+                .to(torch.float32)
+                .repeat_interleave(document_length)
+                for labels_ in kwargs[LanguageModelKwargs.labels]
+            ]
         return input_, kwargs
 
     def get_reference_outputs(
@@ -185,7 +212,7 @@ class LMHeadTestConfig:
             else None
         )
 
-        if self.actual_label_loss is not False or self.grpo_loss is not False:
+        if self.actual_label_loss is not False or self.grpo_loss is not False or self.gspo_loss is not False:
             labels = kwargs[LanguageModelKwargs.labels][head._prediction_distance - 1]
 
         if self.actual_label_loss is not False:
@@ -218,6 +245,33 @@ class LMHeadTestConfig:
             )
             names_losses_weights.append(("grpo_loss", grpo_loss, float(self.grpo_loss)))
             names_losses_weights.append(("grpo_loss_new_logprobs", new_logprobs, 0.0))
+
+        if self.gspo_loss is not False:
+            gspo_loss, _ = reference_gspo_loss(
+                logits,
+                labels,
+                kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
+                kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
+                # `global_document_index_q` is 1-based per the data preprocessor convention; the reference takes 0-based.
+                kwargs[BlockKwargs.global_document_index_q].long() - 1,
+                kwargs[BlockKwargs.num_documents_in_sequence],
+            )
+            # Average over documents of per-document mean log-prob — matches the kernel's
+            # `sum_t logprob_t * mask_t / label_count_t` divided by `num_documents_in_batch`.
+            document_length = NUM_TOKENS // GSPO_NUM_DOCUMENTS
+            target_log_probabilities = (
+                torch.nn.functional.log_softmax(logits, -1)
+                .gather(-1, (labels * (labels >= 0)).unsqueeze(-1))
+                .squeeze(-1)
+            )
+            label_mask = (labels >= 0).to(target_log_probabilities.dtype)
+            logprob_sums_per_document = (
+                (target_log_probabilities * label_mask).view(GSPO_NUM_DOCUMENTS, document_length).sum(-1)
+            )
+            label_counts_per_document = label_mask.view(GSPO_NUM_DOCUMENTS, document_length).sum(-1).clamp(min=1)
+            new_logprobs = (logprob_sums_per_document / label_counts_per_document).mean()
+            names_losses_weights.append(("gspo_loss", gspo_loss, float(self.gspo_loss)))
+            names_losses_weights.append(("gspo_loss_new_logprobs", new_logprobs, 0.0))
 
         actual_losses = [loss * weight for _, loss, weight in names_losses_weights if weight != 0.0]
         total_loss = sum(actual_losses)
@@ -264,6 +318,15 @@ _add_configs("label_loss", label_loss=True)
 _add_configs("distillation_loss", distillation_loss=True)
 _add_configs("z_loss", z_loss=True)
 _add_configs("grpo_loss", grpo_loss=True)
+# GSPO can't be split: per-segment aggregation can't recombine across cross_entropy_splits chunks.
+for loss_masking in (False, True):
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"gspo_loss{'_masked' if loss_masking else ''}",
+            gspo_loss=True,
+            loss_masking=loss_masking,
+        )
+    )
 _add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
 _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)

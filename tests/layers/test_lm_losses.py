@@ -196,19 +196,20 @@ def reference_gspo_loss(
     flat_advantages = advantages.reshape(-1)
 
     total = log_ratio.new_zeros(())
+    new_logprobs = log_ratio.new_zeros(())
     for segment in range(num_segments):
         in_segment = (flat_doc == segment) & flat_mask
         count = in_segment.sum()
         if int(count) == 0:
             continue
-        ratio = (flat_log_ratio[in_segment].sum() / count.float()).exp()
-        advantage = (flat_advantages[in_segment].sum() / count.float()).detach()
+        count_float = count.float()
+        ratio = (flat_log_ratio[in_segment].sum() / count_float).exp()
+        advantage = (flat_advantages[in_segment].sum() / count_float).detach()
         clipped_ratio = ratio.clamp(1 - epsilon_low, 1 + epsilon_high)
         total = total + -torch.minimum(ratio * advantage, clipped_ratio * advantage)
-    total = total / max(num_segments, 1)
-
-    log_probs = torch.nn.functional.log_softmax(logits_, -1).gather(-1, labels_safe.unsqueeze(-1)).squeeze(-1)
-    new_logprobs = (log_probs * loss_mask).sum() / max(float(loss_mask.sum()), 1.0)
+        # Matches the kernel's `sum_t logprob_t * mask_t / N_d` — sum of per-document mean logprobs.
+        new_logprobs = new_logprobs + target_log_probabilities.reshape(-1)[in_segment].sum() / count_float
+    total = total / num_segments
     return total, new_logprobs
 
 
@@ -414,6 +415,23 @@ def _test_gspo_loss(
     span = max(seq_len // num_segments, 1)
     base = torch.arange(seq_len, device=target.device) // span
     document_index = base.clamp(max=num_segments - 1).expand(batch_shape).contiguous()
+    # Per-document labeled-token count broadcast per token, matching what the data
+    # preprocessor produces.
+    flat_doc = document_index.reshape(-1).long()
+    flat_target = target.reshape(-1)
+    labels_per_document = torch.zeros(num_segments, dtype=torch.int32, device=target.device).scatter_add(
+        0, flat_doc, (flat_target >= 0).to(torch.int32)
+    )
+    num_labels_in_seq = labels_per_document[flat_doc].reshape(target.shape)
+    _, ref_new_logprobs = reference_gspo_loss(
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        logits_scale_factor=logits_scale_factor,
+    )
     out_ref, grad_ref = loss_forward_backward(
         grad_output,
         lambda *args, **kwargs: reference_gspo_loss(*args, **kwargs)[0],
@@ -436,12 +454,15 @@ def _test_gspo_loss(
         old_log_probabilities,
         document_index,
         num_segments,
+        divisor=num_segments,
         grad_logits=local_previous_grad.clone() if accumulate else None,
         grad_output=grad_output,
         group=group,
         logits_scale_factor=logits_scale_factor,
+        num_labels_in_seq=num_labels_in_seq,
     )
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
+    Assert.rms_close_relative(new_logprobs_fused, ref_new_logprobs, 1e-5, 1e-6)
 
     if not triton_available:
         return
@@ -452,12 +473,15 @@ def _test_gspo_loss(
         old_log_probabilities,
         document_index,
         num_segments,
+        divisor=num_segments,
+        num_labels_in_seq=num_labels_in_seq,
         grad_logits=local_previous_grad.clone() if accumulate else None,
         grad_output=grad_output,
         group=group,
         logits_scale_factor=logits_scale_factor,
     )
     _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group)
+    Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
 def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) -> None:

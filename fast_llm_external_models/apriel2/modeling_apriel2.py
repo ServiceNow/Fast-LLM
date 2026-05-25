@@ -937,11 +937,13 @@ class Apriel2Attention(nn.Module):
             )
 
             embeds_kwarg = "inputs_embeds" if not _TRANSFORMERS_V4 else "input_embeds"
+            # `cache_position` is required in transformers v4, deprecated in early v5, and removed in v5.9.
+            extra_mask_kwargs = {"cache_position": kwargs["cache_position"]} if _TRANSFORMERS_V4 else {}
             mask = mask_function(
                 config=mask_config,
                 **{embeds_kwarg: hidden_states},
                 attention_mask=kwargs.get("attention_mask"),
-                cache_position=kwargs["cache_position"],
+                **extra_mask_kwargs,
                 past_key_values=kwargs.get("past_key_values"),
                 position_ids=position_ids,
             )

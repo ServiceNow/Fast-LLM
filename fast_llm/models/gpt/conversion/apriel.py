@@ -1,21 +1,23 @@
-import functools
 import math
 import typing
 
 from transformers import PretrainedConfig
 
-from fast_llm.config import Config
+from fast_llm.config import Config, get_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    ConfigConverter,
     ConfigSectionConverter,
     CustomConfigConverter,
     DefaultConfigConverter,
     IgnoredConfigConverter,
     RenameConfigConverter,
     WeightConverter,
+    _get_attr_path,
+    _safe_set_nested_dict_value,
 )
 from fast_llm.layers.attention.config import AttentionConfig
-from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
+from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
@@ -429,10 +431,103 @@ class AprielGatedDeltaNetBlockConverter(MistralBlockConverter):
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
+class ListDispatchConfigConverter(ConfigConverter):
+    """Block-sequence dispatch driven by a positional HF list.
+
+    The HF config carries one layout-discriminator string per pipeline position; each registered
+    block converter handles one mixer type, and their outputs flat-merge into the parent HF root.
+    Per-mixer nested subdicts (e.g. ``ssm_cfg`` for Mamba, ``linear_attn_config`` for GDN) are
+    disjoint across block types; shared top-level scalars are emitted by every block with the same
+    value and cross-validate via :func:`Assert.eq` inside ``_safe_set_nested_dict_value``. The
+    Fast-LLM target is a :class:`FixedBlockSequenceConfig` when the layout has a single entry, a
+    :class:`PatternBlockSequenceConfig` otherwise.
+
+    Two registries:
+
+    * ``registry``: mixer-config class → block ``ConfigSectionConverter``. Domain of the HF coverage
+      walker — every block type whose HF keys must be claimed appears here.
+    * ``layout_names``: mixer-config class → layout discriminator string. Must be a subset of
+      ``registry`` keys (checked in ``__init__``). Domain of the config-side round-trip — classes
+      absent here can't be config-exported (no layout name to emit) or config-imported (no reverse
+      lookup).
+    """
+
+    fast_llm_recurses: typing.ClassVar[bool] = True
+
+    def __init__(
+        self,
+        fast_llm_path: tuple[str, ...],
+        hf_layout_path: tuple[str, ...],
+        hf_num_blocks_path: tuple[str, ...],
+        registry: "dict[type[Config], type[ConfigSectionConverter]]",
+        layout_names: "dict[type[Config], str]",
+    ):
+        Assert.custom(lambda names: set(names) <= set(registry), layout_names)
+        self.fast_llm_paths = (fast_llm_path,)
+        # Layout/num-blocks paths and per-block claims register through ``_consumed_hf_paths``.
+        self.hf_paths = ()
+        self._hf_layout_path = hf_layout_path
+        self._hf_num_blocks_path = hf_num_blocks_path
+        self._registry = registry
+        self._layout_names = layout_names
+        self._config_classes = {name: cls for cls, name in layout_names.items()}
+
+    def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
+        block_sequence = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
+        if type(block_sequence) is FixedBlockSequenceConfig:
+            distinct_blocks = [block_sequence.block]
+            pattern_blocks = [block_sequence.block]
+        elif type(block_sequence) is PatternBlockSequenceConfig:
+            distinct_blocks = block_sequence.blocks.values()
+            pattern_blocks = [block_sequence.blocks[name] for name in block_sequence.pattern]
+        else:
+            raise NotImplementedError(
+                f"Unsupported block-sequence type {type(block_sequence).__name__} at "
+                f"{'.'.join(self.fast_llm_paths[0])}"
+            )
+        for block_config in distinct_blocks:
+            converter_class = self._registry[type(block_config.mixer)]
+            sub_hf = converter_class.export_config(block_config)
+            for key, value in sub_hf.items():
+                _safe_set_nested_dict_value(hf_out, (key,), value)
+        layout = [self._layout_names[type(block_config.mixer)] for block_config in pattern_blocks]
+        _safe_set_nested_dict_value(hf_out, self._hf_layout_path, layout)
+        _safe_set_nested_dict_value(hf_out, self._hf_num_blocks_path, block_sequence.num_blocks)
+
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
+        layout = get_nested_dict_value(hf_dict, self._hf_layout_path)
+        num_blocks = get_nested_dict_value(hf_dict, self._hf_num_blocks_path)
+        if len(layout) == 1:
+            converter_class = self._registry[self._config_classes[layout[0]]]
+            sub_fast_llm = {"block": converter_class.import_config(hf_dict), "num_blocks": num_blocks}
+        else:
+            sub_fast_llm = {
+                "type": "pattern",
+                "blocks": {
+                    layout_name: self._registry[self._config_classes[layout_name]].import_config(hf_dict)
+                    for layout_name in set(layout)
+                },
+                "pattern": layout,
+                "num_blocks": num_blocks,
+            }
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
+
+    def _consumed_hf_paths(self) -> frozenset[tuple[str, ...]]:
+        paths: set[tuple[str, ...]] = {self._hf_layout_path, self._hf_num_blocks_path}
+        for sub_class in self._registry.values():
+            paths |= sub_class._consumed_hf_paths()
+        return frozenset(paths)
+
+
 class AprielBlockConverter:
-    """Per-block dispatcher: the mixer type is encoded in the parent's ``hybrid_block_layout`` list,
-    not in a nested HF discriminator, so this dispatcher stays imperative rather than using
-    :class:`DispatchConfigConverter`. Each branch delegates to a regular declarative block converter.
+    """Per-mixer-type Apriel block-converter registries plus a weight-side dispatch helper.
+
+    ``layout_names`` maps the mixer-config classes that participate in Apriel's
+    ``hybrid_block_layout`` discriminator to their string layout names. ``_converter_classes``
+    maps every mixer-config class whose weights can appear in an Apriel checkpoint to its block
+    converter — a superset of ``layout_names`` keys that adds ``KimiDeltaAttentionConfig`` for
+    weight-only coverage. :meth:`get_converters` picks the right block converter from
+    ``_converter_classes`` by the mixer's runtime type.
     """
 
     layout_names: typing.ClassVar[dict[type[Config], str]] = {
@@ -446,25 +541,6 @@ class AprielBlockConverter:
         KimiDeltaAttentionConfig: AprielKimiDeltaAttentionBlockConverter,
         GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
     }
-    _config_classes: typing.ClassVar[dict[str, type[Config]]] = {value: key for key, value in layout_names.items()}
-
-    @classmethod
-    def import_config(cls, config: dict, layout_name: str = "t") -> dict:
-        return cls._converter_classes[cls._config_classes[layout_name]].import_config(config)
-
-    @classmethod
-    def export_config(cls, config: DecoderBlockConfig) -> dict:
-        return cls._converter_classes[type(config.mixer)].export_config(config)
-
-    @classmethod
-    @functools.cache
-    def _consumed_hf_paths(cls) -> frozenset[tuple[str, ...]]:
-        """Union of consumed HF paths across every per-mixer-type block converter — used by the parent's
-        decoder Custom to pre-claim Apriel's flat top-level keys for the HF coverage check."""
-        paths: set[tuple[str, ...]] = set()
-        for sub in cls._converter_classes.values():
-            paths |= sub._consumed_hf_paths()
-        return frozenset(paths)
 
     @classmethod
     def get_converters(
@@ -479,124 +555,55 @@ class AprielBlockConverter:
         )
 
 
-class AprielDecoderConverter:
-    """Pattern-style decoder dispatched via Apriel's ``hybrid_block_layout`` list (one entry per block).
-    Stays imperative because the layout-list shape doesn't match the declarative ``decoder.type``
-    discriminator that :class:`Apriel2BaseModelConverter` uses; a declarative form would need a
-    ``ListDispatchConfigConverter`` primitive that maps a positional list to per-position sub-converters.
-    """
-
-    block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
-
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        layout = config["hybrid_block_layout"]
-        if len(layout) == 1:
-            return {
-                "block": cls.block_converter_class.import_config(config, layout[0]),
-                "num_blocks": config["num_hidden_layers"],
-            }
-        else:
-            return {
-                "type": "pattern",
-                "blocks": {
-                    layout_name: cls.block_converter_class.import_config(config, layout_name)
-                    for layout_name in set(layout)
-                },
-                "pattern": layout,
-                "num_blocks": config["num_hidden_layers"],
-            }
-
-    @classmethod
-    def export_config(cls, config: BlockSequenceConfig) -> dict:
-        if type(config) is FixedBlockSequenceConfig:
-            block_configs = [config.block]
-            pattern_block_configs = [config.block]
-        elif type(config) is PatternBlockSequenceConfig:
-            block_configs = config.blocks.values()
-            pattern_block_configs = [config.blocks[block_name] for block_name in config.pattern]
-        else:
-            raise NotImplementedError()
-        # Each block emits non-overlapping HF keys (attention -> flat, mamba -> ssm_cfg.*,
-        # gdn/kda -> linear_attn_config.*) so safe_merge_dicts is sufficient to combine them.
-        return safe_merge_dicts(
-            *[cls.block_converter_class.export_config(block_config) for block_config in block_configs],
-            {
-                "num_hidden_layers": config.num_blocks,
-                "hybrid_block_layout": [
-                    cls.block_converter_class.layout_names[type(block_config.mixer)]
-                    for block_config in pattern_block_configs
-                ],
-            },
-        )
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: PatternBlockSequenceConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        converters = []
-        for block_index in range(config.num_blocks):
-            block_config = config.blocks[config.pattern[block_index % len(config.pattern)]]
-            converters += cls.block_converter_class.get_converters(
-                block_config,
-                f"{fast_llm_prefix}.{block_index}",
-                f"{hf_prefix}.{block_index}",
-                drop_on_export,
-            )
-        return converters
-
-
 class AprielHeadConverter(MistralHeadConverter):
     block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
 
 
 class AprielBaseModelConverter(MistralBaseModelConverter):
-    """Apriel needs the per-position hybrid layout dispatcher (:class:`AprielDecoderConverter`) instead of
-    the standard Fixed/Pattern dispatch inlined in :class:`LlamaBaseModelConverter`. The override below
-    replaces the parent's ``"decoder"`` declaration with one that delegates to Apriel's dispatcher.
+    """Section converter for the Apriel hybrid-SSM base model.
+
+    The decoder uses :class:`ListDispatchConfigConverter` driven by the format's
+    ``hybrid_block_layout`` list (per-position mixer-type discriminator); each block converter's
+    HF keys flat-merge into the parent HF root.
     """
 
     head_converter_class: typing.ClassVar[type[AprielHeadConverter]] = AprielHeadConverter
-    apriel_decoder_converter_class: typing.ClassVar[type[AprielDecoderConverter]] = AprielDecoderConverter
+    # Distinct from the parent's ``block_converter_class`` (a single ``ConfigSectionConverter``); this
+    # one holds the per-mixer-type dispatch registries that :class:`ListDispatchConfigConverter` and
+    # the weight-side loop below consume.
+    block_dispatcher_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
-        decoder_cls = cls.apriel_decoder_converter_class
-
-        def _decoder_export(parent: Config) -> dict:
-            return {(k,): v for k, v in decoder_cls.export_config(parent.decoder).items()}
-
-        def _decoder_import(hf_dict: dict) -> dict:
-            return {("decoder",): decoder_cls.import_config(hf_dict)}
-
         return {
             **super()._create_config_converters(),
-            "decoder": CustomConfigConverter(
-                fast_llm_paths=(("decoder",),),
-                # Block converter is the per-position dispatcher (:class:`AprielBlockConverter`), which
-                # unions the HF claims of every leaf-mixer's block converter.
-                hf_paths=(
-                    ("num_hidden_layers",),
-                    ("hybrid_block_layout",),
-                    *decoder_cls.block_converter_class._consumed_hf_paths(),
-                ),
-                export_fn=_decoder_export,
-                import_fn=_decoder_import,
-                fast_llm_recurses=True,
+            "decoder": ListDispatchConfigConverter(
+                fast_llm_path=("decoder",),
+                hf_layout_path=("hybrid_block_layout",),
+                hf_num_blocks_path=("num_hidden_layers",),
+                registry=cls.block_dispatcher_class._converter_classes,
+                layout_names=cls.block_dispatcher_class.layout_names,
             ),
         }
 
     @classmethod
     def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        return [
-            *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
-            *cls.apriel_decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
-            *cls.head_converter_class.get_converters(config, exported_config),
-        ]
+        decoder = config.decoder
+        if isinstance(decoder, FixedBlockSequenceConfig):
+            per_position_blocks = [decoder.block] * decoder.num_blocks
+        elif isinstance(decoder, PatternBlockSequenceConfig):
+            per_position_blocks = [decoder.blocks[block_name] for block_name in decoder.expanded_pattern]
+        else:
+            raise NotImplementedError(type(decoder).__name__)
+        converters = [*cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model")]
+        for block_index, block_config in enumerate(per_position_blocks):
+            converters += cls.block_dispatcher_class.get_converters(
+                block_config,
+                f"decoder.{block_index}",
+                f"model.layers.{block_index}",
+            )
+        converters += cls.head_converter_class.get_converters(config, exported_config)
+        return converters
 
 
 class AprielHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):

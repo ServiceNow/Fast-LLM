@@ -139,7 +139,12 @@ class LanguageModelBatch(TokenBatch):
                 input_length,
             )
         ):
-            model_input = self._get_model_input(sequence_k_past, sequence_k_past + local_input_length, config)
+            model_input = self._get_model_input(
+                sequence_k_past,
+                sequence_k_past + local_input_length,
+                config,
+                is_first_for_rank=micro_sequence_index == 0,
+            )
             model_input.phase = config.phase
 
             if config.use_image_patches:

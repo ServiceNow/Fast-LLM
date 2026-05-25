@@ -31,7 +31,8 @@ def triton_gspo_loss_backward_kernel(
 ):
     block_idx = tl.program_id(0).to(tl.int64)
 
-    # token_weight = mask_t / token_count_{s(t)}; zero for masked tokens and empty segments.
+    # token_weight = mask_t / N_d, where N_d is the labeled-token count for the doc containing t.
+    # Zero for masked tokens (mask=0) and for tokens with N_d=0 after the kernel's clamp.
     token_weight = tl.load(token_weight_ptr + block_idx).to(tl.float32)
     if token_weight == 0.0:
         if not accumulate:
@@ -90,23 +91,24 @@ def triton_gspo_loss_forward_backward(
     target: torch.Tensor,  # (*batch,)
     advantages: torch.Tensor,  # (*batch,)
     old_log_probabilities: torch.Tensor,  # (*batch,)
-    document_index: torch.Tensor,  # (*batch,) int — 0-based segment ID per token
-    num_segments: int,  # buffer size, >= document_index.max() + 1
+    document_index_zero_based: torch.Tensor,  # (*batch,) int — segment ID per token, 0-based
+    num_segments: int,  # buffer size, ≥ document_index.max() + 1
+    divisor: float,
+    num_labels_in_seq: torch.Tensor,  # (*batch,) — per-document labeled-token count broadcast per token
     grad_logits: torch.Tensor | None = None,
     grad_output: float | None = None,
-    group: torch.distributed.ProcessGroup | None = None,
-    sdp_group: torch.distributed.ProcessGroup | None = None,
+    group: torch.distributed.ProcessGroup | None = None,  # TP vocab group
+    sdp_group: torch.distributed.ProcessGroup | None = None,  # SDP group for cross-rank segment aggregation
+    sp_group: torch.distributed.ProcessGroup | None = None,  # TP group when SP is sharding the sequence
     epsilon_low: float = 0.2,
     epsilon_high: float = 0.2,
     logits_scale_factor: float = 1.0,
-    num_labels_in_seq: torch.Tensor | None = None,
-    divisor: float | None = None,
     block_size: int | None = None,
     num_warps: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
     """Triton GSPO loss. Forward fuses softmax + predicted-logit lookup; backward fuses the
     softmax chain rule with the per-token GSPO gradient factor (R_s * clip * token_weight).
-    Segment aggregation, loss, and the SDP all-reduce live in PyTorch between the two passes.
+    Segment aggregation, loss, and the SDP/SP all-reduce live in PyTorch between the two passes.
 
     See `fused_gspo_loss_forward_backward` in policy_gradient.py for the math derivation;
     this kernel produces identical outputs.
@@ -115,12 +117,11 @@ def triton_gspo_loss_forward_backward(
     assert target.is_contiguous()
     assert advantages.is_contiguous()
     assert old_log_probabilities.is_contiguous()
-    assert document_index.is_contiguous()
+    assert document_index_zero_based.is_contiguous()
+    assert num_labels_in_seq.is_contiguous()
 
     n_rows = logits.shape[:-1].numel()
     n_cols = logits.size(-1)
-    if divisor is None:
-        divisor = float(num_segments) if num_segments > 0 else 1.0
     if block_size is None:
         block_size = min(triton.next_power_of_2(n_cols), 32768)
     if num_warps is None:
@@ -151,41 +152,48 @@ def triton_gspo_loss_forward_backward(
 
     # === Segment aggregation (PyTorch) ===
     flat_target = target.reshape(-1)
-    flat_doc = document_index.reshape(-1).long()
+    flat_document_index = document_index_zero_based.reshape(-1).long()
     flat_advantages = advantages.reshape(-1).float()
     loss_mask = (flat_target >= 0).to(max_logits.dtype)
 
     new_log_probs = predicted_logits - max_logits - sum_exp_logits.log()
     log_ratio = (new_log_probs - old_log_probabilities.reshape(-1).float()) * loss_mask
 
-    new_logprobs_mean = (
-        (new_log_probs * loss_mask / num_labels_in_seq.reshape(-1).clamp(min=1).to(new_log_probs.dtype)).sum()
-        if num_labels_in_seq is not None
-        else None
+    # Per-token weight: mask / per-document label count. Pre-dividing here means each segment's
+    # contribution to the per-segment sum is already normalized, so SDP/SP all-reduce works
+    # without a separate token-count tensor.
+    flat_num_labels = num_labels_in_seq.reshape(-1).to(new_log_probs.dtype).clamp(min=1)
+    token_weight = loss_mask / flat_num_labels
+
+    mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
+        0, flat_document_index, log_ratio * token_weight
     )
+    mean_advantage_per_segment = log_ratio.new_zeros(num_segments).index_add_(
+        0, flat_document_index, flat_advantages * token_weight
+    )
+    for reduce_group in (sdp_group, sp_group):
+        if reduce_group is not None:
+            torch.distributed.all_reduce(
+                mean_log_ratio_per_segment, op=torch.distributed.ReduceOp.SUM, group=reduce_group
+            )
+            torch.distributed.all_reduce(
+                mean_advantage_per_segment, op=torch.distributed.ReduceOp.SUM, group=reduce_group
+            )
 
-    log_ratio_sum = log_ratio.new_zeros(num_segments).index_add_(0, flat_doc, log_ratio)
-    advantage_sum = log_ratio.new_zeros(num_segments).index_add_(0, flat_doc, flat_advantages * loss_mask)
-    token_count = log_ratio.new_zeros(num_segments).index_add_(0, flat_doc, loss_mask)
-    if sdp_group is not None:
-        torch.distributed.all_reduce(log_ratio_sum, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
-        torch.distributed.all_reduce(advantage_sum, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
-        torch.distributed.all_reduce(token_count, op=torch.distributed.ReduceOp.SUM, group=sdp_group)
+    segment_ratio = mean_log_ratio_per_segment.exp()
+    segment_advantage = mean_advantage_per_segment
 
-    safe_count = token_count.clamp(min=1)
-    segment_ratio = (log_ratio_sum / safe_count).exp()
-    segment_advantage = advantage_sum / safe_count
-    inv_token_count = torch.where(token_count > 0, 1.0 / safe_count, token_count.new_zeros(()))
-
-    probability_ratio = segment_ratio[flat_doc].contiguous()
-    seg_advantage = segment_advantage[flat_doc].contiguous()
-    token_weight = (loss_mask * inv_token_count[flat_doc]).contiguous()
+    probability_ratio = segment_ratio[flat_document_index].contiguous()
+    seg_advantage = segment_advantage[flat_document_index].contiguous()
+    token_weight = token_weight.contiguous()
 
     losses = -torch.min(
         probability_ratio * seg_advantage,
         torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * seg_advantage,
     )
     loss = (losses * token_weight).sum() / divisor
+
+    new_logprobs_mean = (new_log_probs * loss_mask / flat_num_labels).sum()
 
     if grad_output is None:
         return loss, grad_logits, new_logprobs_mean
