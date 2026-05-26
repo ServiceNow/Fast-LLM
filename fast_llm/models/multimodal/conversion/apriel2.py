@@ -417,7 +417,7 @@ class Apriel2MultimodalHeadConverter(Apriel2HeadConverter):
         }
 
 
-class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+class Apriel2MultimodalBaseModelConverter(HuggingFaceBaseModelConverter):
     """Top-level converter for Apriel2 multimodal. Composes the Apriel2 text base (flat-merged into the HF
     top-level dict) with an optional vision encoder (under HF key ``vision_encoder``) and an optional
     ``image_token_index`` field.

@@ -3,8 +3,6 @@
 import functools
 import typing
 
-import torch
-
 from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
@@ -13,6 +11,7 @@ from fast_llm.engine.checkpoint.external import (
     CustomConfigConverter,
     DispatchWeightConverter,
     IgnoredConfigConverter,
+    KeyValueWeightConverter,
     LinearWeightConverter,
     NestedWeightConverter,
     RenameConfigConverter,
@@ -101,9 +100,9 @@ class _Gemma4BlockNorm2WeightConverter(WeightConverter):
         )
 
 
-class _Gemma4SharedKeyValueWeightConverter(WeightConverter):
+class _Gemma4SharedKeyValueWeightConverter(KeyValueWeightConverter):
     """``shared_key_value=True`` Gemma4 attention: Fast-LLM's ``key_value`` is a single K-shaped
-    tensor (V is reused at runtime) and maps to a single HF ``k_proj`` — plain rename. Falls back to
+    tensor (V is reused at runtime) and maps to a single HF ``k_proj`` — plain rename. Delegates to
     :class:`KeyValueWeightConverter` (chunk/cat across K and V) when not shared.
     """
 
@@ -112,14 +111,12 @@ class _Gemma4SharedKeyValueWeightConverter(WeightConverter):
     def export_weight(self, weight):
         if self._config.shared_key_value:
             return weight
-        (key_value,) = weight
-        return key_value[:].chunk(2)
+        return super().export_weight(weight)
 
     def import_weight(self, weight):
         if self._config.shared_key_value:
             return weight
-        key, value = weight
-        return (torch.cat([key[:], value[:]]),)
+        return super().import_weight(weight)
 
 
 class Gemma4AttentionConverter(ConfigSectionConverter):
@@ -582,7 +579,7 @@ def _gemma4_bidirectional_import(hf_dict: dict) -> dict:
     return {}
 
 
-class Gemma4BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+class Gemma4BaseModelConverter(HuggingFaceBaseModelConverter):
     """Top-level converter for ``GPTBaseModelConfig`` ↔ Gemma 4 HF dict.
 
     Gemma 4 has several wrinkles that prevent the standard per-section decomposition used by Llama:

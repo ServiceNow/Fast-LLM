@@ -312,7 +312,7 @@ class LlavaLanguageModelConverter(MistralBaseModelConverter):
     head_converter_class: typing.ClassVar[type[LlavaHeadConverter]] = LlavaHeadConverter
 
 
-class LlavaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+class LlavaBaseModelConverter(HuggingFaceBaseModelConverter):
     """Top-level converter for Llava. Composes:
 
     * ``text_config`` HF subdict ← :class:`LlavaLanguageModelConverter` (Mistral text base).

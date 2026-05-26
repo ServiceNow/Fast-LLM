@@ -10,6 +10,7 @@ import torch
 from fast_llm.engine.base_model.config import BaseModelConfig
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, CheckpointSaveConfig, CheckpointSaveMetadataConfig
 from fast_llm.engine.checkpoint.external import (
+    ConfigSectionConverter,
     ExternalStateDictCheckpointHandler,
     WeightConverter,
     logger,
@@ -22,16 +23,12 @@ if typing.TYPE_CHECKING:
     import transformers
 
 
-class HuggingFaceBaseModelConverter:
-    @classmethod
-    @abc.abstractmethod
-    def import_config(cls, config: dict) -> dict:
-        pass
-
-    @classmethod
-    @abc.abstractmethod
-    def export_config(cls, config: BaseModelConfig) -> dict:
-        pass
+class HuggingFaceBaseModelConverter(ConfigSectionConverter):
+    """Section converter for a full HF model root. Inherits the declarative config-side machinery from
+    :class:`ConfigSectionConverter` (``import_config`` / ``export_config`` driven by
+    ``_create_config_converters``) and adds the weight-side ``get_converters`` aggregation that the
+    enclosing :class:`HuggingfaceStateDictCheckpointHandler` invokes.
+    """
 
     @classmethod
     def get_converters(cls, config: BaseModelConfig) -> list[WeightConverter]:
@@ -41,7 +38,7 @@ class HuggingFaceBaseModelConverter:
         :class:`LlamaBaseModelConverter` splices the head's weights separately so MTP-Llama's
         per-prediction-head fan-out has access to the full base-model config.
         """
-        return cls.emit_weight_converters(config, "", "")  # type: ignore[attr-defined]
+        return cls.emit_weight_converters(config, "", "")
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):

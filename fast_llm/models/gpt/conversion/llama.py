@@ -444,7 +444,7 @@ class LlamaHeadConverter(ConfigSectionConverter):
         return cls.emit_weight_converters(config.head, "head", "", root_config=config)
 
 
-class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+class LlamaBaseModelConverter(HuggingFaceBaseModelConverter):
     """Top-level converter for ``GPTBaseModelConfig`` ↔ Llama HF dict.
 
     Subclasses (Mistral, Qwen2, Mixtral, MTP-Llama, …) override ``block_converter_class`` to plug their

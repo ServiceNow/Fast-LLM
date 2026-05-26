@@ -564,6 +564,11 @@ class ConfigSectionConverter(abc.ABC):
     ancestor (typically via :class:`CustomConfigConverter` with ``fast_llm_recurses=True``).
     :meth:`_create_config_converters` defaults to no declarations and :meth:`check_architecture_coverage`
     short-circuits, so the section does not need to claim its own architecture leaves.
+
+    Sections whose ancestor isn't a recursive :class:`CustomConfigConverter` (e.g. Apriel/Apriel2's
+    type-dispatched blocks) handle the same situation through their own structure — the dispatching
+    primitive (Nested/Dispatch/TypedDictContainer) claims the subtree recursively — and don't need this
+    flag.
     """
 
     @classmethod

@@ -676,7 +676,7 @@ class Apriel2HeadConverter(ConfigSectionConverter):
         }
 
 
-class Apriel2BaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+class Apriel2BaseModelConverter(HuggingFaceBaseModelConverter):
     fast_llm_config_class = GPTBaseModelConfig
 
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
