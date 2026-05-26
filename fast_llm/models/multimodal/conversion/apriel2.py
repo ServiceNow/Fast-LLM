@@ -1,17 +1,24 @@
 """Apriel2 multimodal checkpoint format converter."""
 
+import functools
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    BlockSequenceWeightConverter,
     ConfigSectionConverter,
     ConstantExportConfigConverter,
     ConstantImportConfigConverter,
     CustomConfigConverter,
     IgnoredConfigConverter,
+    LinearWeightConverter,
     NestedConfigConverter,
+    NestedWeightConverter,
     OptionalConfigConverter,
+    PatchEmbeddingWeightConverter,
     RenameConfigConverter,
+    SelfBlockSequenceWeightConverter,
+    TransposeSplitWeightConverter,
     WeightConverter,
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
@@ -22,27 +29,18 @@ from fast_llm.layers.block.config import FixedBlockSequenceConfig
 from fast_llm.layers.common.normalization.config import RMSNormalizationConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
-from fast_llm.layers.language_model.config import LanguageModelHeadConfig
 from fast_llm.layers.vision.config import PatchEmbeddingsConfig, VisionEncoderConfig
 from fast_llm.models.gpt.conversion.apriel2 import (
     Apriel2BaseModelConverter,
+    Apriel2BlockConverter,
     Apriel2HeadConverter,
     Apriel2MLPConverter,
     Apriel2RMSNormConverter,
-    get_apriel2_decoder_converter,
 )
-from fast_llm.models.gpt.conversion.llama import (
-    LlamaEmbeddingsConverter,
-    LlamaNormalizationConverter,
-    get_parameter_converter,
-    get_weight_and_bias_converters,
-)
+from fast_llm.models.gpt.conversion.llama import LlamaEmbeddingsConverter, LlamaNormalizationConverter
 from fast_llm.models.multimodal.config import MultiModalBaseModelConfig, MultiModalModelConfig
 from fast_llm.models.multimodal.conversion.config import Apriel2CheckpointFormat
-from fast_llm.models.multimodal.conversion.llava import (
-    PatchEmbeddingWeightConverter,
-    PixtralAttentionConverter,
-)
+from fast_llm.models.multimodal.conversion.llava import PixtralAttentionConverter
 from fast_llm.models.multimodal.model import MultiModalModel
 from fast_llm.utils import Assert
 
@@ -198,29 +196,18 @@ class Apriel2VisionBlockConverter(ConfigSectionConverter):
         Assert.custom(lambda v: not v, config.output_scale.enabled)
 
     @classmethod
-    def get_converters(
-        cls, config: DecoderBlockConfig, fast_llm_prefix: str, hf_prefix: str, drop_on_export: bool = False
-    ) -> list[WeightConverter]:
-        return [
-            *cls.mixer_converter_class.get_converters(
-                config.mixer, f"{fast_llm_prefix}.mixer", f"{hf_prefix}.{cls.hf_mixer_name}", drop_on_export
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "mixer": NestedWeightConverter("mixer", cls.hf_mixer_name, cls.mixer_converter_class),
+            "mlp": NestedWeightConverter("mlp", cls.hf_mlp_name, cls.mlp_converter_class),
+            "norm_1": NestedWeightConverter(
+                "norm_1", cls.hf_norm_1_name, LlamaNormalizationConverter, config_attr="normalization"
             ),
-            *cls.mlp_converter_class.get_converters(
-                config.mlp, f"{fast_llm_prefix}.mlp", f"{hf_prefix}.{cls.hf_mlp_name}", drop_on_export
+            "norm_2": NestedWeightConverter(
+                "norm_2", cls.hf_norm_2_name, LlamaNormalizationConverter, config_attr="normalization"
             ),
-            *LlamaNormalizationConverter.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_1",
-                f"{hf_prefix}.{cls.hf_norm_1_name}",
-                drop_on_export,
-            ),
-            *LlamaNormalizationConverter.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_2",
-                f"{hf_prefix}.{cls.hf_norm_2_name}",
-                drop_on_export,
-            ),
-        ]
+        }
 
 
 class Apriel2VisionEncoderConverter(ConfigSectionConverter):
@@ -264,22 +251,11 @@ class Apriel2VisionEncoderConverter(ConfigSectionConverter):
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: FixedBlockSequenceConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        converters: list[WeightConverter] = []
-        for block_index in range(config.num_blocks):
-            converters += cls.block_converter_class.get_converters(
-                config.block,
-                f"{fast_llm_prefix}.{block_index}",
-                f"{hf_prefix}.{block_index}",
-                drop_on_export,
-            )
-        return converters
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "blocks": SelfBlockSequenceWeightConverter(cls.block_converter_class),
+        }
 
 
 class Apriel2EmbeddingsConverter(ConfigSectionConverter):
@@ -322,21 +298,19 @@ class Apriel2EmbeddingsConverter(ConfigSectionConverter):
         Assert.incl(config.patch_embeddings.bias.enabled, (None, False))
 
     @classmethod
-    def get_converters(
-        cls, config: PatchEmbeddingsConfig, fast_llm_prefix: str, hf_prefix: str
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.patch_embeddings",
-                f"{hf_prefix}.patch_embeddings",
-                False,
-                PatchEmbeddingWeightConverter,
-                config,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "patch_embeddings": LinearWeightConverter(
+                "patch_embeddings",
+                "patch_embeddings",
+                transform=PatchEmbeddingWeightConverter,
+                bias_fn=False,
             ),
-            *LlamaNormalizationConverter.get_converters(
-                config.normalization, f"{fast_llm_prefix}.normalization", f"{hf_prefix}.normalization"
+            "normalization": NestedWeightConverter(
+                "normalization", "normalization", LlamaNormalizationConverter, config_attr="normalization"
             ),
-        ]
+        }
 
 
 class Apriel2VisionAdapterConverter(Apriel2VisionMLPConverter):
@@ -353,27 +327,12 @@ class Apriel2VisionAdapterConverter(Apriel2VisionMLPConverter):
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
 
     @classmethod
-    def get_converters(
-        cls, config: MLPConfig, fast_llm_prefix: str, hf_prefix: str, drop_on_export: bool = False
-    ) -> list[WeightConverter]:
-        from fast_llm.models.gpt.conversion.llama import MLPLayer2Converter
-
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_1",
-                f"{hf_prefix}.linear_1",
-                config.add_linear_biases,
-                WeightConverter,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_2",
-                f"{hf_prefix}.linear_2",
-                config.add_linear_biases,
-                MLPLayer2Converter,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "layer_1": LinearWeightConverter("layer_1", "linear_1"),
+            "layer_2": LinearWeightConverter("layer_2", "linear_2", transform=TransposeSplitWeightConverter),
+        }
 
 
 class Apriel2VisionModelConverter(ConfigSectionConverter):
@@ -427,44 +386,23 @@ class Apriel2VisionModelConverter(ConfigSectionConverter):
         return {}
 
     @classmethod
-    def get_converters(cls, config: VisionEncoderConfig) -> list[WeightConverter]:
-        return [
-            *cls.embeddings_converter_class.get_converters(
-                config.embeddings, "vision_encoder.embeddings", cls.hf_embeddings_prefix
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # The vision converter normally lives under a single ``vision_encoder`` HF prefix, but Apriel2's
+        # state-dict places each piece at distinct absolute paths (``model.vision_encoder.{embeddings,
+        # encoder.blocks, adapter}``). Use ``NestedWeightConverter`` with the absolute prefix on each entry;
+        # the parent's :class:`NestedWeightConverter("vision_encoder", "", ...)` passes ``hf_prefix=""``,
+        # so the absolute prefix lands as-is.
+        return {
+            "embeddings": NestedWeightConverter(
+                "embeddings", cls.hf_embeddings_prefix, cls.embeddings_converter_class
             ),
-            *cls.encoder_converter_class.get_converters(
-                config.encoder, "vision_encoder.encoder", cls.hf_encoder_prefix
-            ),
-            *cls.vision_adapter_converter_class.get_converters(
-                config.adapter, "vision_encoder.adapter", cls.hf_adapter_prefix
-            ),
-        ]
+            "encoder": NestedWeightConverter("encoder", cls.hf_encoder_prefix, cls.encoder_converter_class),
+            "adapter": NestedWeightConverter("adapter", cls.hf_adapter_prefix, cls.vision_adapter_converter_class),
+        }
 
 
-class Apriel2MultimodalHeadConverter(Apriel2HeadConverter):
-    @classmethod
-    def get_converters(
-        cls,
-        config: LanguageModelHeadConfig,
-        exported_config: dict,
-        fast_llm_prefix: str,
-    ) -> list[WeightConverter]:
-        return [
-            *cls.normalization_converter_class.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.final_norm",
-                "model.norm",
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.output_weights",
-                "lm_head.weight",
-                drop_on_import=exported_config.get("tie_word_embeddings", False),
-                drop_on_export=exported_config.get("tie_word_embeddings", False),
-            ),
-        ]
-
-
-class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+class Apriel2MultimodalBaseModelConverter(HuggingFaceBaseModelConverter):
     """Top-level converter for Apriel2 multimodal. Composes the Apriel2 text base (flat-merged into the HF
     top-level dict) with an optional vision encoder (under HF key ``vision_encoder``) and an optional
     ``image_token_index`` field.
@@ -479,7 +417,8 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
     text_base_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BaseModelConverter
     vision_model_converter_class: typing.ClassVar[type[Apriel2VisionModelConverter]] = Apriel2VisionModelConverter
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
-    head_converter_class: typing.ClassVar[type[Apriel2MultimodalHeadConverter]] = Apriel2MultimodalHeadConverter
+    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
+    head_converter_class: typing.ClassVar[type[Apriel2HeadConverter]] = Apriel2HeadConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
@@ -529,18 +468,19 @@ class Apriel2MultimodalBaseModelConverter(ConfigSectionConverter, HuggingFaceBas
         }
 
     @classmethod
-    def get_converters(cls, config: MultiModalBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        converters: list[WeightConverter] = []
-        if config.vision_encoder is not None:
-            converters.extend(cls.vision_model_converter_class.get_converters(config.vision_encoder))
-        converters.extend(cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"))
-        converters.extend(
-            get_apriel2_decoder_converter(config.decoder).get_converters(
-                config.decoder, "decoder", "model.decoder.blocks"
-            )
-        )
-        converters.extend(cls.head_converter_class.get_converters(config.head, exported_config, "head"))
-        return converters
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            # Vision encoder is optional — ``optional=True`` skips the recursion when
+            # ``config.vision_encoder is None`` (text-only checkpoints).
+            "vision_encoder": NestedWeightConverter(
+                "vision_encoder", "", cls.vision_model_converter_class, optional=True
+            ),
+            # ``embeddings`` flat-merges into ``model``; vision_encoder writes to its own absolute prefix.
+            "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
+            "decoder": BlockSequenceWeightConverter("decoder", "model.decoder.blocks", cls.block_converter_class),
+            "head": NestedWeightConverter("head", "", cls.head_converter_class),
+        }
 
 
 class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler):
@@ -586,7 +526,3 @@ class Apriel2HuggingfaceCheckpointHandler(HuggingfaceStateDictCheckpointHandler)
     def _import_config(cls, config: dict[str, typing.Any]) -> dict[str, typing.Any]:
         cls._check_hf_coverage(config)
         return {"base_model": cls.base_model_converter_class.import_config(config)}
-
-    @classmethod
-    def _get_weight_converters(cls, config: MultiModalModelConfig, export_config: dict) -> list[WeightConverter]:
-        return cls.base_model_converter_class.get_converters(config.base_model, export_config)

@@ -1,3 +1,4 @@
+import functools
 import typing
 
 from fast_llm.engine.checkpoint.config import CheckpointFormat
@@ -5,6 +6,8 @@ from fast_llm.engine.checkpoint.external import (
     ConstantImportConfigConverter,
     IgnoredConfigConverter,
     ImportOnlyConfigConverter,
+    KeyValueWeightConverter,
+    LinearWeightConverter,
     WeightConverter,
 )
 from fast_llm.layers.attention.config import AttentionConfig
@@ -12,14 +15,11 @@ from fast_llm.layers.block.config import FixedBlockSequenceConfig
 from fast_llm.models.gpt.config import GPTBaseModelConfig
 from fast_llm.models.gpt.conversion.config import Qwen2CheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
-    KeyValueWeightConverter,
     LlamaAttentionConverter,
     LlamaBaseModelConverter,
     LlamaBlockConverter,
-    LlamaHeadConverter,
     LlamaHuggingfaceCheckpointHandler,
     LlamaMLPConverter,
-    get_weight_and_bias_converters,
 )
 from fast_llm.utils import Assert, div
 
@@ -71,36 +71,18 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
             Assert.is_(config.value_layer.bias.enabled, True)
             Assert.incl(config.dense_layer.bias.enabled, (None, False))
 
+    # Qwen2 hardcodes Q/K/V biases on, dense bias off — independent of ``add_linear_biases`` (which is
+    # pinned to False on the config side because there's no HF ``attention_bias`` field).
     @classmethod
-    def get_converters(
-        cls,
-        config: AttentionConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.query",
-                f"{hf_prefix}.q_proj",
-                True,
-                drop_on_export=drop_on_export,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "query": LinearWeightConverter("query", "q_proj", bias_fn=True),
+            "key_value": LinearWeightConverter(
+                "key_value", ("k_proj", "v_proj"), transform=KeyValueWeightConverter, bias_fn=True
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.key_value",
-                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
-                True,
-                KeyValueWeightConverter,
-                config,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.dense",
-                f"{hf_prefix}.o_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+            "dense": LinearWeightConverter("dense", "o_proj", bias_fn=False),
+        }
 
 
 class Qwen2MLPConverter(LlamaMLPConverter):
@@ -118,10 +100,6 @@ class Qwen2BlockConverter(LlamaBlockConverter):
     mlp_converter_class: typing.ClassVar[type[Qwen2MLPConverter]] = Qwen2MLPConverter
 
 
-class Qwen2HeadConverter(LlamaHeadConverter):
-    block_converter_class: typing.ClassVar[type[Qwen2BlockConverter]] = Qwen2BlockConverter
-
-
 def _qwen2_mrope_guard_import(hf_dict: dict) -> dict:
     if hf_dict.get("use_mrope") is True:
         raise NotImplementedError("MRoPE (use_mrope=True) is not supported by the Qwen2 converter")
@@ -130,7 +108,6 @@ def _qwen2_mrope_guard_import(hf_dict: dict) -> dict:
 
 class Qwen2BaseModelConverter(LlamaBaseModelConverter):
     block_converter_class: typing.ClassVar[type[Qwen2BlockConverter]] = Qwen2BlockConverter
-    head_converter_class: typing.ClassVar[type[Qwen2HeadConverter]] = Qwen2HeadConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
