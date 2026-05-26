@@ -57,11 +57,7 @@ def assert_no_peft(config: GPTBaseModelConfig) -> None:
 
 
 def effective_bias(layer_config: AffineLinearConfig, default: bool) -> bool:
-    """Resolve a layer's effective bias flag: explicit ``bias.enabled`` if set, else the parent default.
-
-    Used by Apriel and Apriel2 config-side ``CustomConfigConverter`` export_fns (which need to translate
-    a per-layer override into an HF-side bias flag) and by their ``LinearWeightConverter.bias_fn`` lambdas.
-    """
+    """Resolve a layer's effective bias flag: explicit ``bias.enabled`` if set, else the parent default."""
     return default if layer_config.bias.enabled is None else layer_config.bias.enabled
 
 
@@ -363,9 +359,7 @@ class LlamaDecoderConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # The section config IS a ``FixedBlockSequenceConfig`` (no parent attribute holding it). Used by
-        # Pixtral's vision encoder and Apriel2's vision encoder; text formats inline the dispatch at the
-        # base-model converter instead.
+        # The section config IS a ``FixedBlockSequenceConfig`` (no parent attribute holding it).
         return {
             "blocks": SelfBlockSequenceWeightConverter(cls.block_converter_class),
         }
@@ -437,9 +431,9 @@ class LlamaHeadConverter(ConfigSectionConverter):
         config: GPTBaseModelConfig,
     ) -> list[WeightConverter]:
         """Aggregator entry-point: the base-model converter passes the full :class:`GPTBaseModelConfig`
-        so subclasses (e.g. MTP-Llama) can read ``config.decoder.last_block_config`` /
-        ``config.head.prediction_heads`` when extending the head's weights. Tied-embedding handling
-        lives on :class:`OutputProjectionWeightConverter` and reads ``root_config.tied_embedding_weight``.
+        so subclasses extending the head can read sibling sections (e.g. the decoder) when needed.
+        Tied-embedding handling lives on :class:`OutputProjectionWeightConverter` and reads
+        ``root_config.tied_embedding_weight``.
         """
         return cls.emit_weight_converters(config.head, "head", "", root_config=config)
 
@@ -503,8 +497,8 @@ class LlamaBaseModelConverter(HuggingFaceBaseModelConverter):
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         # ``head`` is added at the aggregator level (in :meth:`get_converters`) because the head
-        # converter takes the full base-model config so subclasses can extend it (e.g. MTP-Llama
-        # fans out per-prediction-head blocks and norms).
+        # converter takes the full base-model config so subclasses extending the head can read
+        # sibling sections.
         return {
             "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
             "decoder": BlockSequenceWeightConverter("decoder", "model.layers", cls.block_converter_class),

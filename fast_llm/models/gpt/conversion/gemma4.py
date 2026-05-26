@@ -3,6 +3,8 @@
 import functools
 import typing
 
+import torch
+
 from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
@@ -41,6 +43,7 @@ from fast_llm.models.gpt.conversion.llama import (
     LlamaNormalizationConverter,
 )
 from fast_llm.models.gpt.model import GPTModel
+from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, safe_merge_dicts
 
 _SLIDING_ATTENTION = "sliding_attention"
@@ -89,7 +92,14 @@ class _Gemma4BlockNorm2WeightConverter(WeightConverter):
     def __init__(self) -> None:
         super().__init__((), ())
 
-    def _emit(self, config, fast_llm_prefix, hf_prefix, *, root_config):
+    def _emit(
+        self,
+        config: Config,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        *,
+        root_config: Config,
+    ) -> list[WeightConverter]:
         if isinstance(config.mlp, HybridMoEMLPConfig):
             return []
         return LlamaNormalizationConverter.emit_weight_converters(
@@ -108,12 +118,16 @@ class _Gemma4SharedKeyValueWeightConverter(KeyValueWeightConverter):
 
     _config: AttentionConfig
 
-    def export_weight(self, weight):
+    def export_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         if self._config.shared_key_value:
             return weight
         return super().export_weight(weight)
 
-    def import_weight(self, weight):
+    def import_weight(
+        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
+    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
         if self._config.shared_key_value:
             return weight
         return super().import_weight(weight)

@@ -34,9 +34,8 @@ class HuggingFaceBaseModelConverter(ConfigSectionConverter):
     def get_converters(cls, config: BaseModelConfig) -> list[WeightConverter]:
         """Default: walk the section's weight declarations from the root.
 
-        Subclasses with constructs that don't fit the standard declaration walk override — e.g.
-        :class:`LlamaBaseModelConverter` splices the head's weights separately so MTP-Llama's
-        per-prediction-head fan-out has access to the full base-model config.
+        Subclasses override when a section needs cross-section state from the full base-model config
+        (typically when an extension point on the head must read from a sibling section).
         """
         return cls.emit_weight_converters(config, "", "")
 

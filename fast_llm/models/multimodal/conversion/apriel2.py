@@ -254,8 +254,6 @@ class Apriel2VisionEncoderConverter(ConfigSectionConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # The section config IS the FixedBlockSequenceConfig — SelfBlockSequenceWeightConverter reads
-        # the section config directly instead of via ``getattr``.
         return {
             "blocks": SelfBlockSequenceWeightConverter(cls.block_converter_class),
         }

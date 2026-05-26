@@ -52,7 +52,6 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
         config: GPTBaseModelConfig,
     ) -> list[WeightConverter]:
         converters = list(cls.emit_weight_converters(config.head, "head", "", root_config=config))
-        # Append the MTP fan-out: one block + one norm per extra prediction head.
         for prediction_distance in range(2, config.head.prediction_heads + 1):
             converters += cls.block_converter_class.emit_weight_converters(
                 config.decoder.last_block_config,

@@ -774,7 +774,7 @@ class ConfigSectionConverter(abc.ABC):
 
 
 def prepend_prefix(prefix: str, names: tuple[str, ...]) -> tuple[str, ...]:
-    """Prepend ``prefix`` to each name. Empty ``prefix`` is a no-op; empty ``names`` (drop side) stays empty."""
+    """Prepend ``prefix`` to each name. Empty ``prefix`` is a no-op; empty ``names`` stays empty."""
     if not prefix:
         return names
     return tuple(f"{prefix}.{name}" for name in names)
@@ -831,8 +831,9 @@ class WeightConverter:
     ) -> list["WeightConverter"]:
         """Return a fully-qualified emitted copy of this leaf.
 
-        Subclasses that capture extra construction state (e.g. :class:`KeyValueWeightConverter` stashing
-        an :class:`AttentionConfig`) override this hook to pass that state into the emitted copy.
+        Subclasses that capture extra construction state (e.g. :class:`NestedWeightConverter` /
+        :class:`LinearWeightConverter` holding a sub-converter class or a callable prefix) override
+        this hook to pass that state through to the emitted output.
         """
         return [
             type(self)(
@@ -844,6 +845,8 @@ class WeightConverter:
 
 
 class SplitWeightConverter(WeightConverter):
+    """Split a merged tensor evenly across the listed export names; concatenate on import."""
+
     def export_weight(
         self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
     ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
@@ -859,9 +862,8 @@ class SplitWeightConverter(WeightConverter):
 class TransposeSplitWeightConverter(WeightConverter):
     """Split a merged weight across the last dim with an additional transpose.
 
-    Equivalent to :class:`SplitWeightConverter` for non-gated MLPs (trivial split) and for 1-D biases
-    (trivial transpose); the real behaviour kicks in for the down-projection of a gated MLP where HF
-    stores the weight in transposed orientation.
+    The transpose only matters when the source tensor's last two dims differ; for 1-D biases and the
+    trivial single-name case it degenerates to a passthrough split.
     """
 
     def export_weight(
@@ -881,7 +883,7 @@ class KeyValueWeightConverter(WeightConverter):
     """Pack/unpack a fused key-value tensor across the two HF names.
 
     Fast-LLM packs key/value as a single concatenated tensor; HF stores them as two siblings
-    (``k_proj`` / ``v_proj``). Identity for bias because biases are concatenated the same way.
+    (``k_proj`` / ``v_proj``). The same split applies to the 1-D bias.
     """
 
     def export_weight(
@@ -954,17 +956,16 @@ class NestedWeightConverter(WeightConverter):
 
     The sub-section's config is read by chained ``getattr`` from ``config`` via ``config_attr``:
 
-    * ``None`` (default) — single attribute named after ``fast_llm_prefix`` (e.g. ``getattr(config, "mixer")``).
-    * single string — single attribute (covers a block's ``normalization`` config feeding two state-dict
-      prefixes ``norm_1`` / ``norm_2``).
-    * tuple of strings — chained descent (e.g. ``("dense", "pre_norm")`` ↦ ``config.dense.pre_norm`` for
-      Gemma4's hybrid-MoE inner norms).
+    * ``None`` (default) — single attribute named after ``fast_llm_prefix``.
+    * single string — single attribute (e.g. one ``normalization`` config feeding two state-dict
+      prefixes).
+    * tuple of strings — chained descent (e.g. ``("dense", "pre_norm")`` ↦ ``config.dense.pre_norm``).
 
     The walker descends into ``sub_converter_class._create_weight_converters()`` with extended prefixes.
     Mirrors :class:`NestedConfigConverter` on the config side.
 
     ``optional=True`` skips the recursion when the resolved sub-config is ``None`` — for optional
-    architecture sections like Llava's ``vision_encoder``.
+    architecture sub-sections.
     """
 
     def __init__(
@@ -1073,7 +1074,8 @@ class DispatchBlockSequenceWeightConverter(WeightConverter):
     """Fan a per-position-dispatched block converter across every position in a block sequence.
 
     Each position's block config is matched against ``dispatch_registry`` keys by its mixer type
-    (``type(block.mixer)``) — Apriel's hybrid-block dispatch.
+    (``type(block.mixer)``), allowing hybrid sequences where different layers use different block
+    converters.
     """
 
     def __init__(
@@ -1116,8 +1118,7 @@ class SelfBlockSequenceWeightConverter(WeightConverter):
     """Fan a single block converter across the section config when *the section IS the block sequence*.
 
     Used when the declaring section's ``fast_llm_config_class`` is itself a ``FixedBlockSequenceConfig``
-    or ``PatternBlockSequenceConfig`` (e.g. ``LlamaDecoderConverter`` plugged into the Pixtral vision
-    encoder; Apriel2 and Gemma4's decoders). Weights land directly under the section's outer prefixes.
+    or ``PatternBlockSequenceConfig``. Weights land directly under the section's outer prefixes.
     """
 
     def __init__(self, block_converter_class: type["ConfigSectionConverter"]):
@@ -1149,11 +1150,10 @@ class DispatchWeightConverter(WeightConverter):
     Reads ``getattr(config, config_attr)`` (defaults to ``fast_llm_prefix``), looks up its type in
     ``registry``, and recurses into that ConfigSectionConverter with the standard extended prefixes.
     Mirrors :class:`DispatchConfigConverter` on the config side. Used when a single attribute holds one
-    of several alternative configs (e.g. Apriel2's block ``mixer`` may be attention/mamba/gdn/kda/stochastic;
-    its ``normalization`` may be RMS/Layer/None).
+    of several alternative configs.
 
-    ``hf_prefix_overrides`` lets individual branches replace the shared ``hf_prefix`` (e.g. Gemma4's
-    hybrid MoE flat-merges into the block root while dense MLP lands under ``mlp.<...>``).
+    ``hf_prefix_overrides`` lets individual branches replace the shared ``hf_prefix`` (e.g. when one
+    branch flat-merges into the parent root while siblings nest under a sub-prefix).
     """
 
     def __init__(
@@ -1197,8 +1197,7 @@ class TypedDictWeightConverter(WeightConverter):
 
     For each entry, looks up its type in ``registry`` and recurses into that converter with names
     ``{fast_llm_prefix}.{key}`` / ``{hf_prefix}.{key}``. Mirrors
-    :class:`TypedDictContainerConfigConverter` on the config side. Used for collections of named sub-
-    configs (e.g. Apriel2 StochasticMixer's ``mixers`` dict).
+    :class:`TypedDictContainerConfigConverter` on the config side.
     """
 
     def __init__(
@@ -1242,13 +1241,13 @@ class LinearWeightConverter(WeightConverter):
     """Bundle a linear layer's ``.weight`` and (conditionally) ``.bias`` declarations into one entry.
 
     Bias presence is resolved at emission time from the live section config: ``bias_fn`` is either a bool
-    literal (always / never) or a callable returning a bool. The default reads ``config.add_linear_biases`` —
-    the shared flag every Llama-style attention/MLP section carries. Sections with per-layer overrides (e.g.
-    Apriel Mamba's ``dt_layer`` / ``convolution_layer``) pass a lambda that resolves the override.
+    literal (always / never) or a callable returning a bool. The default reads
+    ``config.add_linear_biases``; sections with per-layer overrides pass a lambda that resolves the
+    override.
 
-    ``transform`` selects the leaf class for both weight and bias: :class:`WeightConverter` for plain rename
-    (the default), :class:`SplitWeightConverter` for fused → split, :class:`KeyValueWeightConverter` for
-    fused KV → separate K/V, :class:`TransposeSplitWeightConverter` for MLP down-projection.
+    ``transform`` selects the leaf class for both weight and bias: :class:`WeightConverter` for plain
+    rename (the default), :class:`SplitWeightConverter` for fused → split, :class:`KeyValueWeightConverter`
+    for fused KV → separate K/V, :class:`TransposeSplitWeightConverter` for a transposed split.
     """
 
     def __init__(
@@ -1261,8 +1260,8 @@ class LinearWeightConverter(WeightConverter):
     ):
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
-        # ``hf_prefix`` may be a callable (e.g. Mixtral's ``experts.{i}.w1``-style fan-out where the
-        # expert count comes from the live config).
+        # ``hf_prefix`` may be a callable when the HF names depend on a runtime-known shape (e.g. a
+        # count read from the live section config); resolved at emission time.
         self._hf_prefix = hf_prefix
         self._transform = transform
         self._bias_fn = bias_fn

@@ -425,8 +425,6 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # Override the parent's flat ``decoder`` entry with a per-position dispatch version that picks
-        # the right block converter from the dispatcher's registry based on the mixer's runtime type.
         return {
             **super()._create_weight_converters(),
             "decoder": DispatchBlockSequenceWeightConverter(
