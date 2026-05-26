@@ -406,7 +406,7 @@ class AprielBaseModelConverter(MistralBaseModelConverter):
 
     # Distinct from the parent's ``block_converter_class`` (a single ``ConfigSectionConverter``); this
     # one holds the per-mixer-type dispatch registries that :class:`ListDispatchConfigConverter` and
-    # the weight-side loop below consume.
+    # :class:`DispatchBlockSequenceWeightConverter` consume.
     block_dispatcher_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
 
     @classmethod

@@ -1260,8 +1260,6 @@ class LinearWeightConverter(WeightConverter):
     ):
         super().__init__((), ())
         self._fast_llm_prefix = fast_llm_prefix
-        # ``hf_prefix`` may be a callable when the HF names depend on a runtime-known shape (e.g. a
-        # count read from the live section config); resolved at emission time.
         self._hf_prefix = hf_prefix
         self._transform = transform
         self._bias_fn = bias_fn

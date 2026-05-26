@@ -15,7 +15,6 @@ from fast_llm.engine.checkpoint.external import (
     NestedConfigConverter,
     NestedWeightConverter,
     OptionalConfigConverter,
-    OutputProjectionWeightConverter,
     PatchEmbeddingWeightConverter,
     RenameConfigConverter,
     SelfBlockSequenceWeightConverter,
@@ -403,18 +402,6 @@ class Apriel2VisionModelConverter(ConfigSectionConverter):
         }
 
 
-class Apriel2MultimodalHeadConverter(Apriel2HeadConverter):
-    @classmethod
-    @functools.cache
-    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        return {
-            "final_norm": NestedWeightConverter(
-                "final_norm", "model.norm", cls.normalization_converter_class, config_attr="normalization"
-            ),
-            "output_weights": OutputProjectionWeightConverter("output_weights", "lm_head.weight"),
-        }
-
-
 class Apriel2MultimodalBaseModelConverter(HuggingFaceBaseModelConverter):
     """Top-level converter for Apriel2 multimodal. Composes the Apriel2 text base (flat-merged into the HF
     top-level dict) with an optional vision encoder (under HF key ``vision_encoder``) and an optional
@@ -431,7 +418,7 @@ class Apriel2MultimodalBaseModelConverter(HuggingFaceBaseModelConverter):
     vision_model_converter_class: typing.ClassVar[type[Apriel2VisionModelConverter]] = Apriel2VisionModelConverter
     embeddings_converter_class: typing.ClassVar[type[LlamaEmbeddingsConverter]] = LlamaEmbeddingsConverter
     block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = Apriel2BlockConverter
-    head_converter_class: typing.ClassVar[type[Apriel2MultimodalHeadConverter]] = Apriel2MultimodalHeadConverter
+    head_converter_class: typing.ClassVar[type[Apriel2HeadConverter]] = Apriel2HeadConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:

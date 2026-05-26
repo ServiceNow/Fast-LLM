@@ -77,9 +77,9 @@ class Qwen2AttentionConverter(LlamaAttentionConverter):
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
         return {
-            "query": LinearWeightConverter("query", "q_proj", bias_fn=lambda c: True),
+            "query": LinearWeightConverter("query", "q_proj", bias_fn=True),
             "key_value": LinearWeightConverter(
-                "key_value", ("k_proj", "v_proj"), transform=KeyValueWeightConverter, bias_fn=lambda c: True
+                "key_value", ("k_proj", "v_proj"), transform=KeyValueWeightConverter, bias_fn=True
             ),
             "dense": LinearWeightConverter("dense", "o_proj", bias_fn=False),
         }
