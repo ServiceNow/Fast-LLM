@@ -40,6 +40,14 @@ class BlockKwargs:
     # TODO: These are confusing
     sequence_length = "sequence_length"
     lengths = "lengths"
+    document_index_q = "document_index_q"
+    document_index_k = "document_index_k"
+    # Global counterpart of `document_index_q` (1-based, consistent across SDP/SP ranks).
+    # GSPO consumes this so per-segment buffers can be all-reduced across ranks.
+    global_document_index_q = "global_document_index_q"
+    # Number of documents in this DP rank's batch (same on all SDP/SP ranks within a DP rank).
+    # Distinct from `num_documents_in_batch`, which is the global count summed across DP.
+    num_documents_in_sequence = "num_documents_in_sequence"
     # TODO: Belongs elsewhere?
     grad_output = "grad_output"
     activation_distillation_targets = "activation_distillation_targets"

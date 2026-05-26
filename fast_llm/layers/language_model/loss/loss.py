@@ -39,6 +39,8 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         self._vocab_parallel = distributed_config.tensor_parallel > 1 and vocab_parallel
         self._sequence_parallel = distributed_config.sequence_tensor_parallel and not self._vocab_parallel
         self._parallel_dim = distributed_config.get_distributed_dim(DistributedDimNames.tensor)
+        self._sequence_data_dim = distributed_config.get_distributed_dim(DistributedDimNames.sequence_data)
+        self._sequence_data_active = self._sequence_data_dim.size > 1
 
     def forward_backward(
         self,
