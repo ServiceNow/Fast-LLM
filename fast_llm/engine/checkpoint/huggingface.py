@@ -23,30 +23,26 @@ if typing.TYPE_CHECKING:
     import transformers
 
 
-class HuggingFaceBaseModelConverter:
-    @classmethod
-    @abc.abstractmethod
-    def import_config(cls, config: dict) -> dict:
-        pass
+class HuggingFaceBaseModelConverter(ConfigSectionConverter):
+    """Section converter for a full HF model root. Inherits the declarative config-side machinery from
+    :class:`ConfigSectionConverter` (``import_config`` / ``export_config`` driven by
+    ``_create_config_converters``) and adds the weight-side ``get_converters`` aggregation that the
+    enclosing :class:`HuggingfaceStateDictCheckpointHandler` invokes.
+    """
 
     @classmethod
-    @abc.abstractmethod
-    def export_config(cls, config: BaseModelConfig) -> dict:
-        pass
+    def get_converters(cls, config: BaseModelConfig) -> list[WeightConverter]:
+        """Default: walk the section's weight declarations from the root.
 
-    @classmethod
-    @abc.abstractmethod
-    def get_converters(cls, config: BaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        pass
+        Subclasses override when a section needs cross-section state from the full base-model config
+        (typically when an extension point on the head must read from a sibling section).
+        """
+        return cls.emit_weight_converters(config, "", "")
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
     architecture: typing.ClassVar[str]
     base_model_converter_class: typing.ClassVar[type[HuggingFaceBaseModelConverter]]
-
-    def __init__(self, model: "FastLLMModel"):
-        self._exported_config = self._export_config(model.config)
-        super().__init__(model)
 
     @classmethod
     @abc.abstractmethod
@@ -164,13 +160,10 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     def _check_hf_coverage(cls, config: dict[str, typing.Any]) -> None:
         """Run the HF-side coverage check at the import boundary.
 
-        Skips silently when the format's base-model converter isn't a :class:`ConfigSectionConverter`
-        (e.g. multimodal aggregators built on top of imperative ``HuggingFaceBaseModelConverter``).
         Subclasses that override :meth:`_import_config` should call this explicitly to keep the check
         active.
         """
-        if issubclass(cls.base_model_converter_class, ConfigSectionConverter):
-            cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._HF_METADATA_ALLOWLIST)
+        cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._HF_METADATA_ALLOWLIST)
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> FastLLMModelConfig:
@@ -180,7 +173,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         return cls._model_class.from_dict({"base_model": cls.base_model_converter_class.import_config(config)})
 
     def _create_weight_converters(self) -> list[WeightConverter]:
-        return self.base_model_converter_class.get_converters(self._model.config.base_model, self._exported_config)
+        return self.base_model_converter_class.get_converters(self._model.config.base_model)
 
     def _load_weights(
         self, config: CheckpointLoadConfig, device

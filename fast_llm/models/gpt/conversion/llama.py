@@ -1,23 +1,28 @@
 import dataclasses
+import functools
 import logging
 import typing
 
-import torch
 import transformers
 
 from fast_llm.config import Config
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    BlockSequenceWeightConverter,
     ConfigSectionConverter,
     ConstantImportConfigConverter,
     CustomConfigConverter,
     DefaultConfigConverter,
     IgnoredConfigConverter,
-    IgnoreExportWeightConverter,
-    IgnoreImportWeightConverter,
+    KeyValueWeightConverter,
+    LinearWeightConverter,
     NestedConfigConverter,
+    NestedWeightConverter,
+    OutputProjectionWeightConverter,
     RenameConfigConverter,
+    SelfBlockSequenceWeightConverter,
     SplitWeightConverter,
+    TransposeSplitWeightConverter,
     WeightConverter,
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingFaceBaseModelConverter, HuggingfaceStateDictCheckpointHandler
@@ -32,14 +37,12 @@ from fast_llm.layers.common.peft.config import NoPeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
 from fast_llm.layers.decoder.mlp.config import MLPConfig
 from fast_llm.layers.language_model.config import (
-    LanguageModelConfig,
     LanguageModelEmbeddingsConfig,
     LanguageModelHeadConfig,
 )
 from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.model import GPTModel
-from fast_llm.tensor import SafeTensorSlice
 from fast_llm.utils import Assert, div
 
 _TRANSFORMERS_V4 = not dataclasses.is_dataclass(transformers.PretrainedConfig)
@@ -56,107 +59,6 @@ def assert_no_peft(config: GPTBaseModelConfig) -> None:
 def effective_bias(layer_config: AffineLinearConfig, default: bool) -> bool:
     """Resolve a layer's effective bias flag: explicit ``bias.enabled`` if set, else the parent default."""
     return default if layer_config.bias.enabled is None else layer_config.bias.enabled
-
-
-# ============================================================
-# Weight converters (imperative)
-# ============================================================
-
-
-def get_parameter_converter(
-    fast_llm_name: str | tuple[str, ...],
-    hf_name: str | tuple[str, ...],
-    cls=WeightConverter,
-    config=None,
-    drop_on_export: bool = False,
-    drop_on_import: bool = False,
-) -> WeightConverter:
-    if isinstance(fast_llm_name, str):
-        fast_llm_name = (fast_llm_name,)
-    if isinstance(hf_name, str):
-        hf_name = (hf_name,)
-    if drop_on_export:
-        cls = IgnoreExportWeightConverter
-    if drop_on_import:
-        cls = IgnoreImportWeightConverter
-    return cls(
-        () if drop_on_import else fast_llm_name,
-        () if drop_on_export else hf_name,
-        config,
-    )
-
-
-def get_weight_and_bias_converters(
-    fast_llm_prefix: str | tuple[str, ...],
-    hf_prefix: str | tuple[str, ...],
-    use_bias: bool,
-    cls=WeightConverter,
-    config=None,
-    drop_on_export: bool = False,
-    drop_on_import: bool = False,
-) -> list[WeightConverter]:
-    if isinstance(fast_llm_prefix, str):
-        fast_llm_prefix = (fast_llm_prefix,)
-    if isinstance(hf_prefix, str):
-        hf_prefix = (hf_prefix,)
-    converters = [
-        get_parameter_converter(
-            () if drop_on_import else tuple(f"{prefix}.weight" for prefix in fast_llm_prefix),
-            () if drop_on_export else tuple(f"{prefix}.weight" for prefix in hf_prefix),
-            cls,
-            config,
-            drop_on_export,
-            drop_on_import,
-        )
-    ]
-    if use_bias:
-        converters.append(
-            get_parameter_converter(
-                () if drop_on_import else tuple(f"{prefix}.bias" for prefix in fast_llm_prefix),
-                () if drop_on_export else tuple(f"{prefix}.bias" for prefix in hf_prefix),
-                cls,
-                config,
-                drop_on_export,
-                drop_on_import,
-            )
-        )
-    return converters
-
-
-class MLPLayer2Converter(WeightConverter):
-    # Similar to SplitWeightConverter, but handles the optional MLP transpose.
-    # Still ok for non-gated (trivial split) and biases (trivial 1d transpose)
-
-    def export_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        (merged_weight,) = weight
-        return tuple(t.contiguous() for t in merged_weight[:].t().chunk(len(self.export_name), dim=-1))
-
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        merged_weight = torch.cat([weight_[:] for weight_ in weight], dim=-1)
-        return (merged_weight.t().contiguous(),)
-
-
-class KeyValueWeightConverter(WeightConverter):
-    # Hf uses the real format for rotary embeddings, and keeps the key and value separate.
-    _config: AttentionConfig
-
-    def export_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        (key_value,) = weight
-        key, value = key_value[:].chunk(2)
-        return key, value
-
-    def import_weight(
-        self, weight: tuple[torch.Tensor | SafeTensorSlice, ...]
-    ) -> tuple[torch.Tensor | SafeTensorSlice, ...]:
-        key, value = weight
-        key_value = torch.cat([key[:], value[:]])
-        return (key_value,)
 
 
 # ============================================================
@@ -256,19 +158,9 @@ class LlamaNormalizationConverter(ConfigSectionConverter):
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: RMSNormalizationConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return get_weight_and_bias_converters(
-            fast_llm_prefix,
-            () if drop_on_export else hf_prefix,
-            False,
-            IgnoreExportWeightConverter if drop_on_export else WeightConverter,
-        )
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {"weight": WeightConverter("weight", "weight")}
 
 
 class LlamaMLPConverter(ConfigSectionConverter):
@@ -303,29 +195,12 @@ class LlamaMLPConverter(ConfigSectionConverter):
         Assert.incl(config.layer_2.bias.enabled, (None, config.add_linear_biases))
 
     @classmethod
-    def get_converters(
-        cls,
-        config: MLPConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_1",
-                (f"{hf_prefix}.gate_proj", f"{hf_prefix}.up_proj"),
-                config.add_linear_biases,
-                SplitWeightConverter,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.layer_2",
-                f"{hf_prefix}.down_proj",
-                config.add_linear_biases,
-                MLPLayer2Converter,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "layer_1": LinearWeightConverter("layer_1", ("gate_proj", "up_proj"), transform=SplitWeightConverter),
+            "layer_2": LinearWeightConverter("layer_2", "down_proj", transform=TransposeSplitWeightConverter),
+        }
 
 
 class LlamaAttentionConverter(ConfigSectionConverter):
@@ -385,35 +260,13 @@ class LlamaAttentionConverter(ConfigSectionConverter):
         Assert.incl(config.dense_layer.bias.enabled, (None, config.add_linear_biases))
 
     @classmethod
-    def get_converters(
-        cls,
-        config: AttentionConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.query",
-                f"{hf_prefix}.q_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.key_value",
-                (f"{hf_prefix}.k_proj", f"{hf_prefix}.v_proj"),
-                config.add_linear_biases,
-                KeyValueWeightConverter,
-                config,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.dense",
-                f"{hf_prefix}.o_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "query": LinearWeightConverter("query", "q_proj"),
+            "key_value": LinearWeightConverter("key_value", ("k_proj", "v_proj"), transform=KeyValueWeightConverter),
+            "dense": LinearWeightConverter("dense", "o_proj"),
+        }
 
 
 class LlamaBlockConverter(ConfigSectionConverter):
@@ -448,35 +301,18 @@ class LlamaBlockConverter(ConfigSectionConverter):
         Assert.custom(lambda v: not v, config.output_scale.enabled)
 
     @classmethod
-    def get_converters(
-        cls, config: DecoderBlockConfig, fast_llm_prefix: str, hf_prefix: str, drop_on_export: bool = False
-    ) -> list[WeightConverter]:
-        return [
-            *cls.mixer_converter_class.get_converters(
-                config.mixer,
-                f"{fast_llm_prefix}.mixer",
-                f"{hf_prefix}.{cls.hf_mixer_name}",
-                drop_on_export,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "mixer": NestedWeightConverter("mixer", cls.hf_mixer_name, cls.mixer_converter_class),
+            "mlp": NestedWeightConverter("mlp", cls.hf_mlp_name, cls.mlp_converter_class),
+            "norm_1": NestedWeightConverter(
+                "norm_1", cls.hf_norm_1_name, cls.normalization_converter_class, config_attr="normalization"
             ),
-            *cls.mlp_converter_class.get_converters(
-                config.mlp,
-                f"{fast_llm_prefix}.mlp",
-                f"{hf_prefix}.{cls.hf_mlp_name}",
-                drop_on_export,
+            "norm_2": NestedWeightConverter(
+                "norm_2", cls.hf_norm_2_name, cls.normalization_converter_class, config_attr="normalization"
             ),
-            *cls.normalization_converter_class.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_1",
-                f"{hf_prefix}.{cls.hf_norm_1_name}",
-                drop_on_export,
-            ),
-            *cls.normalization_converter_class.get_converters(
-                config.normalization,
-                f"{fast_llm_prefix}.norm_2",
-                f"{hf_prefix}.{cls.hf_norm_2_name}",
-                drop_on_export,
-            ),
-        ]
+        }
 
 
 def _llama_decoder_export(
@@ -521,22 +357,12 @@ class LlamaDecoderConverter(ConfigSectionConverter):
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: FixedBlockSequenceConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        converters: list[WeightConverter] = []
-        for block_index in range(config.num_blocks):
-            converters += cls.block_converter_class.get_converters(
-                config.block,
-                f"{fast_llm_prefix}.{block_index}",
-                f"{hf_prefix}.{block_index}",
-                drop_on_export,
-            )
-        return converters
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # The section config IS a ``FixedBlockSequenceConfig`` (no parent attribute holding it).
+        return {
+            "blocks": SelfBlockSequenceWeightConverter(cls.block_converter_class),
+        }
 
 
 class LlamaEmbeddingsConverter(ConfigSectionConverter):
@@ -562,10 +388,9 @@ class LlamaEmbeddingsConverter(ConfigSectionConverter):
         Assert.incl(config.position_embeddings.enabled, (None, False))
 
     @classmethod
-    def get_converters(
-        cls, config: LanguageModelEmbeddingsConfig, fast_llm_prefix: str, hf_prefix: str
-    ) -> list[WeightConverter]:
-        return [WeightConverter(f"{fast_llm_prefix}.word_embeddings_weight", f"{hf_prefix}.embed_tokens.weight")]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {"word_embeddings": WeightConverter("word_embeddings_weight", "embed_tokens.weight")}
 
 
 class LlamaHeadConverter(ConfigSectionConverter):
@@ -574,8 +399,6 @@ class LlamaHeadConverter(ConfigSectionConverter):
     fast_llm_config_class = LanguageModelHeadConfig
 
     normalization_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaNormalizationConverter
-    # Used by MTP-Llama subclass to emit per-prediction-head block weight converters; Llama itself doesn't read it.
-    block_converter_class: typing.ClassVar[type[ConfigSectionConverter]] = LlamaBlockConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
@@ -591,27 +414,31 @@ class LlamaHeadConverter(ConfigSectionConverter):
         }
 
     @classmethod
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # ``final_norm`` reads the head's own ``normalization`` config; ``output_weights`` is the marker the
+        # walker drops automatically when the root config has ``tied_embedding_weight=True``.
+        return {
+            "final_norm": NestedWeightConverter(
+                "final_norm", "model.norm", cls.normalization_converter_class, config_attr="normalization"
+            ),
+            "output_weights": OutputProjectionWeightConverter("output_weights", "lm_head.weight"),
+        }
+
+    @classmethod
     def get_converters(
         cls,
-        config: LanguageModelConfig,
-        exported_config: dict,
+        config: GPTBaseModelConfig,
     ) -> list[WeightConverter]:
-        return [
-            *cls.normalization_converter_class.get_converters(
-                config.head.normalization,
-                f"head.final_norm",
-                f"model.norm",
-            ),
-            get_parameter_converter(
-                f"head.output_weights",
-                "lm_head.weight",
-                drop_on_import=exported_config["tie_word_embeddings"],
-                drop_on_export=exported_config["tie_word_embeddings"],
-            ),
-        ]
+        """Aggregator entry-point: the base-model converter passes the full :class:`GPTBaseModelConfig`
+        so subclasses extending the head can read sibling sections (e.g. the decoder) when needed.
+        Tied-embedding handling lives on :class:`OutputProjectionWeightConverter` and reads
+        ``root_config.tied_embedding_weight``.
+        """
+        return cls.emit_weight_converters(config.head, "head", "", root_config=config)
 
 
-class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConverter):
+class LlamaBaseModelConverter(HuggingFaceBaseModelConverter):
     """Top-level converter for ``GPTBaseModelConfig`` ↔ Llama HF dict.
 
     Subclasses (Mistral, Qwen2, Mixtral, MTP-Llama, …) override ``block_converter_class`` to plug their
@@ -667,22 +494,21 @@ class LlamaBaseModelConverter(ConfigSectionConverter, HuggingFaceBaseModelConver
         assert_no_peft(config)
 
     @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        decoder_config = config.decoder
-        block_config = (
-            decoder_config.block
-            if isinstance(decoder_config, FixedBlockSequenceConfig)
-            else next(iter(decoder_config.blocks.values()))
-        )
-        block_converters: list[WeightConverter] = []
-        for block_index in range(decoder_config.num_blocks):
-            block_converters += cls.block_converter_class.get_converters(
-                block_config, f"decoder.{block_index}", f"model.layers.{block_index}"
-            )
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # ``head`` is added at the aggregator level (in :meth:`get_converters`) because the head
+        # converter takes the full base-model config so subclasses extending the head can read
+        # sibling sections.
+        return {
+            "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
+            "decoder": BlockSequenceWeightConverter("decoder", "model.layers", cls.block_converter_class),
+        }
+
+    @classmethod
+    def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
         return [
-            *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
-            *block_converters,
-            *cls.head_converter_class.get_converters(config, exported_config),
+            *cls.emit_weight_converters(config, "", ""),
+            *cls.head_converter_class.get_converters(config),
         ]
 
 
