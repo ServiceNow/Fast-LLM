@@ -14,6 +14,7 @@ from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
+from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
@@ -462,6 +463,25 @@ def _test_gspo_loss(
     )
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
     Assert.rms_close_relative(new_logprobs_fused, ref_new_logprobs, 1e-5, 1e-6)
+
+    if not triton_available:
+        return
+    out_triton, grad_triton, new_logprobs_triton = triton_gspo_loss_forward_backward(
+        split_op(logits, group, -1).contiguous(),
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        divisor=num_segments,
+        num_labels_in_seq=num_labels_in_seq,
+        grad_logits=local_previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+    )
+    _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group)
+    Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
 def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) -> None:
