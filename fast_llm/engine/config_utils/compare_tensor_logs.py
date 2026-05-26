@@ -87,6 +87,30 @@ class CompareConfig:
         # Avoid set to preserve ordering.
         return [key for key in dict_test if key in dict_ref]
 
+    def _compute_diff(self, tensor_ref, tensor_test, step_name, tensor_name) -> dict | None:
+        # Returns per-tensor error metrics, or None on shape/sampling mismatch.
+        if tensor_ref["shape"] != tensor_test["shape"]:
+            return None
+        if tensor_ref["step"] != tensor_test["step"]:
+            return None
+        sub_config = self._get_sub_config(step_name, tensor_name)
+        samples_ref = tensor_ref["samples"].flatten().float()
+        samples_test = tensor_test["samples"].flatten().float()
+        if sub_config.scale != 1.0:
+            samples_test = samples_test / sub_config.scale
+        scale_unreg = (samples_ref**2).mean() ** 0.5
+        rms_scale = (scale_unreg**2 + sub_config.rms_eps**2) ** 0.5
+        rms = ((samples_ref - samples_test) ** 2).mean() ** 0.5
+        max_diff = (samples_ref - samples_test).abs().max()
+        return {
+            "rms_abs": rms.item(),
+            "rms_rel": (rms / rms_scale).item(),
+            "max_abs": max_diff.item(),
+            "max_rel": (max_diff / rms_scale).item(),
+            "ref_scale": scale_unreg.item(),
+            "ref_scale_regularized": rms_scale.item(),
+        }
+
     def compare_tensors(self, tensor_ref, tensor_test, errors, step_name, tensor_name):
         sub_config = self._get_sub_config(step_name, tensor_name)
         if tensor_ref["shape"] != tensor_test["shape"]:
@@ -108,34 +132,33 @@ class CompareConfig:
             )
             return
 
-        samples_ref = tensor_ref["samples"].flatten().float()
-        samples_test = tensor_test["samples"].flatten().float()
-        if sub_config.scale != 1.0:
-            samples_test = samples_test / sub_config.scale
-        scale_unreg = (samples_ref**2).mean() ** 0.5
-        rms_scale = (scale_unreg**2 + sub_config.rms_eps**2) ** 0.5
-        rms = ((samples_ref - samples_test) ** 2).mean() ** 0.5
-        max_diff = (samples_ref - samples_test).abs().max()
+        metrics = self._compute_diff(tensor_ref, tensor_test, step_name, tensor_name)
+        rms_scale = metrics["ref_scale_regularized"]
+        scale_unreg = metrics["ref_scale"]
 
         tensor_errors = []
 
-        if rms > sub_config.rms_abs_tolerance:
-            tensor_errors.append(f"  * RMS diff absolute = {rms} > {sub_config.rms_abs_tolerance}")
+        if metrics["rms_abs"] > sub_config.rms_abs_tolerance:
+            tensor_errors.append(f"  * RMS diff absolute = {metrics['rms_abs']} > {sub_config.rms_abs_tolerance}")
 
-        if rms / rms_scale > sub_config.rms_rel_tolerance:
+        if metrics["rms_rel"] > sub_config.rms_rel_tolerance:
             tensor_errors.append(
-                f"  * RMS diff scaled = {rms / rms_scale} > {sub_config.rms_rel_tolerance} (scale={rms_scale}, unregularized={scale_unreg})"
+                f"  * RMS diff scaled = {metrics['rms_rel']} > {sub_config.rms_rel_tolerance} (scale={rms_scale}, unregularized={scale_unreg})"
             )
 
-        if max_diff > sub_config.max_abs_tolerance:
-            tensor_errors.append(f"  * Max diff absolute = {max_diff} > {sub_config.max_abs_tolerance}")
+        if metrics["max_abs"] > sub_config.max_abs_tolerance:
+            tensor_errors.append(f"  * Max diff absolute = {metrics['max_abs']} > {sub_config.max_abs_tolerance}")
 
-        if max_diff / rms_scale > sub_config.max_rel_tolerance:
+        if metrics["max_rel"] > sub_config.max_rel_tolerance:
             tensor_errors.append(
-                f"  * Max diff scaled = {max_diff / rms_scale} > {sub_config.max_rel_tolerance} (scale={rms_scale}, unregularized={scale_unreg})"
+                f"  * Max diff scaled = {metrics['max_rel']} > {sub_config.max_rel_tolerance} (scale={rms_scale}, unregularized={scale_unreg})"
             )
 
         if tensor_errors:
+            samples_ref = tensor_ref["samples"].flatten().float()
+            samples_test = tensor_test["samples"].flatten().float()
+            if sub_config.scale != 1.0:
+                samples_test = samples_test / sub_config.scale
             tensor_errors.extend(
                 [
                     f"  Test samples: " + "".join(f"{x:12.4e}" for x in samples_test[: self.show_samples].tolist()),

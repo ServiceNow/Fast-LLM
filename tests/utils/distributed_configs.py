@@ -4,7 +4,7 @@ import logging
 
 import torch
 
-from tests.utils.compare_tensor_logs import CompareConfig
+from fast_llm.engine.config_utils.compare_tensor_logs import CompareConfig
 
 logger = logging.getLogger(__name__)
 

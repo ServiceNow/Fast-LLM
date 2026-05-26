@@ -18,9 +18,9 @@ from fast_llm.engine.checkpoint.config import (
     ModelConfigType,
 )
 from fast_llm.engine.checkpoint.convert import ConvertConfig
+from fast_llm.engine.config_utils.compare_tensor_logs import CompareConfig
 from fast_llm.engine.multi_stage.config import FastLLMModelConfig, ShardName, StageMode
 from fast_llm.utils import Assert, header
-from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingConfig, ModelTestingGroup
 from tests.utils.save_load_configs import DISTRIBUTED_SAVE_LOAD_CONFIGS, DistributedSaveLoadConfig
