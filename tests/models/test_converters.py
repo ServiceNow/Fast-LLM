@@ -7,6 +7,11 @@ For each registered ``HuggingfaceStateDictCheckpointHandler``, walk its modular 
 * Architecture-hint fields on ``cls.fast_llm_config_class`` are all consumed by some declaration.
 * OptionalConfigConverter sentinels match the resolved field default. Otherwise an exported value equal
   to the sentinel becomes absent on disk and re-imports as a different default, silently breaking round-trip.
+
+Plus an end-to-end weight-coverage walker (:func:`test_format_weight_coverage`) — for each test
+fixture with a checkpoint format, materialise the Fast-LLM model and assert every parameter is consumed
+by some leaf :class:`WeightConverter`. Catches the "silent drop" failure mode where a model param has
+no converter and ``_convert_state_dict`` skips it on export.
 """
 
 import typing
@@ -24,9 +29,12 @@ from fast_llm.engine.checkpoint.external import (
     _safe_set_nested_dict_value,
 )
 from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
+from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
+from fast_llm.models.gpt.conversion.config import Gemma4CheckpointFormat
+from tests.utils.model_configs import MODEL_CONFIGS
 
 # Configs that don't default-construct cleanly need a minimal-valid factory.
 _DEFAULT_FACTORIES: dict[type, typing.Callable[[], typing.Any]] = {
@@ -154,6 +162,69 @@ def test_safe_set_nested_dict_value_collision() -> None:
     _safe_set_nested_dict_value(out, ("nested", "key"), "value")
     with pytest.raises(AssertionError):
         _safe_set_nested_dict_value(out, ("nested", "key"), "other")
+
+
+_FIXTURES_WITH_FORMAT = [name for name, cfg in MODEL_CONFIGS.items() if cfg.checkpoint_format is not None]
+
+
+def _weight_coverage_param(fixture_name: str) -> typing.Any:
+    handler = MODEL_CONFIGS[fixture_name].checkpoint_format.get_handler_class()
+    if handler.format is Gemma4CheckpointFormat:
+        return pytest.param(
+            fixture_name,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "Gemma4 converters drop LayerNorm biases and non-MoE norm_2 on the full_attention "
+                    "branch of the test fixture, and declare ``output_scale`` unconditionally even when "
+                    "the block disables it."
+                ),
+            ),
+        )
+    return pytest.param(fixture_name)
+
+
+@pytest.mark.parametrize("fixture_name", [_weight_coverage_param(n) for n in _FIXTURES_WITH_FORMAT])
+def test_format_weight_coverage(fixture_name: str) -> None:
+    """Every Fast-LLM parameter must be consumed by some :class:`WeightConverter`.
+
+    Materialises the fixture's base model (CPU, meta tensors via ``ParameterMeta`` — no distributed
+    setup) and compares ``named_parameters()`` against the set of ``fast_llm_name`` entries emitted by
+    ``base_model_converter_class.get_converters(config)``. Runtime-tied parameters
+    (``BaseModel.get_tied_parameters``) count as covered if any member of their group has a converter,
+    matching the export-time behaviour where a single shared weight is serialised once.
+    """
+    model_testing_config = MODEL_CONFIGS[fixture_name]
+    handler = model_testing_config.checkpoint_format.get_handler_class()
+    base_model_config = model_testing_config.base_model_config_class.from_dict(
+        model_testing_config.config_dict["model"]["base_model"]
+    )
+    base_model = base_model_config.base_model_class(base_model_config, DistributedConfig())
+
+    param_id_to_name = {id(parameter): name for name, parameter in base_model.named_parameters()}
+    model_names = set(param_id_to_name.values())
+    tied_groups = [
+        frozenset(param_id_to_name[id(parameter)] for parameter in parameters)
+        for parameters in base_model.get_tied_parameters().values()
+    ]
+
+    consumed: set[str] = set()
+    for leaf in handler.base_model_converter_class.get_converters(base_model_config):
+        consumed.update(leaf.fast_llm_name)
+
+    # Tied closure: any group with at least one explicit consumer is covered in full.
+    covered = set(consumed)
+    for group in tied_groups:
+        if group & consumed:
+            covered |= group
+
+    missing = sorted(model_names - covered)
+    phantom = sorted(consumed - model_names)
+    assert not missing and not phantom, (
+        f"{handler.__name__}: weight coverage mismatch — "
+        f"Fast-LLM params with no converter: {missing}; "
+        f"converters with no matching param: {phantom}"
+    )
 
 
 def test_llama_export_rejects_mismatched_block_and_head_norm_epsilon() -> None:
