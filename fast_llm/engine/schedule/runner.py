@@ -320,7 +320,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             if context.schedule.phase.is_training
             else None
         )
-        model_inputs = [next(data_iterator) for _ in range(self._config.sequential_micro_batches)]
+        n_micro_batches = context.schedule._eff_sequential_micro_batches
+        model_inputs = [next(data_iterator) for _ in range(n_micro_batches)]
         model_inputs[0][0].share_batch_data(
             [model_input for model_inputs_ in model_inputs for model_input in model_inputs_], self._distributed
         )
@@ -336,7 +337,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     extra_kwargs={
                         "grad_output": grad_output,
                         "micro_batch": micro_batch,
-                        "num_micro_batches": self._config.sequential_micro_batches,
+                        "num_micro_batches": n_micro_batches,
                         "micro_batch_splits": self._config.micro_batch_splits,
                     },
                 )

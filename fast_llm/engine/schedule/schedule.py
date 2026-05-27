@@ -115,15 +115,17 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         batch_meta: list[ModelInput],
         distributed_config: DistributedConfig,
         phase: PhaseType,
+        _depth_first_override: int | None = None,
     ):
         super().__init__(config)
+        self._depth_first_override = _depth_first_override
         self._multi_stage = multi_stage
         self._distributed_config = distributed_config
         self._num_stages = len(self._multi_stage.stages)
         self._phase = phase
         self._is_training = self._phase.is_training
 
-        if self._config.num_inputs < self._distributed_config.pipeline_parallel:
+        if self._eff_num_inputs < self._distributed_config.pipeline_parallel:
             warnings.warn("Not enough input to achieve true pipeline parallelism.")
 
         # Setup the activation metas.
@@ -156,8 +158,24 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         return self._phase
 
     @property
+    def _eff_depth_first(self) -> int:
+        return (
+            self._depth_first_override
+            if self._depth_first_override is not None
+            else self._config.depth_first_micro_batches
+        )
+
+    @property
+    def _eff_sequential_micro_batches(self) -> int:
+        return self._eff_depth_first * self._config.breadth_first_micro_batches
+
+    @property
+    def _eff_num_inputs(self) -> int:
+        return self._eff_sequential_micro_batches * self._config.micro_batch_splits
+
+    @property
     def samples_per_batch(self) -> int:
-        return self._config.sequential_micro_batches * self._distributed_config.batch_data_parallel
+        return self._eff_sequential_micro_batches * self._distributed_config.batch_data_parallel
 
     def iterate(self, pipeline_rank: int | None = None) -> typing.Iterator[Step]:
         return iter(self._steps if pipeline_rank is None else self._device_steps[pipeline_rank])
@@ -189,7 +207,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             Assert.in_range(
                 step.index,
                 0,
-                self._config.num_inputs,
+                self._eff_num_inputs,
             )
             Assert.incl(step.type_, (StepType.forward, StepType.backward))
             step.global_index = i
@@ -205,7 +223,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         Assert.custom(all, self._device_steps)
         # Consistency checks
         step_map = self._step_map.copy()
-        for data_index in range(self._config.num_inputs):
+        for data_index in range(self._eff_num_inputs):
             for type_ in (StepType.forward, StepType.backward):
                 for stage in range(0 if type_ == StepType.forward else self._first_grad_stage, self._num_stages):
                     assert (
@@ -470,14 +488,11 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 first_grad_stage += 1
         else:
             first_grad_stage = self._num_stages
-        for depth_first_micro_batch in range(self._config.depth_first_micro_batches):
+        for depth_first_micro_batch in range(self._eff_depth_first):
             for stage in range(self._num_stages):
                 for breadth_first_micro_batch in range(self._config.breadth_first_micro_batches):
                     for micro_batch_split in range(self._config.micro_batch_splits):
-                        micro_batch = (
-                            breadth_first_micro_batch * self._config.depth_first_micro_batches
-                            + depth_first_micro_batch
-                        )
+                        micro_batch = breadth_first_micro_batch * self._eff_depth_first + depth_first_micro_batch
                         steps.append(
                             Step(
                                 stage=stage,
@@ -492,10 +507,7 @@ class Schedule[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 for stage in reversed(range(first_grad_stage, self._num_stages)):
                     for breadth_first_micro_batch in range(self._config.breadth_first_micro_batches):
                         for micro_batch_split in reversed(range(self._config.micro_batch_splits)):
-                            micro_batch = (
-                                breadth_first_micro_batch * self._config.depth_first_micro_batches
-                                + depth_first_micro_batch
-                            )
+                            micro_batch = breadth_first_micro_batch * self._eff_depth_first + depth_first_micro_batch
                             steps.append(
                                 Step(
                                     stage=stage,
