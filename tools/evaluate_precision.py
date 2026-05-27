@@ -3,12 +3,11 @@ import logging
 import pathlib
 import typing
 
-import yaml
-
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.config_utils.compare_tensor_logs import CompareConfig
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.training.config import TrainerConfig
+from fast_llm.models.gpt.config import PretrainedGPTModelConfig
 
 # Populate the trainer dynamic-type registry.
 import fast_llm.data.auto  # noqa: F401  # isort:skip
@@ -22,23 +21,20 @@ logger = logging.getLogger(__name__)
 # matching the convention in the existing layer-comparison tests.
 _LOG_LEVEL = 13
 _REFERENCE_NAME = "reference"
+_MODEL_TYPE = "gpt"
 
 
 @config_class()
-class EvaluatePrecisionConfig(RunnableConfig):
-    model: dict[str, typing.Any] = Field(
-        default_factory=dict,
-        desc="`FastLLMModelConfig` dict (`base_model`, `distributed`, `multi_stage`)."
-        " Forwarded into the trainer config as-is alongside `pretrained`. Either or both"
-        " can be set: `pretrained` to load architecture/weights from a checkpoint,"
-        " `model` to specify the architecture inline or override pretrained fields.",
-        hint=FieldHint.core,
-    )
-    pretrained: dict[str, typing.Any] = Field(
-        default_factory=dict,
-        desc="`CheckpointLoadConfig` dict, e.g. `{path: HuggingFaceTB/SmolLM2-135M, format: llama}`.",
-        hint=FieldHint.optional,
-    )
+class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
+    """Evaluate layer-wise numerical-error propagation against an fp32 reference.
+
+    Inherits `model` and `pretrained` from `PretrainedGPTModelConfig`: either or both
+    can be set in the YAML. The tool runs one fp32 reference + one trainer invocation
+    per variant, captures per-layer forward activations and input gradients via the
+    standard tensor-logs pipeline, and reports per-tensor RMS / max diffs.
+    """
+
+    _abstract = False
     variants: dict[str, typing.Any] = Field(
         desc="Named override bundles to evaluate against the fp32 reference."
         " Each value is a flat dict mapping dotted-path keys (same syntax as the Fast-LLM CLI) to values.",
@@ -47,11 +43,6 @@ class EvaluatePrecisionConfig(RunnableConfig):
     output_dir: pathlib.Path = Field(
         desc="Directory for per-run tensor-log artifacts and the final JSON report.",
         hint=FieldHint.core,
-    )
-    model_type: str = Field(
-        default="gpt",
-        desc="Trainer dynamic-type name used to dispatch to the right `TrainerConfig` subclass.",
-        hint=FieldHint.optional,
     )
     num_samples: int = Field(
         default=1024,
@@ -98,37 +89,18 @@ class EvaluatePrecisionConfig(RunnableConfig):
         return self.output_dir / name / "runs" / "0" / "artifacts"
 
     def _run_one(self, name: str, variant_overrides: dict[str, typing.Any]) -> None:
-        config_dict = self._build_config_dict(name)
-        # Force fp32 on the reference baseline (variants apply on top and can re-override).
-        _set_nested(config_dict, ["model", "distributed", "compute_dtype"], "float32")
-        _set_nested(config_dict, ["model", "distributed", "optimization_dtype"], "float32")
-        for dotted_key, value in variant_overrides.items():
-            _set_nested(config_dict, dotted_key.split("."), value)
-        # Tool-required overrides always win — variants must not silently disable tensor logging.
-        _set_nested(config_dict, ["model", "multi_stage", "debug_layer_outputs"], _LOG_LEVEL)
-        _set_nested(config_dict, ["model", "multi_stage", "debug_layer_gradients"], _LOG_LEVEL)
-        config_yaml = self.output_dir / f"{name}_config.yaml"
-        config_yaml.write_text(yaml.safe_dump(config_dict))
-        logger.info(f"=== Running {name!r} ===")
-        if variant_overrides:
-            logger.info(f"Variant overrides: {variant_overrides}")
-        TrainerConfig.parse_and_run([self.model_type, "-c", str(config_yaml)])
-
-    def _build_config_dict(self, name: str) -> dict[str, typing.Any]:
-        return {
-            "pretrained": self.pretrained,
-            "model": self.model,
+        # Base config: hardcoded training/optimizer/data/run skeleton plus the user's model/pretrained.
+        # Forced fp32 on the reference baseline lives in here too so a variant can override it.
+        base_dict: dict[str, typing.Any] = {
+            "pretrained": self.pretrained.to_dict(),
+            "model": self.model.to_dict(),
             "training": {
                 "train_iters": 1,
                 "num_workers": 0,
                 "logs": {"interval": 1},
             },
             "optimizer": {
-                "learning_rate": {
-                    "base": 0.0,
-                    "decay_style": "constant",
-                    "warmup_iterations": 0,
-                },
+                "learning_rate": {"base": 0.0, "decay_style": "constant", "warmup_iterations": 0},
             },
             "data": {
                 "datasets": {"training": {"type": "random"}},
@@ -137,13 +109,26 @@ class EvaluatePrecisionConfig(RunnableConfig):
             },
             "run": {
                 "experiment_dir": str((self.output_dir / name).resolve()),
-                "tensor_logs": {
-                    "save": True,
-                    "show": False,
-                    "max_elements": self.num_samples,
-                },
+                "tensor_logs": {"save": True, "show": False, "max_elements": self.num_samples},
             },
         }
+        fp32_dtypes = {
+            ("model", "distributed", "compute_dtype"): "float32",
+            ("model", "distributed", "optimization_dtype"): "float32",
+        }
+        variant_updates = {tuple(key.split(".")): value for key, value in variant_overrides.items()}
+        # Tool-required overrides win over variants — a variant must not silently disable tensor logging.
+        tool_overrides = {
+            ("model", "multi_stage", "debug_layer_outputs"): _LOG_LEVEL,
+            ("model", "multi_stage", "debug_layer_gradients"): _LOG_LEVEL,
+        }
+        logger.info(f"=== Running {name!r} ===")
+        if variant_overrides:
+            logger.info(f"Variant overrides: {variant_overrides}")
+        trainer_class = TrainerConfig.get_subclass(_MODEL_TYPE)
+        trainer_config = trainer_class.from_dict(base_dict, fp32_dtypes, variant_updates, tool_overrides)
+        trainer_config.configure_logging()
+        trainer_config._get_runnable()()
 
     def _compare(self, ref_path: pathlib.Path, test_path: pathlib.Path) -> list[dict[str, typing.Any]]:
         compare_config = CompareConfig()
@@ -186,12 +171,6 @@ def _classify(tensor_name: str) -> str:
         if f" {kind}:" in tensor_name or f" {kind}," in tensor_name or tensor_name.endswith(f" {kind}"):
             return kind
     return "other"
-
-
-def _set_nested(d: dict[str, typing.Any], keys: list[str], value: typing.Any) -> None:
-    for key in keys[:-1]:
-        d = d.setdefault(key, {})
-    d[keys[-1]] = value
 
 
 def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
