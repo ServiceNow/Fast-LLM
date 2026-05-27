@@ -26,10 +26,18 @@ _REFERENCE_NAME = "reference"
 
 @config_class()
 class EvaluatePrecisionConfig(RunnableConfig):
-    pretrained: dict[str, typing.Any] = Field(
-        desc="Fast-LLM `CheckpointLoadConfig` dict (e.g. `{path: HuggingFaceTB/SmolLM2-135M, format: llama}`)."
-        " The model architecture and weights are loaded from this checkpoint.",
+    model: dict[str, typing.Any] = Field(
+        default_factory=dict,
+        desc="`FastLLMModelConfig` dict (`base_model`, `distributed`, `multi_stage`)."
+        " Forwarded into the trainer config as-is alongside `pretrained`. Either or both"
+        " can be set: `pretrained` to load architecture/weights from a checkpoint,"
+        " `model` to specify the architecture inline or override pretrained fields.",
         hint=FieldHint.core,
+    )
+    pretrained: dict[str, typing.Any] = Field(
+        default_factory=dict,
+        desc="`CheckpointLoadConfig` dict, e.g. `{path: HuggingFaceTB/SmolLM2-135M, format: llama}`.",
+        hint=FieldHint.optional,
     )
     variants: dict[str, typing.Any] = Field(
         desc="Named override bundles to evaluate against the fp32 reference."
@@ -91,10 +99,14 @@ class EvaluatePrecisionConfig(RunnableConfig):
 
     def _run_one(self, name: str, variant_overrides: dict[str, typing.Any]) -> None:
         config_dict = self._build_config_dict(name)
-        # Apply variant overrides on top of the forced-fp32 baseline so a variant can set
-        # `model.distributed.compute_dtype: bfloat16` (etc.) and have it win.
+        # Force fp32 on the reference baseline (variants apply on top and can re-override).
+        _set_nested(config_dict, ["model", "distributed", "compute_dtype"], "float32")
+        _set_nested(config_dict, ["model", "distributed", "optimization_dtype"], "float32")
         for dotted_key, value in variant_overrides.items():
             _set_nested(config_dict, dotted_key.split("."), value)
+        # Tool-required overrides always win — variants must not silently disable tensor logging.
+        _set_nested(config_dict, ["model", "multi_stage", "debug_layer_outputs"], _LOG_LEVEL)
+        _set_nested(config_dict, ["model", "multi_stage", "debug_layer_gradients"], _LOG_LEVEL)
         config_yaml = self.output_dir / f"{name}_config.yaml"
         config_yaml.write_text(yaml.safe_dump(config_dict))
         logger.info(f"=== Running {name!r} ===")
@@ -105,6 +117,7 @@ class EvaluatePrecisionConfig(RunnableConfig):
     def _build_config_dict(self, name: str) -> dict[str, typing.Any]:
         return {
             "pretrained": self.pretrained,
+            "model": self.model,
             "training": {
                 "train_iters": 1,
                 "num_workers": 0,
@@ -128,16 +141,6 @@ class EvaluatePrecisionConfig(RunnableConfig):
                     "save": True,
                     "show": False,
                     "max_elements": self.num_samples,
-                },
-            },
-            "model": {
-                "distributed": {
-                    "compute_dtype": "float32",
-                    "optimization_dtype": "float32",
-                },
-                "multi_stage": {
-                    "debug_layer_outputs": _LOG_LEVEL,
-                    "debug_layer_gradients": _LOG_LEVEL,
                 },
             },
         }
