@@ -7,7 +7,6 @@ import yaml
 
 from fast_llm.config import Field, FieldHint, config_class
 from fast_llm.engine.config_utils.compare_tensor_logs import CompareConfig
-from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.runnable import RunnableConfig
 from fast_llm.engine.training.config import TrainerConfig
 
@@ -27,12 +26,9 @@ _REFERENCE_NAME = "reference"
 
 @config_class()
 class EvaluatePrecisionConfig(RunnableConfig):
-    training_config: pathlib.Path = Field(
-        desc="Path to a Fast-LLM training YAML serving as the fp32 reference configuration.",
-        hint=FieldHint.core,
-    )
-    model_type: str = Field(
-        desc="Trainer dynamic-type name (e.g. 'gpt') used to dispatch to the right TrainerConfig subclass.",
+    pretrained: dict[str, typing.Any] = Field(
+        desc="Fast-LLM `CheckpointLoadConfig` dict (e.g. `{path: HuggingFaceTB/SmolLM2-135M, format: llama}`)."
+        " The model architecture and weights are loaded from this checkpoint.",
         hint=FieldHint.core,
     )
     variants: dict[str, typing.Any] = Field(
@@ -44,15 +40,29 @@ class EvaluatePrecisionConfig(RunnableConfig):
         desc="Directory for per-run tensor-log artifacts and the final JSON report.",
         hint=FieldHint.core,
     )
+    model_type: str = Field(
+        default="gpt",
+        desc="Trainer dynamic-type name used to dispatch to the right `TrainerConfig` subclass.",
+        hint=FieldHint.optional,
+    )
     num_samples: int = Field(
         default=1024,
         desc="Number of sampled values stored per logged tensor.",
         hint=FieldHint.feature,
     )
+    micro_batch_size: int = Field(
+        default=1,
+        desc="Micro-batch size for the single forward+backward pass.",
+        hint=FieldHint.feature,
+    )
+    sequence_length: int = Field(
+        default=2048,
+        desc="Sequence length (maximum document length) for the random input.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         super()._validate()
-        assert self.training_config.is_file(), f"Training config not found: {self.training_config}"
         assert _REFERENCE_NAME not in self.variants, f"'{_REFERENCE_NAME}' is reserved for the fp32 baseline."
         for name, overrides in self.variants.items():
             assert isinstance(overrides, dict) and all(
@@ -60,15 +70,7 @@ class EvaluatePrecisionConfig(RunnableConfig):
             ), f"Variant {name!r} must be a flat dict of dotted-path string keys."
 
     def run(self) -> None:
-        base_dict = yaml.safe_load(self.training_config.read_text())
-        for field_name in ("compute_dtype", "optimization_dtype"):
-            current = _get_nested(base_dict, ("model", "distributed", field_name))
-            if current is not None and DataType(current) is not DataType.float32:
-                logger.warning(
-                    f"Base config sets model.distributed.{field_name}={current!r};"
-                    f" overriding to float32 for the reference run."
-                )
-
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         runs: dict[str, dict[str, typing.Any]] = {_REFERENCE_NAME: {}}
         runs.update(self.variants)
         for name, variant_overrides in runs.items():
@@ -78,7 +80,6 @@ class EvaluatePrecisionConfig(RunnableConfig):
         results = {name: self._compare(ref_artifacts, self._artifact_path(name)) for name in self.variants}
 
         report_path = self.output_dir / "precision_report.json"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(results, indent=2))
         logger.info(f"Wrote report to {report_path}")
 
@@ -89,29 +90,57 @@ class EvaluatePrecisionConfig(RunnableConfig):
         return self.output_dir / name / "runs" / "0" / "artifacts"
 
     def _run_one(self, name: str, variant_overrides: dict[str, typing.Any]) -> None:
-        experiment_dir = (self.output_dir / name).resolve()
-        forced_fp32 = {
-            "model.distributed.compute_dtype": "float32",
-            "model.distributed.optimization_dtype": "float32",
-        }
-        tool_overrides = {
-            "training.train_iters": 1,
-            "training.checkpoint.interval": None,
-            "run.tensor_logs.save": True,
-            "run.tensor_logs.show": False,
-            "run.tensor_logs.max_elements": self.num_samples,
-            "run.experiment_dir": str(experiment_dir),
-            "model.multi_stage.debug_layer_outputs": _LOG_LEVEL,
-            "model.multi_stage.debug_layer_gradients": _LOG_LEVEL,
-        }
-        # Compose: forced fp32 first so a variant can override it (e.g. compute_dtype=bfloat16);
-        # tool overrides last so logging and single-iteration mode always win.
-        combined = {**forced_fp32, **variant_overrides, **tool_overrides}
-        cli_overrides = [f"{key}={yaml.safe_dump(value).strip()}" for key, value in combined.items()]
+        config_dict = self._build_config_dict(name)
+        # Apply variant overrides on top of the forced-fp32 baseline so a variant can set
+        # `model.distributed.compute_dtype: bfloat16` (etc.) and have it win.
+        for dotted_key, value in variant_overrides.items():
+            _set_nested(config_dict, dotted_key.split("."), value)
+        config_yaml = self.output_dir / f"{name}_config.yaml"
+        config_yaml.write_text(yaml.safe_dump(config_dict))
         logger.info(f"=== Running {name!r} ===")
         if variant_overrides:
             logger.info(f"Variant overrides: {variant_overrides}")
-        TrainerConfig.parse_and_run([self.model_type, "-c", str(self.training_config), *cli_overrides])
+        TrainerConfig.parse_and_run([self.model_type, "-c", str(config_yaml)])
+
+    def _build_config_dict(self, name: str) -> dict[str, typing.Any]:
+        return {
+            "pretrained": self.pretrained,
+            "training": {
+                "train_iters": 1,
+                "num_workers": 0,
+                "logs": {"interval": 1},
+            },
+            "optimizer": {
+                "learning_rate": {
+                    "base": 0.0,
+                    "decay_style": "constant",
+                    "warmup_iterations": 0,
+                },
+            },
+            "data": {
+                "datasets": {"training": {"type": "random"}},
+                "micro_batch_size": self.micro_batch_size,
+                "maximum_document_length": self.sequence_length,
+            },
+            "run": {
+                "experiment_dir": str((self.output_dir / name).resolve()),
+                "tensor_logs": {
+                    "save": True,
+                    "show": False,
+                    "max_elements": self.num_samples,
+                },
+            },
+            "model": {
+                "distributed": {
+                    "compute_dtype": "float32",
+                    "optimization_dtype": "float32",
+                },
+                "multi_stage": {
+                    "debug_layer_outputs": _LOG_LEVEL,
+                    "debug_layer_gradients": _LOG_LEVEL,
+                },
+            },
+        }
 
     def _compare(self, ref_path: pathlib.Path, test_path: pathlib.Path) -> list[dict[str, typing.Any]]:
         compare_config = CompareConfig()
@@ -156,12 +185,10 @@ def _classify(tensor_name: str) -> str:
     return "other"
 
 
-def _get_nested(d: typing.Any, keys: tuple[str, ...]) -> typing.Any:
-    for k in keys:
-        if not isinstance(d, dict) or k not in d:
-            return None
-        d = d[k]
-    return d
+def _set_nested(d: dict[str, typing.Any], keys: list[str], value: typing.Any) -> None:
+    for key in keys[:-1]:
+        d = d.setdefault(key, {})
+    d[keys[-1]] = value
 
 
 def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
