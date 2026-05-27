@@ -181,9 +181,9 @@ def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
     columns: list[tuple[str, int, typing.Callable[[dict[str, typing.Any]], str]]] = [
         ("Tensor", 26, lambda r: f"{r['tensor_name'].split(':', 1)[-1].strip()} ({r['kind']})"),
         ("Relative", 8, lambda r: f"{r['rms_rel'] * 100:.2f}%"),
-        ("Absolute", 10, lambda r: f"{r['rms_abs']:.2e}"),
-        ("Max", 10, lambda r: f"{r['max_abs']:.2e}"),
-        ("Scale", 10, lambda r: f"{r['ref_scale']:.2e}"),
+        ("Absolute", 10, lambda r: f"{r['rms_abs']:.3f}"),
+        ("Max", 10, lambda r: f"{r['max_abs']:.3f}"),
+        ("Scale", 10, lambda r: f"{r['ref_scale']:.3f}"),
     ]
     header = "  ".join(f"{title:<{width}}" for title, width, _ in columns)
     print(header)
