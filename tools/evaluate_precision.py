@@ -178,32 +178,19 @@ def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
     if not rows:
         print("(no matching tensors)")
         return
-    columns = [
-        ("step", "step", 6),
-        ("kind", "kind", 6),
-        ("tensor_name", "tensor", 48),
-        ("shape", "shape", 22),
-        ("ref_scale", "ref_scale", 12),
-        ("rms_abs", "rms_abs", 12),
-        ("rms_rel", "rms_rel", 12),
-        ("max_abs", "max_abs", 12),
-        ("max_rel", "max_rel", 12),
+    columns: list[tuple[str, str, int, typing.Callable[[typing.Any], str]]] = [
+        ("tensor_name", "Tensor", 28, lambda v: v.split(":", 1)[-1].strip()),
+        ("kind", "Kind", 4, str),
+        ("rms_rel", "Relative", 9, lambda v: f"{v * 100:.3g}%"),
+        ("rms_abs", "Absolute", 10, lambda v: f"{v:.3g}"),
+        ("max_abs", "Max", 10, lambda v: f"{v:.3g}"),
+        ("ref_scale", "Scale", 10, lambda v: f"{v:.3g}"),
     ]
-    header = "  ".join(f"{title:<{width}}" for _, title, width in columns)
+    header = "  ".join(f"{title:<{width}}" for _, title, width, _ in columns)
     print(header)
     print("-" * len(header))
     for row in rows:
-        parts = []
-        for key, _, width in columns:
-            value = row[key]
-            if isinstance(value, float):
-                cell = f"{value:.4e}"
-            elif isinstance(value, list):
-                cell = "x".join(str(x) for x in value)
-            else:
-                cell = str(value)
-            parts.append(f"{cell:<{width}}")
-        print("  ".join(parts))
+        print("  ".join(f"{format_fn(row[key]):<{width}}" for key, _, width, format_fn in columns))
 
 
 if __name__ == "__main__":
