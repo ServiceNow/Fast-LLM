@@ -178,19 +178,18 @@ def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
     if not rows:
         print("(no matching tensors)")
         return
-    columns: list[tuple[str, str, int, typing.Callable[[typing.Any], str]]] = [
-        ("tensor_name", "Tensor", 28, lambda v: v.split(":", 1)[-1].strip()),
-        ("kind", "Kind", 4, str),
-        ("rms_rel", "Relative", 9, lambda v: f"{v * 100:.3g}%"),
-        ("rms_abs", "Absolute", 10, lambda v: f"{v:.3g}"),
-        ("max_abs", "Max", 10, lambda v: f"{v:.3g}"),
-        ("ref_scale", "Scale", 10, lambda v: f"{v:.3g}"),
+    columns: list[tuple[str, int, typing.Callable[[dict[str, typing.Any]], str]]] = [
+        ("Tensor", 26, lambda r: f"{r['tensor_name'].split(':', 1)[-1].strip()} ({r['kind']})"),
+        ("Relative", 8, lambda r: f"{r['rms_rel'] * 100:.2f}%"),
+        ("Absolute", 10, lambda r: f"{r['rms_abs']:.2e}"),
+        ("Max", 10, lambda r: f"{r['max_abs']:.2e}"),
+        ("Scale", 10, lambda r: f"{r['ref_scale']:.2e}"),
     ]
-    header = "  ".join(f"{title:<{width}}" for _, title, width, _ in columns)
+    header = "  ".join(f"{title:<{width}}" for title, width, _ in columns)
     print(header)
     print("-" * len(header))
     for row in rows:
-        print("  ".join(f"{format_fn(row[key]):<{width}}" for key, _, width, format_fn in columns))
+        print("  ".join(f"{format_fn(row):<{width}}" for _, width, format_fn in columns))
 
 
 if __name__ == "__main__":
