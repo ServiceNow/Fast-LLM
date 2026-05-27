@@ -1,6 +1,7 @@
 import json
 import logging
 import pathlib
+import shutil
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
@@ -89,6 +90,12 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         return self.output_dir / name / "runs" / "0" / "artifacts"
 
     def _run_one(self, name: str, variant_overrides: dict[str, typing.Any]) -> None:
+        # The trainer's Run picks the next `runs/<n>` subdir based on what already exists; wipe
+        # any prior contents so each invocation lands in `runs/0` and stale artifacts can't be
+        # read by `_artifact_path` below.
+        experiment_dir = self.output_dir / name
+        if experiment_dir.exists():
+            shutil.rmtree(experiment_dir)
         # Base config: hardcoded training/optimizer/data/run skeleton plus the user's model/pretrained.
         # Forced fp32 on the reference baseline lives in here too so a variant can override it.
         base_dict: dict[str, typing.Any] = {
