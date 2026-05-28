@@ -94,9 +94,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
         for name, rows in results.items():
             _print_table(name, rows)
-        print("\n=== Summary ===")
-        for name, rows in results.items():
-            _print_table(name, _summary_rows(rows))
+        _print_summary(results)
 
     def _prepare_data(self) -> None:
         if self.data_path is None:
@@ -204,24 +202,30 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         return rows
 
 
-def _summary_rows(rows: list[dict[str, typing.Any]]) -> list[dict[str, typing.Any]]:
-    out: list[dict[str, typing.Any]] = []
-    metric_keys = ("rms_rel", "rms_abs", "max_abs", "ref_scale")
-    for kind in ("fw", "bw"):
-        group = [r for r in rows if r["kind"] == kind]
-        if not group:
-            continue
-        first, last = group[0], group[-1]
-        intermediate = group[1:-1]
-        out.append({**first, "tensor_name": "first", "kind": kind})
-        out.append({**last, "tensor_name": "last", "kind": kind})
-        if intermediate:
-            for agg_name, agg in (("max", max), ("median", statistics.median)):
-                aggregated = {"tensor_name": agg_name, "kind": kind}
-                for key in metric_keys:
-                    aggregated[key] = agg(r[key] for r in intermediate)
-                out.append(aggregated)
-    return out
+def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
+    columns = [(f"{kind} {agg}", kind, agg) for kind in ("fw", "bw") for agg in ("first", "last", "max", "median")]
+    name_width = max((len(name) for name in results), default=7) + 2
+    cell_width = 10
+    print("\n=== Summary (Relative %) ===")
+    header = f"{'Variant':<{name_width}}" + "".join(f"{h:<{cell_width}}" for h, _, _ in columns)
+    print(header)
+    print("-" * len(header))
+    for name, rows in results.items():
+        cells = []
+        for _, kind, agg in columns:
+            group = [r["rms_rel"] for r in rows if r["kind"] == kind]
+            if not group:
+                cells.append("n/a")
+                continue
+            if agg == "first":
+                value = group[0]
+            elif agg == "last":
+                value = group[-1]
+            else:
+                intermediate = group[1:-1] or group
+                value = max(intermediate) if agg == "max" else statistics.median(intermediate)
+            cells.append(f"{value * 100:.2f}%")
+        print(f"{name:<{name_width}}" + "".join(f"{c:<{cell_width}}" for c in cells))
 
 
 def _classify(tensor_name: str) -> str:
