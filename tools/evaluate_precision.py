@@ -329,6 +329,17 @@ def _column_decimals(
     return min(result, max_decimals) if max_decimals is not None else result
 
 
+def _display_group(row: dict[str, typing.Any]) -> str:
+    # Map each row to one of "fw"/"bw"/"grad" for the per-variant table, independent
+    # of `kind`: head.logits is a forward activation, head.logits.grad is a backward
+    # quantity, parameter gradients are their own group.
+    if row["kind"] == "grad":
+        return "grad"
+    if row["kind"] == "bw" or row["tensor_name"].endswith(".grad"):
+        return "bw"
+    return "fw"
+
+
 def _classify(tensor_name: str) -> str:
     # Stage._log_layer_forward / _log_layer_backward produce "<module_name> fw[, mb=…]"
     # and "<module_name> bw[, mb=…]"; log_distributed_tensor may prefix the name
@@ -369,8 +380,22 @@ def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
     header = "  ".join(f"{title:<{width}}" for title, width, _ in columns)
     print(header)
     print("-" * len(header))
+    # Display grouping (fw / bw / grad) separates the chronologically-interleaved
+    # backward and reduce_gradients hooks. Independent of `kind` so the summary
+    # aggregation isn't affected.
+    groups = ("fw", "bw", "grad")
+    grouped: dict[str, list[dict[str, typing.Any]]] = {g: [] for g in groups}
     for row in rows:
-        print("  ".join(f"{format_fn(row):<{width}}" for _, width, format_fn in columns))
+        grouped[_display_group(row)].append(row)
+    first = True
+    for group in groups:
+        if not grouped[group]:
+            continue
+        if not first:
+            print()
+        first = False
+        for row in grouped[group]:
+            print("  ".join(f"{format_fn(row):<{width}}" for _, width, format_fn in columns))
 
 
 if __name__ == "__main__":
