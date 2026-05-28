@@ -209,8 +209,11 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
 def _layer_name(tensor_name: str) -> str:
     # Stage hooks name tensors `Global <layer> fw: ...` / `Global <layer> bw: ...`;
-    # extract the layer to use as a meaningful column label.
+    # Fsdp.log_shard names weight gradients `Global gradient: <param-path>`.
     prefix = tensor_name.split(":", 1)[0].strip().split()
+    if prefix == ["Global", "gradient"]:
+        param = tensor_name.split(":", 1)[1].strip()
+        return param.split(".")[0]
     if prefix and prefix[0] == "Global":
         prefix = prefix[1:]
     if prefix and prefix[-1] in ("fw", "bw"):
@@ -223,51 +226,38 @@ def _named_row(rows: list[dict[str, typing.Any]], name: str) -> dict[str, typing
 
 
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
-    # Per-pass labels for `first`/`last` come from the actual layer name on the matching row.
     sample = next(iter(results.values()))
-    endpoint_labels: dict[tuple[str, str], str] = {
-        ("fw", "first"): "first",
-        ("fw", "last"): "last",
-        ("bw", "first"): "first",
-        ("bw", "last"): "last",
-    }
-    for kind in ("fw", "bw"):
-        group = [r for r in sample if r["kind"] == kind]
-        if group:
-            endpoint_labels[(kind, "first")] = _layer_name(group[0]["tensor_name"])
-            endpoint_labels[(kind, "last")] = _layer_name(group[-1]["tensor_name"])
-    mid_labels = {"median": "mid med", "max": "mid max", "logits": "logits"}
-    # Logits show up via `output_hidden_states` (`Global : head.logits` on the fw side and
-    # `Global : head.logits.grad` on the bw side once the loss has computed dL/dlogits).
-    # Each gets a dedicated column placed chronologically: end-of-fw and start-of-bw.
     has_fw_logits = _named_row(sample, "head.logits") is not None
     has_bw_logits = _named_row(sample, "head.logits.grad") is not None
+    # Each kind's aggregation columns are listed chronologically (left-to-right matches
+    # the order tensors are logged). Logits show up via `output_hidden_states` on the
+    # fw/bw boundary; weight gradients have no logits hook.
     fw_aggs = ("first", "median", "max") + (("logits",) if has_fw_logits else ()) + ("last",)
     bw_aggs = ("first",) + (("logits",) if has_bw_logits else ()) + ("median", "max", "last")
-    aggs_per_kind = {"fw": fw_aggs, "bw": bw_aggs}
-    kinds = ("fw", "bw")
+    grad_aggs = ("first", "median", "max", "last")
+    aggs_per_kind = {"fw": fw_aggs, "bw": bw_aggs, "grad": grad_aggs}
+    for kind in ("fw", "bw", "grad"):
+        _print_summary_table(results, kind, aggs_per_kind[kind])
 
-    def _label(kind: str, agg: str) -> str:
-        return endpoint_labels[(kind, agg)] if agg in ("first", "last") else mid_labels[agg]
+
+def _print_summary_table(results: dict[str, list[dict[str, typing.Any]]], kind: str, aggs: tuple[str, ...]) -> None:
+    sample = next(iter(results.values()))
+    group = [r for r in sample if r["kind"] == kind]
+    if not group:
+        return
+    endpoint_labels = {
+        "first": _layer_name(group[0]["tensor_name"]),
+        "last": _layer_name(group[-1]["tensor_name"]),
+    }
+    mid_labels = {"median": "mid med", "max": "mid max", "logits": "logits"}
+
+    def _label(agg: str) -> str:
+        return endpoint_labels[agg] if agg in endpoint_labels else mid_labels[agg]
 
     name_width = max((len(name) for name in results), default=7) + 1
-    cell_width = max(len(_label(k, a)) for k in kinds for a in aggs_per_kind[k])
+    cell_width = max(len(_label(a)) for a in aggs)
     cell_sep = " "
-    group_sep = "   "
-    group_widths = {
-        kind: len(cell_sep.join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind])) for kind in kinds
-    }
-    print("\n=== Summary (Relative %; mid = excluding first/last) ===")
-    top = f"{'':<{name_width}}" + group_sep.join(f"{kind:^{group_widths[kind]}}" for kind in kinds)
-    bottom = f"{'Variant':<{name_width}}" + group_sep.join(
-        cell_sep.join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind]) for kind in kinds
-    )
-    print(top)
-    print(bottom)
-    print("-" * len(bottom))
-    # Collect raw values first so we can pick a per-column decimal count: keep the previous
-    # .3f% default, but bump up just enough to give every cell in a column ≥ 2 sig figs.
-    raw: dict[str, dict[tuple[str, str], float | None]] = {}
+    raw: dict[str, dict[str, float | None]] = {}
     for name, rows in results.items():
         logits_fw = _named_row(rows, "head.logits")
         logits_bw = _named_row(rows, "head.logits.grad")
@@ -275,44 +265,36 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
             "fw": logits_fw["rms_rel"] if logits_fw else float("nan"),
             "bw": logits_bw["rms_rel"] if logits_bw else float("nan"),
         }
-        cells: dict[tuple[str, str], float | None] = {}
-        for kind in kinds:
-            values = [r["rms_rel"] for r in rows if r["kind"] == kind]
-            intermediate = values[1:-1] or values
-            for agg in aggs_per_kind[kind]:
-                if not values:
-                    cells[(kind, agg)] = None
-                    continue
-                if agg == "first":
-                    cells[(kind, agg)] = values[0]
-                elif agg == "last":
-                    cells[(kind, agg)] = values[-1]
-                elif agg == "logits":
-                    cells[(kind, agg)] = logits_value[kind]
-                elif agg == "max":
-                    cells[(kind, agg)] = max(intermediate)
-                else:
-                    cells[(kind, agg)] = statistics.median(intermediate)
+        values = [r["rms_rel"] for r in rows if r["kind"] == kind]
+        intermediate = values[1:-1] or values
+        cells: dict[str, float | None] = {}
+        for agg in aggs:
+            if not values:
+                cells[agg] = None
+            elif agg == "first":
+                cells[agg] = values[0]
+            elif agg == "last":
+                cells[agg] = values[-1]
+            elif agg == "logits":
+                cells[agg] = logits_value[kind]
+            elif agg == "max":
+                cells[agg] = max(intermediate)
+            else:
+                cells[agg] = statistics.median(intermediate)
         raw[name] = cells
 
-    column_decimals: dict[tuple[str, str], int] = {}
-    for kind in kinds:
-        for agg in aggs_per_kind[kind]:
-            column_decimals[(kind, agg)] = _column_decimals(
-                cells[(kind, agg)] for cells in raw.values() if cells[(kind, agg)] is not None
-            )
+    column_decimals = {
+        agg: _column_decimals(cells[agg] for cells in raw.values() if cells[agg] is not None) for agg in aggs
+    }
+    print(f"\n=== Summary: {kind} (Relative %; mid = excluding first/last) ===")
+    header = f"{'Variant':<{name_width}}" + cell_sep.join(f"{_label(a):<{cell_width}}" for a in aggs)
+    print(header)
+    print("-" * len(header))
     for name, cells in raw.items():
-        groups = []
-        for kind in kinds:
-            formatted = []
-            for agg in aggs_per_kind[kind]:
-                value = cells[(kind, agg)]
-                if value is None:
-                    formatted.append("n/a")
-                else:
-                    formatted.append(f"{value * 100:.{column_decimals[(kind, agg)]}f}%")
-            groups.append(cell_sep.join(f"{c:<{cell_width}}" for c in formatted))
-        print(f"{name:<{name_width}}" + group_sep.join(groups))
+        formatted = [
+            f"{cells[agg] * 100:.{column_decimals[agg]}f}%" if cells[agg] is not None else "n/a" for agg in aggs
+        ]
+        print(f"{name:<{name_width}}" + cell_sep.join(f"{c:<{cell_width}}" for c in formatted))
 
 
 def _column_decimals(
