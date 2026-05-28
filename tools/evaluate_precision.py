@@ -216,11 +216,8 @@ def _layer_name(tensor_name: str) -> str:
     return " ".join(prefix) if prefix else "?"
 
 
-def _logits_row(rows: list[dict[str, typing.Any]]) -> dict[str, typing.Any] | None:
-    return next(
-        (r for r in rows if r["tensor_name"].split(":", 1)[-1].strip() == "head.logits"),
-        None,
-    )
+def _named_row(rows: list[dict[str, typing.Any]], name: str) -> dict[str, typing.Any] | None:
+    return next((r for r in rows if r["tensor_name"].split(":", 1)[-1].strip() == name), None)
 
 
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
@@ -238,13 +235,14 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
             endpoint_labels[(kind, "first")] = _layer_name(group[0]["tensor_name"])
             endpoint_labels[(kind, "last")] = _layer_name(group[-1]["tensor_name"])
     mid_labels = {"median": "mid med", "max": "mid max", "logits": "logits"}
-    # Logits show up on the fw side via `output_hidden_states` ("Global : head.logits");
-    # add a dedicated column for it (chronologically just before the head output / loss).
-    has_logits = _logits_row(sample) is not None
-    aggs_per_kind = {
-        "fw": ("first", "median", "max", "logits", "last") if has_logits else ("first", "median", "max", "last"),
-        "bw": ("first", "median", "max", "last"),
-    }
+    # Logits show up via `output_hidden_states` (`Global : head.logits` on the fw side and
+    # `Global : head.logits.grad` on the bw side once the loss has computed dL/dlogits).
+    # Each gets a dedicated column placed chronologically: end-of-fw and start-of-bw.
+    has_fw_logits = _named_row(sample, "head.logits") is not None
+    has_bw_logits = _named_row(sample, "head.logits.grad") is not None
+    fw_aggs = ("first", "median", "max") + (("logits",) if has_fw_logits else ()) + ("last",)
+    bw_aggs = (("logits",) if has_bw_logits else ()) + ("first", "median", "max", "last")
+    aggs_per_kind = {"fw": fw_aggs, "bw": bw_aggs}
     kinds = ("fw", "bw")
 
     def _label(kind: str, agg: str) -> str:
@@ -265,7 +263,12 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     print(bottom)
     print("-" * len(bottom))
     for name, rows in results.items():
-        logits_value = _logits_row(rows)["rms_rel"] if _logits_row(rows) else float("nan")
+        logits_fw = _named_row(rows, "head.logits")
+        logits_bw = _named_row(rows, "head.logits.grad")
+        logits_value = {
+            "fw": logits_fw["rms_rel"] if logits_fw else float("nan"),
+            "bw": logits_bw["rms_rel"] if logits_bw else float("nan"),
+        }
         groups = []
         for kind in kinds:
             values = [r["rms_rel"] for r in rows if r["kind"] == kind]
@@ -280,7 +283,7 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
                 elif agg == "last":
                     value = values[-1]
                 elif agg == "logits":
-                    value = logits_value
+                    value = logits_value[kind]
                 elif agg == "max":
                     value = max(intermediate)
                 else:
@@ -294,7 +297,9 @@ def _classify(tensor_name: str) -> str:
     # Stage._log_layer_forward / _log_layer_backward produce "<module_name> fw[, mb=…]"
     # and "<module_name> bw[, mb=…]"; log_distributed_tensor may prefix the name
     # with "Global " and append a ": <description>" suffix when reconstructing a
-    # tensor-parallel-global tensor.
+    # tensor-parallel-global tensor. Other entries (e.g. `Global : head.logits`,
+    # `Global : head.logits.grad`) come from the `_debug` / `output_hidden_states` path
+    # and are surfaced via dedicated logits columns in the summary.
     for kind in ("fw", "bw"):
         if f" {kind}:" in tensor_name or f" {kind}," in tensor_name or tensor_name.endswith(f" {kind}"):
             return kind

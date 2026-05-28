@@ -293,6 +293,18 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             if loss_value is not None:
                 losses_.append(loss_value.detach())
 
+        if grad is not None:
+            # `logits` has `requires_grad=False` (custom-autograd), so the existing
+            # `_debug(logits, ...)` can't auto-capture the gradient. Log it explicitly here
+            # so `output_hidden_states` patterns covering `head.logits` also catch the grad.
+            self._debug(
+                grad,
+                f"logits.grad{"" if self._config.cross_entropy_splits == 1 else f"_{split_index}"}",
+                (kwargs.get(LanguageModelKwargs.hidden_token_dim), self._vocab_dim),
+                kwargs,
+                scale=self._config.logits_scale_factor,
+            )
+
         if not self.training or grad is None:
             return sum(losses_) if losses_ else None, None
 
