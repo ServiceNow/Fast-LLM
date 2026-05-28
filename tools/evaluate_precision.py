@@ -203,31 +203,43 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
 
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
-    agg_labels = {"first": "first", "last": "last", "max": "mid max", "median": "mid med"}
+    # Chronological column order: first → intermediate (median, max) → last.
+    aggs = ("first", "median", "max", "last")
+    agg_labels = {"first": "first", "median": "mid med", "max": "mid max", "last": "last"}
+    kinds = ("fw", "bw")
     name_width = max((len(name) for name in results), default=7) + 2
-    cell_width = max(len(label) for label in agg_labels.values()) + 2
+    cell_width = max(len(label) for label in agg_labels.values()) + 1
+    group_sep = "    "
+    group_width = len("  ".join(f"{agg_labels[a]:<{cell_width}}" for a in aggs))
     print("\n=== Summary (Relative %; mid = excluding first/last) ===")
-    header = f"{'Variant':<{name_width}}{'':<4}" + "  ".join(f"{label:<{cell_width}}" for label in agg_labels.values())
-    print(header)
-    print("-" * len(header))
+    top = f"{'':<{name_width}}" + group_sep.join(f"{kind:^{group_width}}" for kind in kinds)
+    bottom = f"{'Variant':<{name_width}}" + group_sep.join(
+        "  ".join(f"{agg_labels[a]:<{cell_width}}" for a in aggs) for _ in kinds
+    )
+    print(top)
+    print(bottom)
+    print("-" * len(bottom))
     for name, rows in results.items():
-        for index, kind in enumerate(("fw", "bw")):
-            group = [r["rms_rel"] for r in rows if r["kind"] == kind]
+        groups = []
+        for kind in kinds:
+            values = [r["rms_rel"] for r in rows if r["kind"] == kind]
+            intermediate = values[1:-1] or values
             cells = []
-            for agg in agg_labels:
-                if not group:
+            for agg in aggs:
+                if not values:
                     cells.append("n/a")
                     continue
                 if agg == "first":
-                    value = group[0]
+                    value = values[0]
                 elif agg == "last":
-                    value = group[-1]
+                    value = values[-1]
+                elif agg == "max":
+                    value = max(intermediate)
                 else:
-                    intermediate = group[1:-1] or group
-                    value = max(intermediate) if agg == "max" else statistics.median(intermediate)
+                    value = statistics.median(intermediate)
                 cells.append(f"{value * 100:.3f}%")
-            name_cell = name if index == 0 else ""
-            print(f"{name_cell:<{name_width}}{kind:<4}" + "  ".join(f"{c:<{cell_width}}" for c in cells))
+            groups.append("  ".join(f"{c:<{cell_width}}" for c in cells))
+        print(f"{name:<{name_width}}" + group_sep.join(groups))
 
 
 def _classify(tensor_name: str) -> str:
