@@ -131,6 +131,13 @@ class LanguageModelHeadConfig(BlockConfig):
         hint=FieldHint.architecture,
         valid=skip_valid_if_none(check_field(Assert.gt, 0)),
     )
+    fp32_lm_head: bool = Field(
+        default=False,
+        desc="Upcast input and weight to float32 before the lm_head linear. "
+        "Matches vLLM's bf16_last_layer_fp32 quantization so new_logprobs and old_logprobs "
+        "are computed at the same numerical precision, keeping the IS ratio near 1 at init.",
+        hint=FieldHint.feature,
+    )
     prediction_heads: int = Field(
         default=1,
         desc="Prediction heads.",
