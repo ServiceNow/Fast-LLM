@@ -2,6 +2,7 @@ import json
 import logging
 import pathlib
 import shutil
+import statistics
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
@@ -93,6 +94,9 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
         for name, rows in results.items():
             _print_table(name, rows)
+        print("\n=== Summary ===")
+        for name, rows in results.items():
+            _print_table(name, _summary_rows(rows))
 
     def _prepare_data(self) -> None:
         if self.data_path is None:
@@ -198,6 +202,26 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                     }
                 )
         return rows
+
+
+def _summary_rows(rows: list[dict[str, typing.Any]]) -> list[dict[str, typing.Any]]:
+    out: list[dict[str, typing.Any]] = []
+    metric_keys = ("rms_rel", "rms_abs", "max_abs", "ref_scale")
+    for kind in ("fw", "bw"):
+        group = [r for r in rows if r["kind"] == kind]
+        if not group:
+            continue
+        first, last = group[0], group[-1]
+        intermediate = group[1:-1]
+        out.append({**first, "tensor_name": "first", "kind": kind})
+        out.append({**last, "tensor_name": "last", "kind": kind})
+        if intermediate:
+            for agg_name, agg in (("max", max), ("median", statistics.median)):
+                aggregated = {"tensor_name": agg_name, "kind": kind}
+                for key in metric_keys:
+                    aggregated[key] = agg(r[key] for r in intermediate)
+                out.append(aggregated)
+    return out
 
 
 def _classify(tensor_name: str) -> str:
