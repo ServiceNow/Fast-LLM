@@ -241,7 +241,7 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     has_fw_logits = _named_row(sample, "head.logits") is not None
     has_bw_logits = _named_row(sample, "head.logits.grad") is not None
     fw_aggs = ("first", "median", "max") + (("logits",) if has_fw_logits else ()) + ("last",)
-    bw_aggs = (("logits",) if has_bw_logits else ()) + ("first", "median", "max", "last")
+    bw_aggs = ("first",) + (("logits",) if has_bw_logits else ()) + ("median", "max", "last")
     aggs_per_kind = {"fw": fw_aggs, "bw": bw_aggs}
     kinds = ("fw", "bw")
 
@@ -288,7 +288,7 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
                     value = max(intermediate)
                 else:
                     value = statistics.median(intermediate)
-                cells.append(f"{value * 100:.3f}%")
+                cells.append(f"{value * 100:.4g}%")
             groups.append("  ".join(f"{c:<{cell_width}}" for c in cells))
         print(f"{name:<{name_width}}" + group_sep.join(groups))
 
