@@ -204,29 +204,30 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     agg_labels = {"first": "first", "last": "last", "max": "mid max", "median": "mid med"}
-    columns = [(f"{kind} {agg_labels[agg]}", kind, agg) for kind in ("fw", "bw") for agg in agg_labels]
     name_width = max((len(name) for name in results), default=7) + 2
-    cell_width = max(len(label) for label, _, _ in columns) + 1
+    cell_width = max(len(label) for label in agg_labels.values()) + 2
     print("\n=== Summary (Relative %; mid = excluding first/last) ===")
-    header = f"{'Variant':<{name_width}}" + "  ".join(f"{h:<{cell_width}}" for h, _, _ in columns)
+    header = f"{'Variant':<{name_width}}{'':<4}" + "  ".join(f"{label:<{cell_width}}" for label in agg_labels.values())
     print(header)
     print("-" * len(header))
     for name, rows in results.items():
-        cells = []
-        for _, kind, agg in columns:
+        for index, kind in enumerate(("fw", "bw")):
             group = [r["rms_rel"] for r in rows if r["kind"] == kind]
-            if not group:
-                cells.append("n/a")
-                continue
-            if agg == "first":
-                value = group[0]
-            elif agg == "last":
-                value = group[-1]
-            else:
-                intermediate = group[1:-1] or group
-                value = max(intermediate) if agg == "max" else statistics.median(intermediate)
-            cells.append(f"{value * 100:.2f}%")
-        print(f"{name:<{name_width}}" + "  ".join(f"{c:<{cell_width}}" for c in cells))
+            cells = []
+            for agg in agg_labels:
+                if not group:
+                    cells.append("n/a")
+                    continue
+                if agg == "first":
+                    value = group[0]
+                elif agg == "last":
+                    value = group[-1]
+                else:
+                    intermediate = group[1:-1] or group
+                    value = max(intermediate) if agg == "max" else statistics.median(intermediate)
+                cells.append(f"{value * 100:.3f}%")
+            name_cell = name if index == 0 else ""
+            print(f"{name_cell:<{name_width}}{kind:<4}" + "  ".join(f"{c:<{cell_width}}" for c in cells))
 
 
 def _classify(tensor_name: str) -> str:
