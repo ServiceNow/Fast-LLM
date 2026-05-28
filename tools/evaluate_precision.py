@@ -225,19 +225,39 @@ def _named_row(rows: list[dict[str, typing.Any]], name: str) -> dict[str, typing
     return next((r for r in rows if r["tensor_name"].split(":", 1)[-1].strip() == name), None)
 
 
+_LM_HEAD_NAME = "head.output_weights"
+_EMBEDDINGS_NAME = "embeddings.word_embeddings_weight"
+
+
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     sample = next(iter(results.values()))
     has_fw_logits = _named_row(sample, "head.logits") is not None
     has_bw_logits = _named_row(sample, "head.logits.grad") is not None
+    has_bias = any(
+        r["kind"] == "grad" and r["tensor_name"].split(":", 1)[-1].strip().endswith(".bias") for r in sample
+    )
     # Each kind's aggregation columns are listed chronologically (left-to-right matches
     # the order tensors are logged). Logits show up via `output_hidden_states` on the
     # fw/bw boundary; weight gradients have no logits hook.
     fw_aggs = ("first", "median", "max") + (("logits",) if has_fw_logits else ()) + ("last",)
     bw_aggs = ("first",) + (("logits",) if has_bw_logits else ()) + ("median", "max", "last")
-    grad_aggs = ("first", "median", "max", "last")
+    grad_aggs = (
+        ("lm_head", "linear_med", "linear_max", "norm_med", "norm_max")
+        + (("bias_med", "bias_max") if has_bias else ())
+        + ("embeddings",)
+    )
     aggs_per_kind = {"fw": fw_aggs, "bw": bw_aggs, "grad": grad_aggs}
     for kind in ("fw", "bw", "grad"):
         _print_summary_table(results, kind, aggs_per_kind[kind])
+
+
+def _grad_category(tensor_name: str) -> str:
+    name = tensor_name.split(":", 1)[-1].strip()
+    if name.endswith(".bias"):
+        return "bias"
+    if ".norm_" in name or name.endswith(".norm.weight"):
+        return "norm"
+    return "linear"
 
 
 def _print_summary_table(results: dict[str, list[dict[str, typing.Any]]], kind: str, aggs: tuple[str, ...]) -> None:
@@ -249,7 +269,19 @@ def _print_summary_table(results: dict[str, list[dict[str, typing.Any]]], kind: 
         "first": _layer_name(group[0]["tensor_name"]),
         "last": _layer_name(group[-1]["tensor_name"]),
     }
-    mid_labels = {"median": "mid med", "max": "mid max", "logits": "logits"}
+    mid_labels = {
+        "median": "mid med",
+        "max": "mid max",
+        "logits": "logits",
+        "lm_head": "lm head",
+        "embeddings": "embeddings",
+        "linear_med": "linear med",
+        "linear_max": "linear max",
+        "norm_med": "norm med",
+        "norm_max": "norm max",
+        "bias_med": "bias med",
+        "bias_max": "bias max",
+    }
 
     def _label(agg: str) -> str:
         return endpoint_labels[agg] if agg in endpoint_labels else mid_labels[agg]
@@ -265,28 +297,54 @@ def _print_summary_table(results: dict[str, list[dict[str, typing.Any]]], kind: 
             "fw": logits_fw["rms_rel"] if logits_fw else float("nan"),
             "bw": logits_bw["rms_rel"] if logits_bw else float("nan"),
         }
-        values = [r["rms_rel"] for r in rows if r["kind"] == kind]
+        kind_rows = [r for r in rows if r["kind"] == kind]
+        values = [r["rms_rel"] for r in kind_rows]
+        if kind == "grad":
+            decoder_rows = [r for r in kind_rows if r["tensor_name"].split(":", 1)[-1].strip().startswith("decoder.")]
+            category_values: dict[str, list[float]] = {"linear": [], "norm": [], "bias": []}
+            for r in decoder_rows:
+                category_values[_grad_category(r["tensor_name"])].append(r["rms_rel"])
+            lm_head_row = _named_row(kind_rows, _LM_HEAD_NAME)
+            embeddings_row = _named_row(kind_rows, _EMBEDDINGS_NAME)
+        else:
+            category_values = {}
+            lm_head_row = embeddings_row = None
         intermediate = values[1:-1] or values
         cells: dict[str, float | None] = {}
         for agg in aggs:
-            if not values:
-                cells[agg] = None
-            elif agg == "first":
-                cells[agg] = values[0]
+            if agg == "first":
+                cells[agg] = values[0] if values else None
             elif agg == "last":
-                cells[agg] = values[-1]
+                cells[agg] = values[-1] if values else None
             elif agg == "logits":
                 cells[agg] = logits_value[kind]
+            elif agg == "lm_head":
+                cells[agg] = lm_head_row["rms_rel"] if lm_head_row else None
+            elif agg == "embeddings":
+                cells[agg] = embeddings_row["rms_rel"] if embeddings_row else None
+            elif "_" in agg and agg.split("_", 1)[0] in category_values:
+                cat, stat = agg.split("_", 1)
+                cat_values = category_values[cat]
+                if not cat_values:
+                    cells[agg] = None
+                elif stat == "max":
+                    cells[agg] = max(cat_values)
+                else:
+                    cells[agg] = statistics.median(cat_values)
             elif agg == "max":
-                cells[agg] = max(intermediate)
+                cells[agg] = max(intermediate) if intermediate else None
             else:
-                cells[agg] = statistics.median(intermediate)
+                cells[agg] = statistics.median(intermediate) if intermediate else None
         raw[name] = cells
 
     column_decimals = {
         agg: _column_decimals(cells[agg] for cells in raw.values() if cells[agg] is not None) for agg in aggs
     }
-    print(f"\n=== Summary: {kind} (Relative %; mid = excluding first/last) ===")
+    if kind == "grad":
+        subtitle = " (Relative %)"
+    else:
+        subtitle = " (Relative %; mid = excluding first/last)"
+    print(f"\n=== Summary: {kind}{subtitle} ===")
     header = f"{'Variant':<{name_width}}" + cell_sep.join(f"{_label(a):<{cell_width}}" for a in aggs)
     print(header)
     print("-" * len(header))
