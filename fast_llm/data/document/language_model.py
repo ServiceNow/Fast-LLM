@@ -161,6 +161,13 @@ class LanguageModelBatch(TokenBatch):
 
         self._set_target_inputs(model_inputs, config)
 
+        if config.output_hidden_states:
+            import re
+
+            patterns = {re.compile(pattern) for pattern in config.output_hidden_states}
+            for model_input in model_inputs:
+                model_input.output_hidden_states.update(patterns)
+
         return model_inputs
 
     def _set_target_inputs(

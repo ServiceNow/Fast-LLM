@@ -161,6 +161,9 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         tool_overrides = {
             ("model", "multi_stage", "debug_layer_outputs"): _LOG_LEVEL,
             ("model", "multi_stage", "debug_layer_gradients"): _LOG_LEVEL,
+            # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
+            # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
+            ("model", "multi_stage", "debug_hidden_states_log"): [r"head\.logits"],
         }
         logger.info(f"=== Running {name!r} ===")
         if variant_overrides:
@@ -213,9 +216,14 @@ def _layer_name(tensor_name: str) -> str:
     return " ".join(prefix) if prefix else "?"
 
 
+def _logits_row(rows: list[dict[str, typing.Any]]) -> dict[str, typing.Any] | None:
+    return next(
+        (r for r in rows if r["tensor_name"].split(":", 1)[-1].strip() == "head.logits"),
+        None,
+    )
+
+
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
-    # Chronological column order: first → intermediate (median, max) → last.
-    aggs = ("first", "median", "max", "last")
     # Per-pass labels for `first`/`last` come from the actual layer name on the matching row.
     sample = next(iter(results.values()))
     endpoint_labels: dict[tuple[str, str], str] = {
@@ -229,31 +237,41 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
         if group:
             endpoint_labels[(kind, "first")] = _layer_name(group[0]["tensor_name"])
             endpoint_labels[(kind, "last")] = _layer_name(group[-1]["tensor_name"])
-    mid_labels = {"median": "mid med", "max": "mid max"}
+    mid_labels = {"median": "mid med", "max": "mid max", "logits": "logits"}
+    # Logits show up on the fw side via `output_hidden_states` ("Global : head.logits");
+    # add a dedicated column for it (chronologically just before the head output / loss).
+    has_logits = _logits_row(sample) is not None
+    aggs_per_kind = {
+        "fw": ("first", "median", "max", "logits", "last") if has_logits else ("first", "median", "max", "last"),
+        "bw": ("first", "median", "max", "last"),
+    }
     kinds = ("fw", "bw")
 
     def _label(kind: str, agg: str) -> str:
         return endpoint_labels[(kind, agg)] if agg in ("first", "last") else mid_labels[agg]
 
     name_width = max((len(name) for name in results), default=7) + 2
-    cell_width = max(len(_label(k, a)) for k in kinds for a in aggs) + 1
+    cell_width = max(len(_label(k, a)) for k in kinds for a in aggs_per_kind[k]) + 1
     group_sep = "    "
-    group_widths = {kind: len("  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs)) for kind in kinds}
+    group_widths = {
+        kind: len("  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind])) for kind in kinds
+    }
     print("\n=== Summary (Relative %; mid = excluding first/last) ===")
     top = f"{'':<{name_width}}" + group_sep.join(f"{kind:^{group_widths[kind]}}" for kind in kinds)
     bottom = f"{'Variant':<{name_width}}" + group_sep.join(
-        "  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs) for kind in kinds
+        "  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind]) for kind in kinds
     )
     print(top)
     print(bottom)
     print("-" * len(bottom))
     for name, rows in results.items():
+        logits_value = _logits_row(rows)["rms_rel"] if _logits_row(rows) else float("nan")
         groups = []
         for kind in kinds:
             values = [r["rms_rel"] for r in rows if r["kind"] == kind]
             intermediate = values[1:-1] or values
             cells = []
-            for agg in aggs:
+            for agg in aggs_per_kind[kind]:
                 if not values:
                     cells.append("n/a")
                     continue
@@ -261,6 +279,8 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
                     value = values[0]
                 elif agg == "last":
                     value = values[-1]
+                elif agg == "logits":
+                    value = logits_value
                 elif agg == "max":
                     value = max(intermediate)
                 else:
