@@ -33,7 +33,6 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.layers.block.config import PatternBlockSequenceConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig, StochasticMixerConfig
-from fast_llm.models.gpt.conversion.config import Gemma4CheckpointFormat
 from tests.utils.model_configs import MODEL_CONFIGS
 
 # Configs that don't default-construct cleanly need a minimal-valid factory.
@@ -165,26 +164,7 @@ def test_safe_set_nested_dict_value_collision() -> None:
 
 
 @pytest.mark.parametrize(
-    "fixture_name",
-    [
-        (
-            pytest.param(
-                name,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    reason=(
-                        "Gemma4 converters drop LayerNorm biases and non-MoE norm_2 on the full_attention "
-                        "branch of the test fixture, and declare ``output_scale`` unconditionally even when "
-                        "the block disables it."
-                    ),
-                ),
-            )
-            if cfg.checkpoint_format is Gemma4CheckpointFormat
-            else name
-        )
-        for name, cfg in MODEL_CONFIGS.items()
-        if cfg.checkpoint_format is not None
-    ],
+    "fixture_name", [name for name, cfg in MODEL_CONFIGS.items() if cfg.checkpoint_format is not None]
 )
 def test_format_weight_coverage(fixture_name: str) -> None:
     """Every Fast-LLM parameter must be consumed by some :class:`WeightConverter`.
