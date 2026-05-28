@@ -164,27 +164,28 @@ def test_safe_set_nested_dict_value_collision() -> None:
         _safe_set_nested_dict_value(out, ("nested", "key"), "other")
 
 
-_FIXTURES_WITH_FORMAT = [name for name, cfg in MODEL_CONFIGS.items() if cfg.checkpoint_format is not None]
-
-
-def _weight_coverage_param(fixture_name: str) -> typing.Any:
-    handler = MODEL_CONFIGS[fixture_name].checkpoint_format.get_handler_class()
-    if handler.format is Gemma4CheckpointFormat:
-        return pytest.param(
-            fixture_name,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "Gemma4 converters drop LayerNorm biases and non-MoE norm_2 on the full_attention "
-                    "branch of the test fixture, and declare ``output_scale`` unconditionally even when "
-                    "the block disables it."
+@pytest.mark.parametrize(
+    "fixture_name",
+    [
+        (
+            pytest.param(
+                name,
+                marks=pytest.mark.xfail(
+                    strict=True,
+                    reason=(
+                        "Gemma4 converters drop LayerNorm biases and non-MoE norm_2 on the full_attention "
+                        "branch of the test fixture, and declare ``output_scale`` unconditionally even when "
+                        "the block disables it."
+                    ),
                 ),
-            ),
+            )
+            if cfg.checkpoint_format is Gemma4CheckpointFormat
+            else name
         )
-    return pytest.param(fixture_name)
-
-
-@pytest.mark.parametrize("fixture_name", [_weight_coverage_param(n) for n in _FIXTURES_WITH_FORMAT])
+        for name, cfg in MODEL_CONFIGS.items()
+        if cfg.checkpoint_format is not None
+    ],
+)
 def test_format_weight_coverage(fixture_name: str) -> None:
     """Every Fast-LLM parameter must be consumed by some :class:`WeightConverter`.
 
@@ -235,7 +236,6 @@ def test_llama_export_rejects_mismatched_block_and_head_norm_epsilon() -> None:
 
     from fast_llm.models.gpt.config import GPTBaseModelConfig
     from fast_llm.models.gpt.conversion.llama import LlamaBaseModelConverter
-    from tests.utils.model_configs import MODEL_CONFIGS
 
     cfg = copy.deepcopy(MODEL_CONFIGS["llama"].config_dict["model"]["base_model"])
     # Default head normalization inherits the block default (1e-5); pin head to a different value.
