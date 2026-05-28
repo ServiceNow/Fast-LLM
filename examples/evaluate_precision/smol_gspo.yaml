@@ -17,8 +17,7 @@ model:
           type: gspo
 output_dir: /tmp/fast_llm_tests/evaluate_precision/gspo
 data_path: /tmp/fast_llm_tests/evaluate_precision/gspo_data
-sequence_length: 128
-num_samples: 512
+sequence_length: 2048
 variants:
   bf16:
     model.distributed.compute_dtype: bfloat16

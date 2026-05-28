@@ -20,11 +20,14 @@ import fast_llm.models.auto  # noqa: F401  # isort:skip
 logger = logging.getLogger(__name__)
 
 
-# Tensor-log verbosity level. 13 gives 2**(13-3)=1024 sampled values per tensor,
-# matching the convention in the existing layer-comparison tests.
-_LOG_LEVEL = 13
 _REFERENCE_NAME = "reference"
 _MODEL_TYPE = "gpt"
+# Embedding-weight gradients are row-sparse (only input-token rows non-zero), so a
+# uniformly-spaced sample of vocab_size entries usually misses all of them. The pattern
+# is applied via `TensorLogsConfig.sample_level_overrides` and picked up inside
+# `log_tensor` (samples = 2 ** (level - 3) -> level 23 yields ~1M samples per tensor).
+_SPARSE_GRAD_LEVEL = 23
+_SPARSE_GRAD_OVERRIDES = {r"Global gradient: embeddings\.": _SPARSE_GRAD_LEVEL}
 
 
 @config_class()
@@ -48,8 +51,10 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         hint=FieldHint.core,
     )
     num_samples: int = Field(
-        default=1024,
-        desc="Number of sampled values stored per logged tensor.",
+        default=8192,
+        desc="Number of sampled values stored per logged tensor (rounded up to next power of 2)."
+        " Sparse tensors (e.g. embedding-weight gradients) get a higher level via"
+        " `TensorLogsConfig.sample_level_overrides`.",
         hint=FieldHint.feature,
     )
     micro_batch_size: int = Field(
@@ -150,9 +155,15 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             },
             "run": {
                 "experiment_dir": str((self.output_dir / name).resolve()),
-                "tensor_logs": {"save": True, "show": False, "max_elements": self.num_samples},
+                "tensor_logs": {
+                    "save": True,
+                    "show": False,
+                    "sample_level_overrides": _SPARSE_GRAD_OVERRIDES,
+                },
             },
         }
+        # Translate `num_samples` to a `log_tensor` level: 2**(level-3) = samples.
+        log_level = math.ceil(math.log2(max(self.num_samples, 1))) + 3
         fp32_dtypes = {
             ("model", "distributed", "compute_dtype"): "float32",
             ("model", "distributed", "optimization_dtype"): "float32",
@@ -160,9 +171,9 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         variant_updates = {tuple(key.split(".")): value for key, value in variant_overrides.items()}
         # Tool-required overrides win over variants — a variant must not silently disable tensor logging.
         tool_overrides = {
-            ("model", "multi_stage", "debug_layer_outputs"): _LOG_LEVEL,
-            ("model", "multi_stage", "debug_layer_gradients"): _LOG_LEVEL,
-            ("model", "multi_stage", "debug_all_param_gradients"): _LOG_LEVEL,
+            ("model", "multi_stage", "debug_layer_outputs"): log_level,
+            ("model", "multi_stage", "debug_layer_gradients"): log_level,
+            ("model", "multi_stage", "debug_all_param_gradients"): log_level,
             # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
             # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
             ("model", "multi_stage", "debug_hidden_states_log"): [r"head\.logits"],

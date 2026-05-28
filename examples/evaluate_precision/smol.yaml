@@ -9,8 +9,7 @@ pretrained:
   path: HuggingFaceTB/SmolLM2-135M
   format: llama
 output_dir: /tmp/fast_llm_tests/evaluate_precision/features
-sequence_length: 128
-num_samples: 512
+sequence_length: 2048
 variants:
   # Baseline bf16: compute_dtype=bf16 + Fast-LLM defaults (fp32 gradient accumulation, bf16 residual, bf16 lm_head).
   bf16:
