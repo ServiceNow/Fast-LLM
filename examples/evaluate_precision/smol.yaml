@@ -1,0 +1,34 @@
+# Example precision-evaluation config: sweep precision-stability features on SmolLM2-135M.
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/smol.yaml
+#
+# `pretrained.path` accepts either a local checkpoint directory or a HF Hub model id
+# (auto-downloaded via `huggingface_hub.snapshot_download` on first use).
+pretrained:
+  path: HuggingFaceTB/SmolLM2-135M
+  format: llama
+output_dir: /tmp/fast_llm_tests/evaluate_precision/features
+sequence_length: 128
+num_samples: 512
+variants:
+  # Baseline bf16: compute_dtype=bf16 + Fast-LLM defaults (fp32 gradient accumulation, bf16 residual, bf16 lm_head).
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  # Turn OFF the default fp32 gradient accumulation — gradients accumulate in bf16.
+  bf16_no_fp32_gradients:
+    model.distributed.compute_dtype: bfloat16
+    model.multi_stage.full_precision_gradients: false
+  # Turn ON full-precision residual stream.
+  bf16_fp32_residual:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+  # Turn ON fp32 LM head matmul (PR #526).
+  bf16_fp32_lm_head:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+  # Both stability features on (most precise bf16-compute configuration).
+  bf16_max_precision:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+    model.base_model.head.fp32_lm_head: true
