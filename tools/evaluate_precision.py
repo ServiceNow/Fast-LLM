@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import pathlib
 import shutil
 import statistics
@@ -262,6 +263,9 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     print(top)
     print(bottom)
     print("-" * len(bottom))
+    # Collect raw values first so we can pick a per-column decimal count: keep the previous
+    # .3f% default, but bump up just enough to give every cell in a column ≥ 2 sig figs.
+    raw: dict[str, dict[tuple[str, str], float | None]] = {}
     for name, rows in results.items():
         logits_fw = _named_row(rows, "head.logits")
         logits_bw = _named_row(rows, "head.logits.grad")
@@ -269,28 +273,53 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
             "fw": logits_fw["rms_rel"] if logits_fw else float("nan"),
             "bw": logits_bw["rms_rel"] if logits_bw else float("nan"),
         }
-        groups = []
+        cells: dict[tuple[str, str], float | None] = {}
         for kind in kinds:
             values = [r["rms_rel"] for r in rows if r["kind"] == kind]
             intermediate = values[1:-1] or values
-            cells = []
             for agg in aggs_per_kind[kind]:
                 if not values:
-                    cells.append("n/a")
+                    cells[(kind, agg)] = None
                     continue
                 if agg == "first":
-                    value = values[0]
+                    cells[(kind, agg)] = values[0]
                 elif agg == "last":
-                    value = values[-1]
+                    cells[(kind, agg)] = values[-1]
                 elif agg == "logits":
-                    value = logits_value[kind]
+                    cells[(kind, agg)] = logits_value[kind]
                 elif agg == "max":
-                    value = max(intermediate)
+                    cells[(kind, agg)] = max(intermediate)
                 else:
-                    value = statistics.median(intermediate)
-                cells.append(f"{value * 100:.4g}%")
-            groups.append("  ".join(f"{c:<{cell_width}}" for c in cells))
+                    cells[(kind, agg)] = statistics.median(intermediate)
+        raw[name] = cells
+
+    column_decimals: dict[tuple[str, str], int] = {}
+    for kind in kinds:
+        for agg in aggs_per_kind[kind]:
+            column_decimals[(kind, agg)] = _column_decimals(
+                cells[(kind, agg)] for cells in raw.values() if cells[(kind, agg)] is not None
+            )
+    for name, cells in raw.items():
+        groups = []
+        for kind in kinds:
+            formatted = []
+            for agg in aggs_per_kind[kind]:
+                value = cells[(kind, agg)]
+                if value is None:
+                    formatted.append("n/a")
+                else:
+                    formatted.append(f"{value * 100:.{column_decimals[(kind, agg)]}f}%")
+            groups.append("  ".join(f"{c:<{cell_width}}" for c in formatted))
         print(f"{name:<{name_width}}" + group_sep.join(groups))
+
+
+def _column_decimals(values: typing.Iterable[float], min_sig_figs: int = 2, default: int = 3) -> int:
+    # Keep the previous default precision, but bump up so the smallest non-zero value
+    # carries at least `min_sig_figs` significant digits when formatted as percent.
+    smallest = min((abs(v) * 100 for v in values if v != 0), default=None)
+    if smallest is None or smallest >= 10 ** -(default - min_sig_figs + 1):
+        return default
+    return max(default, -math.floor(math.log10(smallest)) + min_sig_figs - 1)
 
 
 def _classify(tensor_name: str) -> str:
