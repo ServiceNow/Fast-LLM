@@ -15,10 +15,6 @@ variants:
   # Baseline bf16: compute_dtype=bf16 + Fast-LLM defaults (fp32 gradient accumulation, bf16 residual, bf16 lm_head).
   bf16:
     model.distributed.compute_dtype: bfloat16
-  # Turn OFF the default fp32 gradient accumulation — gradients accumulate in bf16.
-  bf16_no_fp32_gradients:
-    model.distributed.compute_dtype: bfloat16
-    model.multi_stage.full_precision_gradients: false
   # Turn ON full-precision residual stream.
   bf16_fp32_residual:
     model.distributed.compute_dtype: bfloat16

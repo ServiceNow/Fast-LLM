@@ -22,9 +22,6 @@ num_samples: 512
 variants:
   bf16:
     model.distributed.compute_dtype: bfloat16
-  bf16_no_fp32_gradients:
-    model.distributed.compute_dtype: bfloat16
-    model.multi_stage.full_precision_gradients: false
   bf16_fp32_residual:
     model.distributed.compute_dtype: bfloat16
     model.base_model.embeddings.full_precision_residual: true
