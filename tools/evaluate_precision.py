@@ -162,6 +162,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         tool_overrides = {
             ("model", "multi_stage", "debug_layer_outputs"): _LOG_LEVEL,
             ("model", "multi_stage", "debug_layer_gradients"): _LOG_LEVEL,
+            ("model", "multi_stage", "debug_all_param_gradients"): _LOG_LEVEL,
             # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
             # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
             ("model", "multi_stage", "debug_hidden_states_log"): [r"head\.logits"],
@@ -314,22 +315,32 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
         print(f"{name:<{name_width}}" + group_sep.join(groups))
 
 
-def _column_decimals(values: typing.Iterable[float], min_sig_figs: int = 2, default: int = 3) -> int:
-    # Keep the previous default precision, but bump up so the smallest non-zero value
-    # carries at least `min_sig_figs` significant digits when formatted as percent.
+def _column_decimals(
+    values: typing.Iterable[float], min_sig_figs: int = 2, default: int = 3, max_decimals: int | None = None
+) -> int:
+    # Keep the default precision, but bump up so the smallest non-zero value carries at least
+    # `min_sig_figs` significant digits when formatted as percent. `max_decimals` caps the
+    # bump so a single tiny noisy value doesn't widen the whole column.
     smallest = min((abs(v) * 100 for v in values if v != 0), default=None)
     if smallest is None or smallest >= 10 ** -(default - min_sig_figs + 1):
-        return default
-    return max(default, -math.floor(math.log10(smallest)) + min_sig_figs - 1)
+        result = default
+    else:
+        result = max(default, -math.floor(math.log10(smallest)) + min_sig_figs - 1)
+    return min(result, max_decimals) if max_decimals is not None else result
 
 
 def _classify(tensor_name: str) -> str:
     # Stage._log_layer_forward / _log_layer_backward produce "<module_name> fw[, mb=…]"
     # and "<module_name> bw[, mb=…]"; log_distributed_tensor may prefix the name
     # with "Global " and append a ": <description>" suffix when reconstructing a
-    # tensor-parallel-global tensor. Other entries (e.g. `Global : head.logits`,
-    # `Global : head.logits.grad`) come from the `_debug` / `output_hidden_states` path
-    # and are surfaced via dedicated logits columns in the summary.
+    # tensor-parallel-global tensor. Per-parameter gradient logs come from
+    # `Fsdp.log_shard(name="gradient", ...)` and are tagged "grad" so they appear
+    # in the per-variant table but stay out of the fw/bw summary aggregation.
+    # Other entries (e.g. `Global : head.logits`, `Global : head.logits.grad`) come
+    # from the `_debug` / `output_hidden_states` path and are surfaced via dedicated
+    # logits columns in the summary.
+    if "gradient:" in tensor_name:
+        return "grad"
     for kind in ("fw", "bw"):
         if f" {kind}:" in tensor_name or f" {kind}," in tensor_name or tensor_name.endswith(f" {kind}"):
             return kind
@@ -341,9 +352,16 @@ def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
     if not rows:
         print("(no matching tensors)")
         return
+    name_fn = lambda r: f"{r['tensor_name'].split(':', 1)[-1].strip()} ({r['kind']})"
+    name_width = max(len("Tensor"), max(len(name_fn(r)) for r in rows))
+    # Adaptive precision for the relative column: bump decimals so small but real values
+    # (typical for weight gradients) stay legible, capped at 5 to bound column width.
+    relative_decimals = _column_decimals((r["rms_rel"] for r in rows), default=2, max_decimals=5)
+    relative_fn = lambda r: f"{r['rms_rel'] * 100:.{relative_decimals}f}%"
+    relative_width = max(len("Relative"), max(len(relative_fn(r)) for r in rows))
     columns: list[tuple[str, int, typing.Callable[[dict[str, typing.Any]], str]]] = [
-        ("Tensor", 26, lambda r: f"{r['tensor_name'].split(':', 1)[-1].strip()} ({r['kind']})"),
-        ("Relative", 8, lambda r: f"{r['rms_rel'] * 100:.2f}%"),
+        ("Tensor", name_width, name_fn),
+        ("Relative", relative_width, relative_fn),
         ("Absolute", 10, lambda r: f"{r['rms_abs']:.4g}"),
         ("Max", 10, lambda r: f"{r['max_abs']:.4g}"),
         ("Scale", 10, lambda r: f"{r['ref_scale']:.4g}"),
