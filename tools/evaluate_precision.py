@@ -203,11 +203,12 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
 
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
-    columns = [(f"{kind} {agg}", kind, agg) for kind in ("fw", "bw") for agg in ("first", "last", "max", "median")]
+    agg_labels = {"first": "first", "last": "last", "max": "mid max", "median": "mid med"}
+    columns = [(f"{kind} {agg_labels[agg]}", kind, agg) for kind in ("fw", "bw") for agg in agg_labels]
     name_width = max((len(name) for name in results), default=7) + 2
-    cell_width = 10
-    print("\n=== Summary (Relative %) ===")
-    header = f"{'Variant':<{name_width}}" + "".join(f"{h:<{cell_width}}" for h, _, _ in columns)
+    cell_width = max(len(label) for label, _, _ in columns) + 1
+    print("\n=== Summary (Relative %; mid = excluding first/last) ===")
+    header = f"{'Variant':<{name_width}}" + "  ".join(f"{h:<{cell_width}}" for h, _, _ in columns)
     print(header)
     print("-" * len(header))
     for name, rows in results.items():
@@ -225,7 +226,7 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
                 intermediate = group[1:-1] or group
                 value = max(intermediate) if agg == "max" else statistics.median(intermediate)
             cells.append(f"{value * 100:.2f}%")
-        print(f"{name:<{name_width}}" + "".join(f"{c:<{cell_width}}" for c in cells))
+        print(f"{name:<{name_width}}" + "  ".join(f"{c:<{cell_width}}" for c in cells))
 
 
 def _classify(tensor_name: str) -> str:
