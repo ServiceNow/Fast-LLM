@@ -60,6 +60,13 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         desc="Sequence length (maximum document length) for the random input.",
         hint=FieldHint.feature,
     )
+    data_path: pathlib.Path | None = Field(
+        default=None,
+        desc="If set, prepare a tokenized memmap dataset with advantages and `old_log_probabilities`"
+        " at this path (using the test helper `_get_test_dataset`) and use it as the training"
+        " input — required for policy-gradient losses like GSPO/GRPO. If unset, uses random tokens.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         super()._validate()
@@ -71,6 +78,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
     def run(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._prepare_data()
         runs: dict[str, dict[str, typing.Any]] = {_REFERENCE_NAME: {}}
         runs.update(self.variants)
         for name, variant_overrides in runs.items():
@@ -85,6 +93,23 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
         for name, rows in results.items():
             _print_table(name, rows)
+
+    def _prepare_data(self) -> None:
+        if self.data_path is None:
+            return
+        if (self.data_path / "fast_llm_config.yaml").is_file():
+            return
+        # Couples `tools/` to `tests/utils/` for now — extract later if it sticks.
+        from tests.utils.dataset import _get_test_dataset
+
+        self.data_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Preparing memmap dataset at {self.data_path}")
+        _get_test_dataset(
+            self.data_path,
+            seed=42,
+            has_grpo_data=True,
+            max_vocab_size=self.model.base_model.embeddings.vocab_size,
+        )
 
     def _artifact_path(self, name: str) -> pathlib.Path:
         return self.output_dir / name / "runs" / "0" / "artifacts"
@@ -110,7 +135,13 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                 "learning_rate": {"base": 0.0, "decay_style": "constant", "warmup_iterations": 0},
             },
             "data": {
-                "datasets": {"training": {"type": "random"}},
+                "datasets": {
+                    "training": (
+                        {"type": "file", "path": str(self.data_path / "fast_llm_config.yaml")}
+                        if self.data_path is not None
+                        else {"type": "random"}
+                    )
+                },
                 "micro_batch_size": self.micro_batch_size,
                 "maximum_document_length": self.sequence_length,
             },
@@ -188,9 +219,9 @@ def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
     columns: list[tuple[str, int, typing.Callable[[dict[str, typing.Any]], str]]] = [
         ("Tensor", 26, lambda r: f"{r['tensor_name'].split(':', 1)[-1].strip()} ({r['kind']})"),
         ("Relative", 8, lambda r: f"{r['rms_rel'] * 100:.2f}%"),
-        ("Absolute", 10, lambda r: f"{r['rms_abs']:.3f}"),
-        ("Max", 10, lambda r: f"{r['max_abs']:.3f}"),
-        ("Scale", 10, lambda r: f"{r['ref_scale']:.3f}"),
+        ("Absolute", 10, lambda r: f"{r['rms_abs']:.4g}"),
+        ("Max", 10, lambda r: f"{r['max_abs']:.4g}"),
+        ("Scale", 10, lambda r: f"{r['ref_scale']:.4g}"),
     ]
     header = "  ".join(f"{title:<{width}}" for title, width, _ in columns)
     print(header)
