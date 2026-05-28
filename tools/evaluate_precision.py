@@ -249,16 +249,17 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     def _label(kind: str, agg: str) -> str:
         return endpoint_labels[(kind, agg)] if agg in ("first", "last") else mid_labels[agg]
 
-    name_width = max((len(name) for name in results), default=7) + 2
-    cell_width = max(len(_label(k, a)) for k in kinds for a in aggs_per_kind[k]) + 1
-    group_sep = "    "
+    name_width = max((len(name) for name in results), default=7) + 1
+    cell_width = max(len(_label(k, a)) for k in kinds for a in aggs_per_kind[k])
+    cell_sep = " "
+    group_sep = "   "
     group_widths = {
-        kind: len("  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind])) for kind in kinds
+        kind: len(cell_sep.join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind])) for kind in kinds
     }
     print("\n=== Summary (Relative %; mid = excluding first/last) ===")
     top = f"{'':<{name_width}}" + group_sep.join(f"{kind:^{group_widths[kind]}}" for kind in kinds)
     bottom = f"{'Variant':<{name_width}}" + group_sep.join(
-        "  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind]) for kind in kinds
+        cell_sep.join(f"{_label(kind, a):<{cell_width}}" for a in aggs_per_kind[kind]) for kind in kinds
     )
     print(top)
     print(bottom)
@@ -309,7 +310,7 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
                     formatted.append("n/a")
                 else:
                     formatted.append(f"{value * 100:.{column_decimals[(kind, agg)]}f}%")
-            groups.append("  ".join(f"{c:<{cell_width}}" for c in formatted))
+            groups.append(cell_sep.join(f"{c:<{cell_width}}" for c in formatted))
         print(f"{name:<{name_width}}" + group_sep.join(groups))
 
 
