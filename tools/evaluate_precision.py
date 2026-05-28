@@ -202,19 +202,47 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         return rows
 
 
+def _layer_name(tensor_name: str) -> str:
+    # Stage hooks name tensors `Global <layer> fw: ...` / `Global <layer> bw: ...`;
+    # extract the layer to use as a meaningful column label.
+    prefix = tensor_name.split(":", 1)[0].strip().split()
+    if prefix and prefix[0] == "Global":
+        prefix = prefix[1:]
+    if prefix and prefix[-1] in ("fw", "bw"):
+        prefix = prefix[:-1]
+    return " ".join(prefix) if prefix else "?"
+
+
 def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     # Chronological column order: first → intermediate (median, max) → last.
     aggs = ("first", "median", "max", "last")
-    agg_labels = {"first": "first", "median": "mid med", "max": "mid max", "last": "last"}
+    # Per-pass labels for `first`/`last` come from the actual layer name on the matching row.
+    sample = next(iter(results.values()))
+    endpoint_labels: dict[tuple[str, str], str] = {
+        ("fw", "first"): "first",
+        ("fw", "last"): "last",
+        ("bw", "first"): "first",
+        ("bw", "last"): "last",
+    }
+    for kind in ("fw", "bw"):
+        group = [r for r in sample if r["kind"] == kind]
+        if group:
+            endpoint_labels[(kind, "first")] = _layer_name(group[0]["tensor_name"])
+            endpoint_labels[(kind, "last")] = _layer_name(group[-1]["tensor_name"])
+    mid_labels = {"median": "mid med", "max": "mid max"}
     kinds = ("fw", "bw")
+
+    def _label(kind: str, agg: str) -> str:
+        return endpoint_labels[(kind, agg)] if agg in ("first", "last") else mid_labels[agg]
+
     name_width = max((len(name) for name in results), default=7) + 2
-    cell_width = max(len(label) for label in agg_labels.values()) + 1
+    cell_width = max(len(_label(k, a)) for k in kinds for a in aggs) + 1
     group_sep = "    "
-    group_width = len("  ".join(f"{agg_labels[a]:<{cell_width}}" for a in aggs))
+    group_widths = {kind: len("  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs)) for kind in kinds}
     print("\n=== Summary (Relative %; mid = excluding first/last) ===")
-    top = f"{'':<{name_width}}" + group_sep.join(f"{kind:^{group_width}}" for kind in kinds)
+    top = f"{'':<{name_width}}" + group_sep.join(f"{kind:^{group_widths[kind]}}" for kind in kinds)
     bottom = f"{'Variant':<{name_width}}" + group_sep.join(
-        "  ".join(f"{agg_labels[a]:<{cell_width}}" for a in aggs) for _ in kinds
+        "  ".join(f"{_label(kind, a):<{cell_width}}" for a in aggs) for kind in kinds
     )
     print(top)
     print(bottom)
