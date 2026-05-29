@@ -1,4 +1,5 @@
 import abc
+import functools
 import json
 import pathlib
 import shutil
@@ -121,9 +122,12 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             },
         )
 
-    # Top-level HF metadata keys that are always permitted, regardless of the converter tree.
-    # Covers transformers' generic ``PretrainedConfig`` fields (always present after ``to_dict()``)
-    # plus a handful of widely-shared metadata that Fast-LLM intentionally does not store.
+    # HF metadata keys that are always permitted, regardless of the converter tree. The generic
+    # ``PretrainedConfig`` fields are added dynamically (see :meth:`_hf_metadata_allowlist`) because the
+    # exact set drifts across the supported transformers range — e.g. the generation kwargs and
+    # ``torchscript`` that v4 dumps into ``to_dict()`` were moved out to ``GenerationConfig`` in v5. This
+    # static set covers the widely-shared metadata that Fast-LLM intentionally does not store but that a
+    # bare ``PretrainedConfig`` does not carry (model-specific defaults like ``max_position_embeddings``).
     _HF_METADATA_ALLOWLIST: typing.ClassVar[frozenset[str]] = frozenset(
         {
             # transformers PretrainedConfig
@@ -157,13 +161,26 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     )
 
     @classmethod
+    @functools.cache
+    def _hf_metadata_allowlist(cls) -> frozenset[str]:
+        """Static allowlist unioned with the live ``PretrainedConfig`` field set.
+
+        Every key a bare ``PretrainedConfig`` carries is generic transformers metadata, never
+        architecture, so deriving them from the installed transformers keeps the coverage check correct
+        across the supported version range instead of hard-coding a version-specific set.
+        """
+        import transformers
+
+        return cls._HF_METADATA_ALLOWLIST | frozenset(transformers.PretrainedConfig().to_dict())
+
+    @classmethod
     def _check_hf_coverage(cls, config: dict[str, typing.Any]) -> None:
         """Run the HF-side coverage check at the import boundary.
 
         Subclasses that override :meth:`_import_config` should call this explicitly to keep the check
         active.
         """
-        cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._HF_METADATA_ALLOWLIST)
+        cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._hf_metadata_allowlist())
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> FastLLMModelConfig:
