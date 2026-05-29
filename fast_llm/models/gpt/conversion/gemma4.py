@@ -702,14 +702,20 @@ class Gemma4BaseModelConverter(HuggingFaceBaseModelConverter):
         }
 
     @classmethod
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # ``head`` is added at the aggregator level (in :meth:`get_converters`) because the head
+        # converter takes the full base-model config so subclasses extending the head can read
+        # sibling sections.
+        return {
+            "embeddings": NestedWeightConverter("embeddings", "model", cls.embeddings_converter_class),
+            "decoder": NestedWeightConverter("decoder", "model.layers", cls.decoder_converter_class),
+        }
+
+    @classmethod
     def get_converters(cls, config: GPTBaseModelConfig) -> list[WeightConverter]:
         return [
-            *cls.embeddings_converter_class.emit_weight_converters(
-                config.embeddings, "embeddings", "model", root_config=config
-            ),
-            *cls.decoder_converter_class.emit_weight_converters(
-                config.decoder, "decoder", "model.layers", root_config=config
-            ),
+            *cls.emit_weight_converters(config, "", ""),
             *cls.head_converter_class.get_converters(config),
         ]
 

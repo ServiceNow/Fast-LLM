@@ -1111,6 +1111,20 @@ def model_testing_config(request) -> ModelTestingConfig:
     return MODEL_CONFIGS[request.param]
 
 
+@functools.cache
+def _hf_config_class_available(checkpoint_format: type[CheckpointFormat]) -> bool:
+    """Whether the installed transformers provides the format's HF config class.
+
+    Conversion tests need it; older-but-supported transformers builds may lack a recent model
+    (e.g. no Gemma 4 before transformers v5), in which case the convert group skips rather than errors.
+    """
+    try:
+        checkpoint_format.get_handler_class().get_transformers_configuration_class()
+    except (ImportError, AttributeError):
+        return False
+    return True
+
+
 def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slow: bool, show_skipped: bool) -> bool:
     if "model_testing_group" in item.keywords:
         assert hasattr(item, "callspec") and "model_testing_config" in item.callspec.params, item.nodeid
@@ -1120,6 +1134,15 @@ def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slo
         if model_config.requires_cuda and not torch.cuda.is_available():
             item.add_marker(pytest.mark.skip(reason=f"Cuda not available."))
         for group in groups:
+            if (
+                group == ModelTestingGroup.convert
+                and model_config.checkpoint_format is not None
+                and not _hf_config_class_available(model_config.checkpoint_format)
+            ):
+                item.add_marker(
+                    pytest.mark.skip(reason=f"transformers build lacks the HF config class for {model_testing_config}")
+                )
+                continue
             action = model_config.groups.get(group, ModelTestingGroupAction.unimportant)
             if action == ModelTestingGroupAction.main:
                 pass
