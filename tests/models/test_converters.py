@@ -169,23 +169,23 @@ def test_safe_set_nested_dict_value_collision() -> None:
 def test_format_weight_coverage(fixture_name: str) -> None:
     """Every Fast-LLM parameter must be consumed by some :class:`WeightConverter`.
 
-    Materialises the fixture's base model (CPU, meta tensors via ``ParameterMeta`` — no distributed
-    setup) and compares ``named_parameters()`` against the set of ``fast_llm_name`` entries emitted by
-    ``base_model_converter_class.get_converters(config)``. Runtime-tied parameters
-    (``BaseModel.get_tied_parameters``) count as covered if any member of their group has a converter,
-    matching the export-time behaviour where a single shared weight is serialised once.
+    Materialises the fixture's base model via ``BaseModelConfig.get_base_model`` (CPU, meta tensors
+    via ``ParameterMeta`` — no distributed setup). That path runs ``set_model_names``, populating
+    every parameter's ``tensor_name`` so the model's name set lines up with what converters emit
+    via ``fast_llm_name``. Runtime-tied parameters (``BaseModel.get_tied_parameters``) count as
+    covered if any member of their group has a converter, matching the export-time behaviour where
+    a single shared weight is serialised once.
     """
     model_testing_config = MODEL_CONFIGS[fixture_name]
     handler = model_testing_config.checkpoint_format.get_handler_class()
     base_model_config = model_testing_config.base_model_config_class.from_dict(
         model_testing_config.config_dict["model"]["base_model"]
     )
-    base_model = base_model_config.base_model_class(base_model_config, DistributedConfig())
+    base_model = base_model_config.get_base_model(DistributedConfig())
 
-    param_id_to_name = {id(parameter): name for name, parameter in base_model.named_parameters()}
-    model_names = set(param_id_to_name.values())
+    model_names = {name for name, _ in base_model.named_parameters()}
     tied_groups = [
-        frozenset(param_id_to_name[id(parameter)] for parameter in parameters)
+        frozenset(parameter.tensor_name for parameter in parameters)
         for parameters in base_model.get_tied_parameters().values()
     ]
 
