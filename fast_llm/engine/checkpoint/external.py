@@ -1149,8 +1149,7 @@ class RepeatWeightConverter(WeightConverter):
 
     Unlike :class:`BlockSequenceWeightConverter` — which fans a converter over a materialized per-position
     config list — every iteration recurses into the *same* sub-config; only the emitted prefixes change
-    with the index. Used where a runtime count, not a block list, drives the repeat (e.g. a stack of
-    prediction-distance heads all sharing one block / normalization config).
+    with the index. Used where a runtime count, not a block list, drives the repeat.
 
     ``count`` and ``sub_config`` are resolved from the live section config. ``fast_llm_prefix`` and
     ``hf_prefix`` map a 0-based iteration index to the section-relative prefixes; the two need not share
