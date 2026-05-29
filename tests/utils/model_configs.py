@@ -1051,22 +1051,27 @@ update_and_add_testing_config(
         ("model", "base_model", "decoder"): {
             "type": "pattern",
             "blocks": {
+                # Sub-dicts in ``_gemma4_block_overrides`` / ``_gemma4_mixer_overrides`` are deepcopied
+                # per block. Without this the two blocks' nested override dicts would alias, and
+                # ``Config._from_dict`` (which mutates its input via ``pop``) would consume the
+                # shared sub-dicts when processing the first block, leaving the second to silently
+                # fall back to type defaults (LayerNorm / output_scale.enabled=None).
                 "sliding_attention": {
                     **copy.deepcopy(_llama_block),
-                    **_gemma4_block_overrides,
+                    **copy.deepcopy(_gemma4_block_overrides),
                     "mixer": {
                         **copy.deepcopy(_llama_block["mixer"]),
-                        **_gemma4_mixer_overrides,
+                        **copy.deepcopy(_gemma4_mixer_overrides),
                         "window_size": 128,
                     },
                     "mlp": copy.deepcopy(_gemma4_moe_mlp),
                 },
                 "full_attention": {
                     **copy.deepcopy(_llama_block),
-                    **_gemma4_block_overrides,
+                    **copy.deepcopy(_gemma4_block_overrides),
                     "mixer": {
                         **copy.deepcopy(_llama_block["mixer"]),
-                        **_gemma4_mixer_overrides,
+                        **copy.deepcopy(_gemma4_mixer_overrides),
                         "rotary": {"type": "proportional", "partial_rotary_factor": 0.25},
                     },
                     "mlp": copy.deepcopy(_gemma4_moe_mlp),
