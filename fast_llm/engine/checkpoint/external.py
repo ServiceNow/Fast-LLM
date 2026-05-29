@@ -1144,6 +1144,56 @@ class SelfBlockSequenceWeightConverter(WeightConverter):
         return out
 
 
+class RepeatWeightConverter(WeightConverter):
+    """Repeat a sub-section converter a config-driven number of times, with index-templated prefixes.
+
+    Unlike :class:`BlockSequenceWeightConverter` — which fans a converter over a materialized per-position
+    config list — every iteration recurses into the *same* sub-config; only the emitted prefixes change
+    with the index. Used where a runtime count, not a block list, drives the repeat (e.g. a stack of
+    prediction-distance heads all sharing one block / normalization config).
+
+    ``count`` and ``sub_config`` are resolved from the live section config. ``fast_llm_prefix`` and
+    ``hf_prefix`` map a 0-based iteration index to the section-relative prefixes; the two need not share
+    the same index arithmetic — e.g. an HF-side stack whose element 0 is declared elsewhere is reached by
+    offsetting the index here.
+    """
+
+    def __init__(
+        self,
+        sub_converter_class: type["ConfigSectionConverter"],
+        *,
+        count: typing.Callable[[Config], int],
+        sub_config: typing.Callable[[Config], Config],
+        fast_llm_prefix: typing.Callable[[int], str],
+        hf_prefix: typing.Callable[[int], str],
+    ):
+        super().__init__((), ())
+        self._sub_converter_class = sub_converter_class
+        self._count = count
+        self._sub_config = sub_config
+        self._fast_llm_prefix = fast_llm_prefix
+        self._hf_prefix = hf_prefix
+
+    def _emit(
+        self,
+        config: Config,
+        fast_llm_prefix: str,
+        hf_prefix: str,
+        *,
+        root_config: Config,
+    ) -> list[WeightConverter]:
+        sub_config = self._sub_config(config)
+        out: list[WeightConverter] = []
+        for index in range(self._count(config)):
+            out += self._sub_converter_class.emit_weight_converters(
+                sub_config,
+                join_prefix(fast_llm_prefix, self._fast_llm_prefix(index)),
+                join_prefix(hf_prefix, self._hf_prefix(index)),
+                root_config=root_config,
+            )
+        return out
+
+
 class DispatchWeightConverter(WeightConverter):
     """Dispatch a single sub-section converter based on the live config's runtime type.
 
