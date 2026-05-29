@@ -164,7 +164,7 @@ def test_safe_set_nested_dict_value_collision() -> None:
 
 
 @pytest.mark.parametrize(
-    "fixture_name", [name for name, cfg in MODEL_CONFIGS.items() if cfg.checkpoint_format is not None]
+    "fixture_name", [name for name, config in MODEL_CONFIGS.items() if config.checkpoint_format is not None]
 )
 def test_format_weight_coverage(fixture_name: str) -> None:
     """Every Fast-LLM parameter must be consumed by some :class:`WeightConverter`.
@@ -193,7 +193,6 @@ def test_format_weight_coverage(fixture_name: str) -> None:
     for leaf in handler.base_model_converter_class.get_converters(base_model_config):
         consumed.update(leaf.fast_llm_name)
 
-    # Tied closure: any group with at least one explicit consumer is covered in full.
     covered = set(consumed)
     for group in tied_groups:
         if group & consumed:
