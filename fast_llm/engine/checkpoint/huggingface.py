@@ -130,24 +130,12 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     # bare ``PretrainedConfig`` does not carry (model-specific defaults like ``max_position_embeddings``).
     _HF_METADATA_ALLOWLIST: typing.ClassVar[frozenset[str]] = frozenset(
         {
-            # transformers PretrainedConfig
-            "_name_or_path",
-            "architectures",
+            # transformers metadata Fast-LLM does not store that a bare ``PretrainedConfig().to_dict()``
+            # omits across the supported range (so the dynamic union would miss them).
             "auto_map",
-            "chunk_size_feed_forward",
-            "dtype",
-            "id2label",
-            "is_encoder_decoder",
-            "label2id",
-            "model_type",
-            "output_attentions",
-            "output_hidden_states",
-            "problem_type",
-            "return_dict",
             "torch_dtype",
-            "transformers_version",
             "use_cache",
-            # Token ids — generation/inference, not architecture.
+            # Token ids — generation/inference, not architecture (a bare v5 config omits these).
             "bos_token_id",
             "decoder_start_token_id",
             "eos_token_id",
