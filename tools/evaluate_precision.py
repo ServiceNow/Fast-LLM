@@ -28,6 +28,23 @@ _MODEL_TYPE = "gpt"
 # `log_tensor` (samples = 2 ** (level - 3) -> level 23 yields ~1M samples per tensor).
 _SPARSE_GRAD_LEVEL = 23
 _SPARSE_GRAD_OVERRIDES = {r"Global gradient: embeddings\.": _SPARSE_GRAD_LEVEL}
+_CHOSEN_LOGPROB_NAME = "chosen_logprob"
+# Auto-calibration of the constant gradient scaler. Each variant runs a calibration pass at
+# `scale=1` (no overflow risk), then the actual run uses the largest power-of-2 scale that
+# keeps logged gradient magnitudes (and a small safety factor for hidden in-kernel
+# intermediates like norm partial sums) within fp16's representable range. Per-variant
+# unscaling at compare time lets different variants pick different scales without polluting
+# the relative metrics.
+_HIDDEN_INTERMEDIATE_HEADROOM = 4.0  # safety factor for fused-kernel partial sums we don't log
+_CALIBRATION_SUBDIR_PREFIX = ".calibration_"
+# Variant-override keys starting with this prefix are interpreted as `torch.backends.<rest>` and
+# applied before each run. Used for diagnostics (e.g. enabling bf16 reduced-precision reductions);
+# entries are listed in `_TORCH_BACKEND_DEFAULTS` and reset to their defaults before applying.
+_TORCH_BACKEND_PREFIX = "_torch_backend."
+_TORCH_BACKEND_DEFAULTS = {
+    "cuda.matmul.allow_bf16_reduced_precision_reduction": False,
+}
+_TORCH_MATMUL_PRECISION_KEY = "_torch_matmul_precision"
 
 
 @config_class()
@@ -57,14 +74,10 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         " `TensorLogsConfig.sample_level_overrides`.",
         hint=FieldHint.feature,
     )
-    micro_batch_size: int = Field(
-        default=1,
-        desc="Micro-batch size for the single forward+backward pass.",
-        hint=FieldHint.feature,
-    )
     sequence_length: int = Field(
         default=2048,
-        desc="Sequence length (maximum document length) for the random input.",
+        desc="Sequence length per micro-batch sample. Drives both `data.micro_batch_size` (the"
+        " per-sample token count, despite the name) and `data.maximum_document_length`.",
         hint=FieldHint.feature,
     )
     data_path: pathlib.Path | None = Field(
@@ -88,19 +101,49 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         self._prepare_data()
         runs: dict[str, dict[str, typing.Any]] = {_REFERENCE_NAME: {}}
         runs.update(self.variants)
+        scales: dict[str, float] = {}
         for name, variant_overrides in runs.items():
-            self._run_one(name, variant_overrides)
+            scales[name] = self._calibrate_and_run(name, variant_overrides)
 
         ref_artifacts = self._artifact_path(_REFERENCE_NAME)
-        results = {name: self._compare(ref_artifacts, self._artifact_path(name)) for name in self.variants}
+        results = {
+            name: self._compare(ref_artifacts, self._artifact_path(name), scales[_REFERENCE_NAME], scales[name])
+            for name in self.variants
+        }
 
         report_path = self.output_dir / "precision_report.json"
-        report_path.write_text(json.dumps(results, indent=2))
+        report_path.write_text(json.dumps({"scales": scales, "variants": results}, indent=2))
         logger.info(f"Wrote report to {report_path}")
+        logger.info(f"Per-variant gradient scales: {scales}")
 
         for name, rows in results.items():
             _print_table(name, rows)
         _print_summary(results)
+
+    def _calibrate_and_run(self, name: str, variant_overrides: dict[str, typing.Any]) -> float:
+        """Pick a power-of-2 gradient scale for this variant via a calibration pass, then run with it.
+
+        Calibration runs with `constant=1.0` so no overflow is possible; scanning logged gradients
+        then gives us `max_unscaled`. The largest safe power of 2 keeps `scale * max_unscaled` below
+        `fp16_max / hidden_intermediate_budget`, where the budget reserves headroom for partial sums
+        inside fused kernels (e.g. norm-weight grads sum over the sequence dimension).
+        """
+        import torch
+
+        cal_dir = self.output_dir / f"{_CALIBRATION_SUBDIR_PREFIX}{name}"
+        self._run_one(name, variant_overrides, constant_scale=1.0, experiment_dir=cal_dir)
+        max_unscaled = _scan_max_grad(cal_dir / "runs" / "0" / "artifacts")
+        shutil.rmtree(cal_dir)
+        if max_unscaled <= 0.0:
+            scale = 1.0
+            logger.warning(f"[{name}] calibration found no nonzero gradient — falling back to scale=1.0")
+        else:
+            fp16_max = torch.finfo(torch.float16).max
+            optimal_unrounded = fp16_max / max_unscaled / _HIDDEN_INTERMEDIATE_HEADROOM
+            scale = float(2 ** max(0, math.floor(math.log2(optimal_unrounded))))
+        logger.info(f"[{name}] calibration: max_unscaled={max_unscaled:.4e} -> gradient_scaler.constant={scale:g}")
+        self._run_one(name, variant_overrides, constant_scale=scale)
+        return scale
 
     def _prepare_data(self) -> None:
         if self.data_path is None:
@@ -122,15 +165,28 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
     def _artifact_path(self, name: str) -> pathlib.Path:
         return self.output_dir / name / "runs" / "0" / "artifacts"
 
-    def _run_one(self, name: str, variant_overrides: dict[str, typing.Any]) -> None:
+    def _run_one(
+        self,
+        name: str,
+        variant_overrides: dict[str, typing.Any],
+        *,
+        constant_scale: float | None = None,
+        experiment_dir: pathlib.Path | None = None,
+    ) -> None:
         # The trainer's Run picks the next `runs/<n>` subdir based on what already exists; wipe
         # any prior contents so each invocation lands in `runs/0` and stale artifacts can't be
         # read by `_artifact_path` below.
-        experiment_dir = self.output_dir / name
+        if experiment_dir is None:
+            experiment_dir = self.output_dir / name
         if experiment_dir.exists():
             shutil.rmtree(experiment_dir)
         # Base config: hardcoded training/optimizer/data/run skeleton plus the user's model/pretrained.
         # Forced fp32 on the reference baseline lives in here too so a variant can override it.
+        optimizer_config: dict[str, typing.Any] = {
+            "learning_rate": {"base": 0.0, "decay_style": "constant", "warmup_iterations": 0},
+        }
+        if constant_scale is not None:
+            optimizer_config["gradient_scaler"] = {"constant": float(constant_scale)}
         base_dict: dict[str, typing.Any] = {
             "pretrained": self.pretrained.to_dict(),
             "model": self.model.to_dict(),
@@ -139,9 +195,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                 "num_workers": 0,
                 "logs": {"interval": 1},
             },
-            "optimizer": {
-                "learning_rate": {"base": 0.0, "decay_style": "constant", "warmup_iterations": 0},
-            },
+            "optimizer": optimizer_config,
             "data": {
                 "datasets": {
                     "training": (
@@ -150,11 +204,13 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                         else {"type": "random"}
                     )
                 },
-                "micro_batch_size": self.micro_batch_size,
+                # Despite the name, Fast-LLM's `data.micro_batch_size` is the per-sample sequence
+                # length, not the batch dimension. Default 2048 → 2048-token sample.
+                "micro_batch_size": self.sequence_length,
                 "maximum_document_length": self.sequence_length,
             },
             "run": {
-                "experiment_dir": str((self.output_dir / name).resolve()),
+                "experiment_dir": str(experiment_dir.resolve()),
                 "tensor_logs": {
                     "save": True,
                     "show": False,
@@ -168,16 +224,36 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             ("model", "distributed", "compute_dtype"): "float32",
             ("model", "distributed", "optimization_dtype"): "float32",
         }
-        variant_updates = {tuple(key.split(".")): value for key, value in variant_overrides.items()}
+        # Split off torch-backend overrides before passing the rest to Fast-LLM's config system.
+        backend_overrides = {
+            key[len(_TORCH_BACKEND_PREFIX) :]: value
+            for key, value in variant_overrides.items()
+            if key.startswith(_TORCH_BACKEND_PREFIX)
+        }
+        _apply_torch_backend_overrides(backend_overrides)
+        matmul_precision = variant_overrides.get(_TORCH_MATMUL_PRECISION_KEY, "highest")
+        _apply_torch_matmul_precision(matmul_precision)
+        variant_updates = {
+            tuple(key.split(".")): value
+            for key, value in variant_overrides.items()
+            if not key.startswith(_TORCH_BACKEND_PREFIX) and key != _TORCH_MATMUL_PRECISION_KEY
+        }
         # Tool-required overrides win over variants — a variant must not silently disable tensor logging.
-        tool_overrides = {
+        tool_overrides: dict[tuple[str, ...], typing.Any] = {
             ("model", "multi_stage", "debug_layer_outputs"): log_level,
             ("model", "multi_stage", "debug_layer_gradients"): log_level,
             ("model", "multi_stage", "debug_all_param_gradients"): log_level,
             # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
             # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
             ("model", "multi_stage", "debug_hidden_states_log"): [r"head\.logits"],
+            # Diagnostic loss that logs log π(label) per position via the tensor-log pipeline.
+            # Contributes no gradient (weight=0); the comparison code picks it up by name.
+            ("model", "base_model", "head", "losses", _CHOSEN_LOGPROB_NAME): {"type": "chosen_logprob"},
         }
+        # When the user hasn't configured any loss, the head defaults to cross-entropy. Adding a
+        # loss explicitly suppresses that default, so re-add it so gradients still flow.
+        if not (self.model.base_model.head.losses or {}):
+            tool_overrides[("model", "base_model", "head", "losses", "cross_entropy")] = {"type": "label"}
         logger.info(f"=== Running {name!r} ===")
         if variant_overrides:
             logger.info(f"Variant overrides: {variant_overrides}")
@@ -186,13 +262,23 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         trainer_config.configure_logging()
         trainer_config._get_runnable()()
 
-    def _compare(self, ref_path: pathlib.Path, test_path: pathlib.Path) -> list[dict[str, typing.Any]]:
+    def _compare(
+        self,
+        ref_path: pathlib.Path,
+        test_path: pathlib.Path,
+        ref_scale: float,
+        test_scale: float,
+    ) -> list[dict[str, typing.Any]]:
         compare_config = CompareConfig()
         errors: list[str] = []
         ref_logs = compare_config._extract_tensor_logs(ref_path, errors)
         test_logs = compare_config._extract_tensor_logs(test_path, errors)
         for error in errors:
             logger.warning(error)
+        # Each variant's gradient logs are scaled by its own `constant` factor (auto-calibrated).
+        # Undo per-variant scaling so the relative comparison reflects unscaled gradient diffs.
+        _unscale_gradients_in_place(ref_logs, ref_scale)
+        _unscale_gradients_in_place(test_logs, test_scale)
         rows: list[dict[str, typing.Any]] = []
         for step_name in sorted(ref_logs):
             if step_name not in test_logs:
@@ -216,6 +302,66 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                     }
                 )
         return rows
+
+
+def _is_gradient_like(tensor_name: str) -> bool:
+    # Anything affected by the loss-scaling multiplier: parameter gradients from `Fsdp.log_shard`,
+    # backward activations from layer hooks, and explicit `.grad` debug entries (e.g. logits.grad).
+    return ("gradient:" in tensor_name) or (" bw" in tensor_name) or (".grad" in tensor_name)
+
+
+def _scan_max_grad(artifact_path: pathlib.Path) -> float:
+    max_abs = 0.0
+    compare_config = CompareConfig()
+    errors: list[str] = []
+    logs = compare_config._extract_tensor_logs(artifact_path, errors)
+    for step_logs in logs.values():
+        for tensor_name, entry in step_logs.items():
+            if not _is_gradient_like(tensor_name):
+                continue
+            # Saved stats include min/max; fall back to samples if absent.
+            if "max" in entry and "min" in entry:
+                value = max(abs(float(entry["max"])), abs(float(entry["min"])))
+            else:
+                value = float(entry["samples"].abs().max().item())
+            if math.isfinite(value) and value > max_abs:
+                max_abs = value
+    return max_abs
+
+
+def _unscale_gradients_in_place(logs: dict, scale: float) -> None:
+    if scale == 1.0:
+        return
+    inv = 1.0 / scale
+    for step_logs in logs.values():
+        for tensor_name, entry in step_logs.items():
+            if not _is_gradient_like(tensor_name):
+                continue
+            entry["samples"] = entry["samples"].float() * inv
+            for key in ("min", "max", "mu", "std"):
+                if key in entry and entry[key] is not None:
+                    entry[key] = float(entry[key]) * inv
+
+
+def _apply_torch_backend_overrides(overrides: dict[str, typing.Any]) -> None:
+    import torch
+
+    unknown = set(overrides) - set(_TORCH_BACKEND_DEFAULTS)
+    if unknown:
+        logger.warning(f"Unknown torch backend overrides (ignored): {sorted(unknown)}")
+    for path, default in _TORCH_BACKEND_DEFAULTS.items():
+        value = overrides.get(path, default)
+        obj: typing.Any = torch.backends
+        parts = path.split(".")
+        for part in parts[:-1]:
+            obj = getattr(obj, part)
+        setattr(obj, parts[-1], value)
+
+
+def _apply_torch_matmul_precision(precision: str) -> None:
+    import torch
+
+    torch.set_float32_matmul_precision(precision)
 
 
 def _layer_name(tensor_name: str) -> str:
@@ -260,6 +406,40 @@ def _print_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
     aggs_per_kind = {"fw": fw_aggs, "bw": bw_aggs, "grad": grad_aggs}
     for kind in ("fw", "bw", "grad"):
         _print_summary_table(results, kind, aggs_per_kind[kind])
+    if _named_row(sample, _CHOSEN_LOGPROB_NAME) is not None:
+        _print_chosen_logprob_summary(results)
+
+
+def _print_chosen_logprob_summary(results: dict[str, list[dict[str, typing.Any]]]) -> None:
+    rows_by_variant = {name: _named_row(rows, _CHOSEN_LOGPROB_NAME) for name, rows in results.items()}
+    # log π(label) is the scalar that policy-gradient importance ratios depend on. Bias persists
+    # under per-document averaging where RMS shrinks ~1/√T, so for RL stability it's the more
+    # informative signal — surface it alongside RMS, slope and residual.
+    rms_rel_decimals = _column_decimals((r["rms_rel"] for r in rows_by_variant.values()), default=3, max_decimals=5)
+    bias_rel_decimals = _column_decimals((r["bias_rel"] for r in rows_by_variant.values()), default=3, max_decimals=5)
+    resid_rel_decimals = _column_decimals(
+        (r["residual_rms_rel"] for r in rows_by_variant.values()), default=3, max_decimals=5
+    )
+    name_width = max((len(name) for name in results), default=7) + 1
+    cols = [
+        ("RMS rel", lambda r: f"{r['rms_rel'] * 100:.{rms_rel_decimals}f}%"),
+        ("Bias rel", lambda r: f"{r['bias_rel'] * 100:+.{bias_rel_decimals}f}%"),
+        ("Resid rel", lambda r: f"{r['residual_rms_rel'] * 100:.{resid_rel_decimals}f}%"),
+        ("Corr", lambda r: f"{r['correlation']:.5f}"),
+        ("Slope", lambda r: f"{r['slope']:+.5f}"),
+        ("Max abs", lambda r: f"{r['max_abs']:.4g}"),
+        ("Scale", lambda r: f"{r['ref_scale']:.4g}"),
+    ]
+    widths = [max(len(label), max(len(fn(r)) for r in rows_by_variant.values())) for label, fn in cols]
+    print(f"\n=== Summary: chosen_logprob (per-token) ===")
+    header = f"{'Variant':<{name_width}}" + " ".join(
+        f"{label:<{w}}" for (label, _), w in zip(cols, widths, strict=True)
+    )
+    print(header)
+    print("-" * len(header))
+    for name, row in rows_by_variant.items():
+        cells = [fn(row) for _, fn in cols]
+        print(f"{name:<{name_width}}" + " ".join(f"{c:<{w}}" for c, w in zip(cells, widths, strict=True)))
 
 
 def _grad_category(tensor_name: str) -> str:
@@ -420,10 +600,14 @@ def _print_table(name: str, rows: list[dict[str, typing.Any]]) -> None:
     # (typical for weight gradients) stay legible, capped at 5 to bound column width.
     relative_decimals = _column_decimals((r["rms_rel"] for r in rows), default=2, max_decimals=5)
     relative_fn = lambda r: f"{r['rms_rel'] * 100:.{relative_decimals}f}%"
+    bias_decimals = _column_decimals((r["bias_rel"] for r in rows), default=2, max_decimals=5)
+    bias_fn = lambda r: f"{r['bias_rel'] * 100:+.{bias_decimals}f}%"
     relative_width = max(len("Relative"), max(len(relative_fn(r)) for r in rows))
+    bias_width = max(len("Bias"), max(len(bias_fn(r)) for r in rows))
     columns: list[tuple[str, int, typing.Callable[[dict[str, typing.Any]], str]]] = [
         ("Tensor", name_width, name_fn),
         ("Relative", relative_width, relative_fn),
+        ("Bias", bias_width, bias_fn),
         ("Absolute", 10, lambda r: f"{r['rms_abs']:.4g}"),
         ("Max", 10, lambda r: f"{r['max_abs']:.4g}"),
         ("Scale", 10, lambda r: f"{r['ref_scale']:.4g}"),

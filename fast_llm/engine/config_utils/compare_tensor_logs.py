@@ -100,8 +100,24 @@ class CompareConfig:
             samples_test = samples_test / sub_config.scale
         scale_unreg = (samples_ref**2).mean() ** 0.5
         rms_scale = (scale_unreg**2 + sub_config.rms_eps**2) ** 0.5
-        rms = ((samples_ref - samples_test) ** 2).mean() ** 0.5
-        max_diff = (samples_ref - samples_test).abs().max()
+        diff = samples_test - samples_ref
+        rms = (diff**2).mean() ** 0.5
+        max_diff = diff.abs().max()
+        bias = diff.mean()
+        # Linear-regression decomposition: `test ≈ slope * ref + intercept + residual`.
+        # Useful for separating systematic distortion (slope ≠ 1) from per-position decorrelated
+        # noise (residual). For RL importance ratios, slope ≠ 1 indicates likely-token-dependent
+        # bias which is more dangerous than a uniform shift.
+        centered_test = samples_test - samples_test.mean()
+        centered_ref = samples_ref - samples_ref.mean()
+        var_ref = (centered_ref**2).mean()
+        var_test = (centered_test**2).mean()
+        cov = (centered_test * centered_ref).mean()
+        denom = (var_test * var_ref) ** 0.5
+        correlation = (cov / denom).item() if denom > 0 else float("nan")
+        slope = (cov / var_ref).item() if var_ref > 0 else float("nan")
+        residual_var = (var_test - cov**2 / var_ref).clamp(min=0.0) if var_ref > 0 else var_test
+        residual_rms = residual_var**0.5
         return {
             "rms_abs": rms.item(),
             "rms_rel": (rms / rms_scale).item(),
@@ -109,6 +125,12 @@ class CompareConfig:
             "max_rel": (max_diff / rms_scale).item(),
             "ref_scale": scale_unreg.item(),
             "ref_scale_regularized": rms_scale.item(),
+            "bias_abs": bias.item(),
+            "bias_rel": (bias / rms_scale).item(),
+            "correlation": correlation,
+            "slope": slope,
+            "residual_rms_abs": residual_rms.item(),
+            "residual_rms_rel": (residual_rms / rms_scale).item(),
         }
 
     def compare_tensors(self, tensor_ref, tensor_test, errors, step_name, tensor_name):

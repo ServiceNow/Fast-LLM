@@ -31,3 +31,22 @@ variants:
     model.distributed.compute_dtype: bfloat16
     model.base_model.embeddings.full_precision_residual: true
     model.base_model.head.fp32_lm_head: true
+  bf16_reduced_reduction:
+    model.distributed.compute_dtype: bfloat16
+    _torch_backend.cuda.matmul.allow_bf16_reduced_precision_reduction: true
+  bf16_in_fp32_out:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+    _torch_matmul_precision: medium
+  fp16:
+    model.distributed.compute_dtype: float16
+  fp16_fp32_residual:
+    model.distributed.compute_dtype: float16
+    model.base_model.embeddings.full_precision_residual: true
+  fp16_fp32_lm_head:
+    model.distributed.compute_dtype: float16
+    model.base_model.head.fp32_lm_head: true
+  fp16_max_precision:
+    model.distributed.compute_dtype: float16
+    model.base_model.embeddings.full_precision_residual: true
+    model.base_model.head.fp32_lm_head: true
