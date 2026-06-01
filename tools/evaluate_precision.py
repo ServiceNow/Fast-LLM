@@ -29,6 +29,8 @@ _MODEL_TYPE = "gpt"
 _SPARSE_GRAD_LEVEL = 23
 _SPARSE_GRAD_OVERRIDES = {r"Global gradient: embeddings\.": _SPARSE_GRAD_LEVEL}
 _CHOSEN_LOGPROB_NAME = "chosen_logprob"
+# Seed for the random-token fixed input when no input text file is given.
+_INPUT_SEED = 0
 # Auto-calibration of the constant gradient scaler. Each variant runs a calibration pass at
 # `scale=1` (no overflow risk), then the actual run uses the largest power-of-2 scale that
 # keeps logged gradient magnitudes (and a small safety factor for hidden in-kernel
@@ -80,11 +82,12 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         " per-sample token count, despite the name) and `data.maximum_document_length`.",
         hint=FieldHint.feature,
     )
-    data_path: pathlib.Path | None = Field(
+    input_text_file: pathlib.Path | None = Field(
         default=None,
-        desc="If set, prepare a tokenized memmap dataset with advantages and `old_log_probabilities`"
-        " at this path (using the test helper `_get_test_dataset`) and use it as the training"
-        " input — required for policy-gradient losses like GSPO/GRPO. If unset, uses random tokens.",
+        desc="If set, tokenize this text file (via the pretrained tokenizer) to build the fixed model"
+        " input, tiled/truncated to `sequence_length`. If unset, the input is uniform-random token ids."
+        " The exact input tensor is saved to `output_dir/input_ids.pt` so the DeepSpeed-side tool"
+        " (`tools/evaluate_precision_deepspeed.py`) can consume the identical model input.",
         hint=FieldHint.feature,
     )
 
@@ -98,12 +101,12 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
     def run(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self._prepare_data()
+        input_ids = self._prepare_input_ids()
         runs: dict[str, dict[str, typing.Any]] = {_REFERENCE_NAME: {}}
         runs.update(self.variants)
         scales: dict[str, float] = {}
         for name, variant_overrides in runs.items():
-            scales[name] = self._calibrate_and_run(name, variant_overrides)
+            scales[name] = self._calibrate_and_run(name, variant_overrides, input_ids)
 
         ref_artifacts = self._artifact_path(_REFERENCE_NAME)
         results = {
@@ -120,7 +123,9 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             _print_table(name, rows)
         _print_summary(results)
 
-    def _calibrate_and_run(self, name: str, variant_overrides: dict[str, typing.Any]) -> float:
+    def _calibrate_and_run(
+        self, name: str, variant_overrides: dict[str, typing.Any], input_ids: "torch.Tensor"
+    ) -> float:
         """Pick a power-of-2 gradient scale for this variant via a calibration pass, then run with it.
 
         Calibration runs with `constant=1.0` so no overflow is possible; scanning logged gradients
@@ -131,7 +136,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         import torch
 
         cal_dir = self.output_dir / f"{_CALIBRATION_SUBDIR_PREFIX}{name}"
-        self._run_one(name, variant_overrides, constant_scale=1.0, experiment_dir=cal_dir)
+        self._run_one(name, variant_overrides, input_ids, constant_scale=1.0, experiment_dir=cal_dir)
         max_unscaled = _scan_max_grad(cal_dir / "runs" / "0" / "artifacts")
         shutil.rmtree(cal_dir)
         if max_unscaled <= 0.0:
@@ -142,25 +147,32 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             optimal_unrounded = fp16_max / max_unscaled / _HIDDEN_INTERMEDIATE_HEADROOM
             scale = float(2 ** max(0, math.floor(math.log2(optimal_unrounded))))
         logger.info(f"[{name}] calibration: max_unscaled={max_unscaled:.4e} -> gradient_scaler.constant={scale:g}")
-        self._run_one(name, variant_overrides, constant_scale=scale)
+        self._run_one(name, variant_overrides, input_ids, constant_scale=scale)
         return scale
 
-    def _prepare_data(self) -> None:
-        if self.data_path is None:
-            return
-        if (self.data_path / "fast_llm_config.yaml").is_file():
-            return
-        # Couples `tools/` to `tests/utils/` for now — extract later if it sticks.
-        from tests.utils.dataset import _get_test_dataset
+    def _prepare_input_ids(self) -> "torch.Tensor":
+        """Build the fixed model input once and save it so the DeepSpeed-side tool feeds the exact
+        same tokens. Going through Fast-LLM's data pipeline would re-randomize the model input
+        (shuffle/packing), so the input is constructed directly here and fed verbatim to the runner."""
+        import torch
 
-        self.data_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Preparing memmap dataset at {self.data_path}")
-        _get_test_dataset(
-            self.data_path,
-            seed=42,
-            has_grpo_data=True,
-            max_vocab_size=self.model.base_model.embeddings.vocab_size,
-        )
+        vocab_size = self.model.base_model.embeddings.vocab_size
+        if self.input_text_file is not None:
+            import transformers
+
+            tokenizer = transformers.AutoTokenizer.from_pretrained(str(self.pretrained.path))
+            ids = tokenizer(self.input_text_file.read_text(), return_tensors="pt").input_ids[0]
+            if ids.numel() < self.sequence_length:
+                ids = ids.repeat((self.sequence_length + ids.numel() - 1) // ids.numel())
+            ids = ids[: self.sequence_length].to(torch.int64)
+        else:
+            generator = torch.Generator().manual_seed(_INPUT_SEED)
+            ids = torch.randint(0, vocab_size, (self.sequence_length,), generator=generator, dtype=torch.int64)
+        input_ids = ids.unsqueeze(0)
+        path = self.output_dir / "input_ids.pt"
+        torch.save(input_ids, path)
+        logger.info(f"Shared model input: {tuple(input_ids.shape)} saved to {path}")
+        return input_ids
 
     def _artifact_path(self, name: str) -> pathlib.Path:
         return self.output_dir / name / "runs" / "0" / "artifacts"
@@ -169,6 +181,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         self,
         name: str,
         variant_overrides: dict[str, typing.Any],
+        input_ids: "torch.Tensor",
         *,
         constant_scale: float | None = None,
         experiment_dir: pathlib.Path | None = None,
@@ -196,16 +209,11 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                 "logs": {"interval": 1},
             },
             "optimizer": optimizer_config,
+            # The lean runner feeds a fixed input directly and ignores this dataset; it's only here so
+            # the TrainerConfig validates. Despite the name, `data.micro_batch_size` is the per-sample
+            # sequence length, not the batch dimension.
             "data": {
-                "datasets": {
-                    "training": (
-                        {"type": "file", "path": str(self.data_path / "fast_llm_config.yaml")}
-                        if self.data_path is not None
-                        else {"type": "random"}
-                    )
-                },
-                # Despite the name, Fast-LLM's `data.micro_batch_size` is the per-sample sequence
-                # length, not the batch dimension. Default 2048 → 2048-token sample.
+                "datasets": {"training": {"type": "random"}},
                 "micro_batch_size": self.sequence_length,
                 "maximum_document_length": self.sequence_length,
             },
@@ -260,7 +268,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         trainer_class = TrainerConfig.get_subclass(_MODEL_TYPE)
         trainer_config = trainer_class.from_dict(base_dict, fp32_dtypes, variant_updates, tool_overrides)
         trainer_config.configure_logging()
-        trainer_config._get_runnable()()
+        _run_fixed_input(trainer_config, input_ids, self.sequence_length)
 
     def _compare(
         self,
@@ -302,6 +310,65 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                     }
                 )
         return rows
+
+
+def _run_fixed_input(config, input_ids, sequence_length: int) -> None:
+    """Lean forward+backward on a fixed, already-preprocessed input — like `InferenceRunner` but with a
+    training-phase schedule + an (lr-0) optimizer so `run_step` runs the backward and the existing
+    chosen-logprob loss / `debug_all_param_gradients` logging captures everything. Replaces the trainer
+    + data pipeline so the model sees exactly `input_ids` (the pipeline would re-randomize it) and so the
+    tool stops paying for training/data-loading infrastructure it doesn't need."""
+    import gc
+
+    import torch
+
+    from fast_llm.data.document.language_model import LanguageModelBatch
+    from fast_llm.engine.distributed.config import PhaseType
+    from fast_llm.engine.distributed.distributed import Distributed
+    from fast_llm.engine.multi_stage.config import StageMode
+    from fast_llm.engine.optimizer.config import ParamGroup
+    from fast_llm.engine.schedule.runner import ScheduleRunner
+    from fast_llm.engine.schedule.schedule import Schedule
+
+    distributed = Distributed(config.model.distributed)
+    run = config.get_run(distributed)
+    with run:
+        multi_stage = config.model.get_model_class()(
+            config.model, optimizer_state_names=config.optimizer.state_names()
+        )
+        with torch.no_grad():
+            multi_stage.setup(distributed, mode=StageMode.training)
+        multi_stage.load_checkpoint(config.pretrained)
+        param_groups, grads_for_norm = multi_stage.get_param_groups(ParamGroup)
+        optimizer = config.optimizer.optimizer_cls(
+            config.optimizer, param_groups=param_groups, grads_for_norm=grads_for_norm, distributed=distributed
+        )
+        optimizer.reset_state()
+        runner = ScheduleRunner(
+            config=config.schedule, multi_stage=multi_stage, distributed_config=config.model.distributed
+        )
+        with torch.no_grad():
+            runner.setup(distributed, optimizer)
+        preprocessing_config = multi_stage.get_preprocessing_config(
+            PhaseType.training, config.schedule.micro_batch_splits
+        )
+        # `get_model_inputs` splits off `num_labels` tokens for the shifted next-token labels, so the
+        # actual model input is `len(tokens) - num_labels`. The schedule meta must match that length.
+        schedule = Schedule(
+            config=config.schedule,
+            multi_stage=multi_stage,
+            batch_meta=preprocessing_config.get_input_meta(sequence_length - preprocessing_config.num_labels),
+            distributed_config=config.model.distributed,
+            phase=PhaseType.training,
+        )
+        tokens = input_ids.flatten().to(device=distributed.device, dtype=torch.int64)
+        batch = LanguageModelBatch(tokens=tokens, lengths=[tokens.numel()])
+        model_inputs = batch.get_model_inputs(preprocessing_config)
+        runner.run_step(iter((tuple(model_inputs),)), schedule, iteration=1)
+    # Break the trainer/model/runner reference cycles so each variant's GPU memory is reclaimed.
+    del multi_stage, optimizer, runner, schedule, distributed, run
+    gc.collect()
+    torch.cuda.empty_cache()
 
 
 def _is_gradient_like(tensor_name: str) -> bool:

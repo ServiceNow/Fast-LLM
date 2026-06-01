@@ -1,0 +1,25 @@
+# Precision-evaluation config on Qwen2.5-0.5B — the model used for the Fast-LLM vs DeepSpeed
+# precision-pattern comparison (DeepSpeed side: tools/evaluate_precision_deepspeed.py).
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/qwen.yaml
+pretrained:
+  path: Qwen/Qwen2.5-0.5B
+  format: qwen2
+output_dir: /tmp/fast_llm_tests/evaluate_precision/qwen_features
+sequence_length: 2048
+variants:
+  # Maps to the DeepSpeed harness's `bf16_head_bf16` (compute bf16, lm head in compute dtype).
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  # Maps to the DeepSpeed harness's `bf16` (compute bf16, fp32 lm head — the stack default).
+  bf16_fp32_lm_head:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+  # Maps to the DeepSpeed harness's `fp16_head_fp16`.
+  fp16:
+    model.distributed.compute_dtype: float16
+  # Maps to the DeepSpeed harness's `fp16`.
+  fp16_fp32_lm_head:
+    model.distributed.compute_dtype: float16
+    model.base_model.head.fp32_lm_head: true
