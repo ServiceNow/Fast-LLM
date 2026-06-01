@@ -454,8 +454,12 @@ update_and_add_testing_config(
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=DiffusionLlamaCheckpointFormat,
-    # TODO: Conversion is broken.
-    # TODO: Add back generate as `normal` when stable.
+    # Config + weight conversion works (test_conversion passes). The convert group stays `broken`
+    # because test_huggingface_model fails: the custom modeling `from_pretrained` requires a
+    # generation_config.json that Fast-LLM does not export (unlike `dream`, which ships one). Behind
+    # that, the forward likely diverges as for `dream` below — DiffusionLlama is a bidirectional
+    # diffusion LM, while Fast-LLM runs it causal — but that is unverified since loading fails first.
+    # Neither is a converter bug. `generate` is broken for the same diffusion-decoding reason.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -530,8 +534,11 @@ update_and_add_testing_config(
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=DiffusionDreamCheckpointFormat,
-    # TODO: Conversion is broken.
-    # TODO: Add back generate as `normal` when stable.
+    # Config + weight conversion works (test_conversion passes). The convert group stays `broken`
+    # because test_huggingface_model fails: Dream is a bidirectional diffusion LM, so the HF forward
+    # diverges from Fast-LLM's causal run (structurally different logits/hidden states, confirmed — not
+    # a tolerance miss). Matching it needs bidirectional-attention modeling, not a converter change.
+    # `generate` is broken for the same diffusion-decoding reason.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
