@@ -13,9 +13,11 @@ slicing `[1:]` gives the n-1 next-token log-probs that align 1:1 with the traine
 
 The variants mirror the PipelineRL inference settings:
 
-  * `bf16_fp32_head` is the production setting — vLLM is always launched with
-    `--quantization bf16_last_layer_fp32` (bf16 body, fp32 LM head with fp32 logits), which is
-    the vLLM analog of the trainers' fp32 LM head;
+  * `bf16_fp32_head` is the production setting — `--quantization bf16_last_layer_fp32` (bf16 body, fp32
+    LM head with fp32 logits), the vLLM analog of the trainers' fp32 LM head. The quant binds its fp32
+    head by layer-name suffix; for tied-embedding models vLLM names the head `embed_tokens` rather than
+    `lm_head`, so `--fp32-head-prefix auto` targets the right layer (otherwise the head silently no-ops
+    on tied models, running in bf16);
   * `bf16` turns that off (head runs in bf16) to isolate the head's contribution.
 
 Each variant runs in its own subprocess because vLLM's global CUDA/engine state does not tear
@@ -72,12 +74,26 @@ def build_input_ids(model: str, sequence_length: int, text_file: str | None) -> 
     return torch.randint(0, vocab_size, (sequence_length,), generator=generator, dtype=torch.int64)
 
 
+def resolve_fp32_head_prefix(model: str, prefix: str) -> str:
+    """The bf16_last_layer_fp32 quant binds its fp32 head by matching the layer-name suffix. For tied
+    embeddings vLLM sets `lm_head = model.embed_tokens`, so the head is named `embed_tokens`, not
+    `lm_head` — the production `lm_head` prefix then silently no-ops. Pick the suffix that matches the
+    actual output head so the fp32 head genuinely binds on tied models too."""
+    if prefix != "auto":
+        return prefix
+    import transformers
+
+    tied = transformers.AutoConfig.from_pretrained(model).tie_word_embeddings
+    return "embed_tokens" if tied else "lm_head"
+
+
 def run_worker(
     model: str,
     variant: str,
     dtype: str,
     quantization: str | None,
     attention_backend: str | None,
+    fp32_head_prefix: str,
     input_file: str,
     output_dir: str,
 ) -> None:
@@ -90,7 +106,7 @@ def run_worker(
     if attention_backend is not None:
         os.environ.setdefault("VLLM_ATTENTION_BACKEND", attention_backend)
     if quantization is not None:
-        os.environ.setdefault("PIPELINERL_FP32_LAYER_PREFIX", "lm_head")
+        os.environ["PIPELINERL_FP32_LAYER_PREFIX"] = fp32_head_prefix
         import pipelinerl.vllm_quantization  # noqa: F401  registers the bf16_last_layer_fp32 config
 
     import vllm
@@ -165,6 +181,13 @@ def main() -> None:
         help="vLLM attention backend forced for every variant (isolates precision from the kernel)."
         " Pass 'auto' to let vLLM pick per dtype (the production path: flash-attn for bf16/fp16).",
     )
+    parser.add_argument(
+        "--fp32-head-prefix",
+        default="auto",
+        help="Layer-name suffix the bf16_last_layer_fp32 quant matches for its fp32 head. 'auto' picks"
+        " embed_tokens for tied-embedding models / lm_head otherwise so the fp32 head actually binds."
+        " Pass 'lm_head' for the literal production setting (a no-op on tied models).",
+    )
     # Internal: a single-variant worker invocation (one vLLM engine per process).
     parser.add_argument("--worker-variant", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--worker-dtype", default=None, help=argparse.SUPPRESS)
@@ -176,6 +199,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     attention_backend = None if args.attention_backend == "auto" else args.attention_backend
+    fp32_head_prefix = resolve_fp32_head_prefix(args.model, args.fp32_head_prefix)
     if args.worker_variant is not None:
         quantization = args.worker_quantization or None
         run_worker(
@@ -184,6 +208,7 @@ def main() -> None:
             args.worker_dtype,
             quantization,
             attention_backend,
+            fp32_head_prefix,
             args.input_file,
             args.output_dir,
         )
@@ -213,6 +238,8 @@ def main() -> None:
             args.output_dir,
             "--attention-backend",
             args.attention_backend,
+            "--fp32-head-prefix",
+            fp32_head_prefix,
             "--worker-variant",
             name,
             "--worker-dtype",
