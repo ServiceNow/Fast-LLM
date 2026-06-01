@@ -9,15 +9,17 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
-    pass
-
     from fast_llm.layers.language_model.loss.dpo import LanguageModelDPOLoss
     from fast_llm.layers.language_model.loss.entropy_loss import (
         LanguageModelDistillationLoss,
         LanguageModelLabelEntropyLoss,
     )
-    from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
     from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+    from fast_llm.layers.language_model.loss.policy_gradient import (
+        LanguageModelGRPOLoss,
+        LanguageModelGSPOLoss,
+        LanguageModelPolicyGradientLoss,
+    )
     from fast_llm.layers.language_model.loss.z_loss import LanguageModelZLoss
 
 
@@ -209,13 +211,26 @@ class GRPOMetricsLevel(enum.StrEnum):
     with_entropy = "with_entropy"
 
 
-@config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
-class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
+@config_class()
+class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
+    """Shared base for policy-gradient losses (GRPO, GSPO)."""
 
-    _abstract: typing.ClassVar[bool] = False
+    _abstract: typing.ClassVar[bool] = True
 
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
+
+    @property
+    def loss_class(self) -> "type[LanguageModelPolicyGradientLoss]":
+        raise NotImplementedError()
+
+
+@config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
+class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig):
+    """Group-Relative Policy Optimization: per-token IS-ratio clipping."""
+
+    _abstract: typing.ClassVar[bool] = False
+
     use_triton: bool | None = Field(
         default=None,
         desc="Enable triton implementation. Default: use if available.",
@@ -234,6 +249,25 @@ class LanguageModelGRPOLossConfig(LanguageModelLossConfig):
 
     @property
     def loss_class(self) -> "type[LanguageModelGRPOLoss]":
-        from fast_llm.layers.language_model.loss.grpo import LanguageModelGRPOLoss
+        from fast_llm.layers.language_model.loss.policy_gradient import LanguageModelGRPOLoss
 
         return LanguageModelGRPOLoss
+
+
+@config_class(dynamic_type={LanguageModelLossConfig: "gspo"})
+class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig):
+    """Group Sequence Policy Optimization: sequence-level geometric-mean IS-ratio clipping."""
+
+    _abstract: typing.ClassVar[bool] = False
+
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
+    @property
+    def loss_class(self) -> "type[LanguageModelGSPOLoss]":
+        from fast_llm.layers.language_model.loss.policy_gradient import LanguageModelGSPOLoss
+
+        return LanguageModelGSPOLoss

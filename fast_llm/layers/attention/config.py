@@ -23,8 +23,6 @@ class MixerKwargs(BlockKwargs):
     max_seqlen_k = "max_seqlen_k"
     min_seqlen_q = "min_seqlen_q"
     min_seqlen_k = "min_seqlen_k"
-    document_index_q = "document_index_q"
-    document_index_k = "document_index_k"
     position_ids = "position_ids"
     first_document_begin = "first_document_begin"
 

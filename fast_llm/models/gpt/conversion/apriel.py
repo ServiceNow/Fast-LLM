@@ -4,31 +4,30 @@ import typing
 
 from transformers import PretrainedConfig
 
-from fast_llm.config import Config
+from fast_llm.config import Config, get_nested_dict_value
 from fast_llm.engine.checkpoint.config import CheckpointFormat
 from fast_llm.engine.checkpoint.external import (
+    ConfigConverter,
     ConfigSectionConverter,
     CustomConfigConverter,
     DefaultConfigConverter,
+    DispatchBlockSequenceWeightConverter,
     IgnoredConfigConverter,
+    LinearWeightConverter,
     RenameConfigConverter,
     WeightConverter,
+    _get_attr_path,
+    _safe_set_nested_dict_value,
 )
 from fast_llm.layers.attention.config import AttentionConfig
-from fast_llm.layers.block.config import BlockSequenceConfig, FixedBlockSequenceConfig, PatternBlockSequenceConfig
-from fast_llm.layers.decoder.config import DecoderBlockConfig
+from fast_llm.layers.block.config import FixedBlockSequenceConfig, PatternBlockSequenceConfig
 from fast_llm.layers.ssm.config import GatedDeltaNetConfig, KimiDeltaAttentionConfig, MambaConfig
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import AprielHybridSSMCheckpointFormat
-from fast_llm.models.gpt.conversion.llama import (
-    effective_bias,
-    get_parameter_converter,
-    get_weight_and_bias_converters,
-)
+from fast_llm.models.gpt.conversion.llama import effective_bias
 from fast_llm.models.gpt.conversion.mistral import (
     MistralBaseModelConverter,
     MistralBlockConverter,
-    MistralHeadConverter,
     MistralHuggingfaceCheckpointHandler,
 )
 from fast_llm.utils import Assert, safe_merge_dicts
@@ -130,56 +129,23 @@ class AprielMambaConverter(ConfigSectionConverter):
         Assert.incl(config.output_layer.bias.enabled, (None, config.add_linear_biases))
 
     @classmethod
-    def get_converters(
-        cls,
-        config: MambaConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            # TODO: Conv
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.in_proj",
-                f"{hf_prefix}.in_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            "in_proj": LinearWeightConverter("in_proj", "in_proj"),
+            "dt_in_proj": LinearWeightConverter("dt_in_proj", "dt_in_proj"),
+            "dt_proj": LinearWeightConverter(
+                "dt_proj", "dt_proj", bias_fn=lambda c: effective_bias(c.dt_layer, c.add_linear_biases)
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.dt_in_proj",
-                f"{hf_prefix}.dt_in_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
+            "convolution": LinearWeightConverter(
+                "convolution",
+                "conv1d",
+                bias_fn=lambda c: effective_bias(c.convolution_layer, c.add_linear_biases),
             ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.dt_proj",
-                f"{hf_prefix}.dt_proj",
-                effective_bias(config.dt_layer, config.add_linear_biases),
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.convolution",
-                f"{hf_prefix}.conv1d",
-                effective_bias(config.convolution_layer, config.add_linear_biases),
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.A_log",
-                f"{hf_prefix}.A_log",
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.D",
-                f"{hf_prefix}.D",
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.out_proj",
-                f"{hf_prefix}.out_proj",
-                config.add_linear_biases,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+            "A_log": WeightConverter("A_log", "A_log"),
+            "D": WeightConverter("D", "D"),
+            "out_proj": LinearWeightConverter("out_proj", "out_proj"),
+        }
 
 
 class GatedDeltaNetConverter(ConfigSectionConverter):
@@ -221,55 +187,18 @@ class GatedDeltaNetConverter(ConfigSectionConverter):
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: GatedDeltaNetConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.in_proj_qkvz",
-                f"{hf_prefix}.in_proj_qkvz",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.in_proj_ba",
-                f"{hf_prefix}.in_proj_ba",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.convolution",
-                f"{hf_prefix}.convolution",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.out_proj",
-                f"{hf_prefix}.out_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.A_log",
-                f"{hf_prefix}.A_log",
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.dt_bias",
-                f"{hf_prefix}.dt_bias",
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.norm",
-                f"{hf_prefix}.norm",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # GDN has no ``add_linear_biases`` field; pass ``bias_fn=False`` so the default isn't consulted.
+        return {
+            "in_proj_qkvz": LinearWeightConverter("in_proj_qkvz", "in_proj_qkvz", bias_fn=False),
+            "in_proj_ba": LinearWeightConverter("in_proj_ba", "in_proj_ba", bias_fn=False),
+            "convolution": LinearWeightConverter("convolution", "convolution", bias_fn=False),
+            "out_proj": LinearWeightConverter("out_proj", "out_proj", bias_fn=False),
+            "A_log": WeightConverter("A_log", "A_log"),
+            "dt_bias": WeightConverter("dt_bias", "dt_bias"),
+            "norm": LinearWeightConverter("norm", "norm", bias_fn=False),
+        }
 
 
 class KimiDeltaAttentionConverter(ConfigSectionConverter):
@@ -315,103 +244,29 @@ class KimiDeltaAttentionConverter(ConfigSectionConverter):
         }
 
     @classmethod
-    def get_converters(
-        cls,
-        config: KimiDeltaAttentionConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return [
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.q_proj",
-                f"{hf_prefix}.q_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.k_proj",
-                f"{hf_prefix}.k_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.v_proj",
-                f"{hf_prefix}.v_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.q_conv",
-                f"{hf_prefix}.q_conv",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.k_conv",
-                f"{hf_prefix}.k_conv",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.v_conv",
-                f"{hf_prefix}.v_conv",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.f_a_proj",
-                f"{hf_prefix}.f_a_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.f_b_proj",
-                f"{hf_prefix}.f_b_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.g_a_proj",
-                f"{hf_prefix}.g_a_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.g_b_proj",
-                f"{hf_prefix}.g_b_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.beta_proj",
-                f"{hf_prefix}.beta_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.o_proj",
-                f"{hf_prefix}.o_proj",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.A_log",
-                f"{hf_prefix}.A_log",
-                drop_on_export=drop_on_export,
-            ),
-            get_parameter_converter(
-                f"{fast_llm_prefix}.dt_bias",
-                f"{hf_prefix}.dt_bias",
-                drop_on_export=drop_on_export,
-            ),
-            *get_weight_and_bias_converters(
-                f"{fast_llm_prefix}.norm",
-                f"{hf_prefix}.norm",
-                False,
-                drop_on_export=drop_on_export,
-            ),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # KimiDeltaAttention has no linear biases.
+        proj_names = (
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "q_conv",
+            "k_conv",
+            "v_conv",
+            "f_a_proj",
+            "f_b_proj",
+            "g_a_proj",
+            "g_b_proj",
+            "beta_proj",
+            "o_proj",
+        )
+        return {
+            **{name: LinearWeightConverter(name, name, bias_fn=False) for name in proj_names},
+            "A_log": WeightConverter("A_log", "A_log"),
+            "dt_bias": WeightConverter("dt_bias", "dt_bias"),
+            "norm": LinearWeightConverter("norm", "norm", bias_fn=False),
+        }
 
 
 class AprielKimiDeltaAttentionBlockConverter(MistralBlockConverter):
@@ -429,10 +284,103 @@ class AprielGatedDeltaNetBlockConverter(MistralBlockConverter):
     hf_mixer_name: typing.ClassVar[str] = "mixer"
 
 
+class ListDispatchConfigConverter(ConfigConverter):
+    """Block-sequence dispatch driven by a positional HF list.
+
+    The HF config carries one layout-discriminator string per pipeline position; each registered
+    block converter handles one mixer type, and their outputs flat-merge into the parent HF root.
+    Per-mixer nested subdicts (e.g. ``ssm_cfg`` for Mamba, ``linear_attn_config`` for GDN) are
+    disjoint across block types; shared top-level scalars are emitted by every block with the same
+    value and cross-validate via :func:`Assert.eq` inside ``_safe_set_nested_dict_value``. The
+    Fast-LLM target is a :class:`FixedBlockSequenceConfig` when the layout has a single entry, a
+    :class:`PatternBlockSequenceConfig` otherwise.
+
+    Two registries:
+
+    * ``registry``: mixer-config class → block ``ConfigSectionConverter``. Domain of the HF coverage
+      walker — every block type whose HF keys must be claimed appears here.
+    * ``layout_names``: mixer-config class → layout discriminator string. Must be a subset of
+      ``registry`` keys (checked in ``__init__``). Domain of the config-side round-trip — classes
+      absent here can't be config-exported (no layout name to emit) or config-imported (no reverse
+      lookup).
+    """
+
+    fast_llm_recurses: typing.ClassVar[bool] = True
+
+    def __init__(
+        self,
+        fast_llm_path: tuple[str, ...],
+        hf_layout_path: tuple[str, ...],
+        hf_num_blocks_path: tuple[str, ...],
+        registry: "dict[type[Config], type[ConfigSectionConverter]]",
+        layout_names: "dict[type[Config], str]",
+    ):
+        Assert.custom(lambda names: set(names) <= set(registry), layout_names)
+        self.fast_llm_paths = (fast_llm_path,)
+        # Layout/num-blocks paths and per-block claims register through ``_consumed_hf_paths``.
+        self.hf_paths = ()
+        self._hf_layout_path = hf_layout_path
+        self._hf_num_blocks_path = hf_num_blocks_path
+        self._registry = registry
+        self._layout_names = layout_names
+        self._config_classes = {name: cls for cls, name in layout_names.items()}
+
+    def export_to(self, fast_llm_config: Config, hf_out: dict) -> None:
+        block_sequence = _get_attr_path(fast_llm_config, self.fast_llm_paths[0])
+        if type(block_sequence) is FixedBlockSequenceConfig:
+            distinct_blocks = [block_sequence.block]
+            pattern_blocks = [block_sequence.block]
+        elif type(block_sequence) is PatternBlockSequenceConfig:
+            distinct_blocks = block_sequence.blocks.values()
+            pattern_blocks = [block_sequence.blocks[name] for name in block_sequence.pattern]
+        else:
+            raise NotImplementedError(
+                f"Unsupported block-sequence type {type(block_sequence).__name__} at "
+                f"{'.'.join(self.fast_llm_paths[0])}"
+            )
+        for block_config in distinct_blocks:
+            converter_class = self._registry[type(block_config.mixer)]
+            sub_hf = converter_class.export_config(block_config)
+            for key, value in sub_hf.items():
+                _safe_set_nested_dict_value(hf_out, (key,), value)
+        layout = [self._layout_names[type(block_config.mixer)] for block_config in pattern_blocks]
+        _safe_set_nested_dict_value(hf_out, self._hf_layout_path, layout)
+        _safe_set_nested_dict_value(hf_out, self._hf_num_blocks_path, block_sequence.num_blocks)
+
+    def import_to(self, hf_dict: dict, fast_llm_out: dict) -> None:
+        layout = get_nested_dict_value(hf_dict, self._hf_layout_path)
+        num_blocks = get_nested_dict_value(hf_dict, self._hf_num_blocks_path)
+        if len(layout) == 1:
+            converter_class = self._registry[self._config_classes[layout[0]]]
+            sub_fast_llm = {"block": converter_class.import_config(hf_dict), "num_blocks": num_blocks}
+        else:
+            sub_fast_llm = {
+                "type": "pattern",
+                "blocks": {
+                    layout_name: self._registry[self._config_classes[layout_name]].import_config(hf_dict)
+                    for layout_name in set(layout)
+                },
+                "pattern": layout,
+                "num_blocks": num_blocks,
+            }
+        _safe_set_nested_dict_value(fast_llm_out, self.fast_llm_paths[0], sub_fast_llm)
+
+    def _consumed_hf_paths(self) -> frozenset[tuple[str, ...]]:
+        paths: set[tuple[str, ...]] = {self._hf_layout_path, self._hf_num_blocks_path}
+        for sub_class in self._registry.values():
+            paths |= sub_class._consumed_hf_paths()
+        return frozenset(paths)
+
+
 class AprielBlockConverter:
-    """Per-block dispatcher: the mixer type is encoded in the parent's ``hybrid_block_layout`` list,
-    not in a nested HF discriminator, so this dispatcher stays imperative rather than using
-    :class:`DispatchConfigConverter`. Each branch delegates to a regular declarative block converter.
+    """Registry holder for Apriel's per-mixer-type block converters.
+
+    ``layout_names`` maps the mixer-config classes that participate in Apriel's
+    ``hybrid_block_layout`` discriminator to their string layout names — consumed by
+    :class:`ListDispatchConfigConverter` on the config side. ``_converter_classes`` maps every
+    mixer-config class whose weights can appear in an Apriel checkpoint to its block converter
+    (a superset of ``layout_names`` keys that adds ``KimiDeltaAttentionConfig`` for weight-only
+    coverage) — consumed by ``DispatchBlockSequenceWeightConverter`` on the weight side.
     """
 
     layout_names: typing.ClassVar[dict[type[Config], str]] = {
@@ -446,157 +394,45 @@ class AprielBlockConverter:
         KimiDeltaAttentionConfig: AprielKimiDeltaAttentionBlockConverter,
         GatedDeltaNetConfig: AprielGatedDeltaNetBlockConverter,
     }
-    _config_classes: typing.ClassVar[dict[str, type[Config]]] = {value: key for key, value in layout_names.items()}
-
-    @classmethod
-    def import_config(cls, config: dict, layout_name: str = "t") -> dict:
-        return cls._converter_classes[cls._config_classes[layout_name]].import_config(config)
-
-    @classmethod
-    def export_config(cls, config: DecoderBlockConfig) -> dict:
-        return cls._converter_classes[type(config.mixer)].export_config(config)
-
-    @classmethod
-    @functools.cache
-    def _consumed_hf_paths(cls) -> frozenset[tuple[str, ...]]:
-        """Union of consumed HF paths across every per-mixer-type block converter — used by the parent's
-        decoder Custom to pre-claim Apriel's flat top-level keys for the HF coverage check."""
-        paths: set[tuple[str, ...]] = set()
-        for sub in cls._converter_classes.values():
-            paths |= sub._consumed_hf_paths()
-        return frozenset(paths)
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: DecoderBlockConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        return cls._converter_classes[type(config.mixer)].get_converters(
-            config, fast_llm_prefix, hf_prefix, drop_on_export=drop_on_export
-        )
-
-
-class AprielDecoderConverter:
-    """Pattern-style decoder dispatched via Apriel's ``hybrid_block_layout`` list (one entry per block).
-    Stays imperative because the layout-list shape doesn't match the declarative ``decoder.type``
-    discriminator that :class:`Apriel2BaseModelConverter` uses; a declarative form would need a
-    ``ListDispatchConfigConverter`` primitive that maps a positional list to per-position sub-converters.
-    """
-
-    block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
-
-    @classmethod
-    def import_config(cls, config: dict) -> dict:
-        layout = config["hybrid_block_layout"]
-        if len(layout) == 1:
-            return {
-                "block": cls.block_converter_class.import_config(config, layout[0]),
-                "num_blocks": config["num_hidden_layers"],
-            }
-        else:
-            return {
-                "type": "pattern",
-                "blocks": {
-                    layout_name: cls.block_converter_class.import_config(config, layout_name)
-                    for layout_name in set(layout)
-                },
-                "pattern": layout,
-                "num_blocks": config["num_hidden_layers"],
-            }
-
-    @classmethod
-    def export_config(cls, config: BlockSequenceConfig) -> dict:
-        if type(config) is FixedBlockSequenceConfig:
-            block_configs = [config.block]
-            pattern_block_configs = [config.block]
-        elif type(config) is PatternBlockSequenceConfig:
-            block_configs = config.blocks.values()
-            pattern_block_configs = [config.blocks[block_name] for block_name in config.pattern]
-        else:
-            raise NotImplementedError()
-        # Each block emits non-overlapping HF keys (attention -> flat, mamba -> ssm_cfg.*,
-        # gdn/kda -> linear_attn_config.*) so safe_merge_dicts is sufficient to combine them.
-        return safe_merge_dicts(
-            *[cls.block_converter_class.export_config(block_config) for block_config in block_configs],
-            {
-                "num_hidden_layers": config.num_blocks,
-                "hybrid_block_layout": [
-                    cls.block_converter_class.layout_names[type(block_config.mixer)]
-                    for block_config in pattern_block_configs
-                ],
-            },
-        )
-
-    @classmethod
-    def get_converters(
-        cls,
-        config: PatternBlockSequenceConfig,
-        fast_llm_prefix: str,
-        hf_prefix: str,
-        drop_on_export: bool = False,
-    ) -> list[WeightConverter]:
-        converters = []
-        for block_index in range(config.num_blocks):
-            block_config = config.blocks[config.pattern[block_index % len(config.pattern)]]
-            converters += cls.block_converter_class.get_converters(
-                block_config,
-                f"{fast_llm_prefix}.{block_index}",
-                f"{hf_prefix}.{block_index}",
-                drop_on_export,
-            )
-        return converters
-
-
-class AprielHeadConverter(MistralHeadConverter):
-    block_converter_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
 
 
 class AprielBaseModelConverter(MistralBaseModelConverter):
-    """Apriel needs the per-position hybrid layout dispatcher (:class:`AprielDecoderConverter`) instead of
-    the standard Fixed/Pattern dispatch inlined in :class:`LlamaBaseModelConverter`. The override below
-    replaces the parent's ``"decoder"`` declaration with one that delegates to Apriel's dispatcher.
+    """Section converter for the Apriel hybrid-SSM base model.
+
+    The decoder uses :class:`ListDispatchConfigConverter` driven by the format's
+    ``hybrid_block_layout`` list (per-position mixer-type discriminator); each block converter's
+    HF keys flat-merge into the parent HF root.
     """
 
-    head_converter_class: typing.ClassVar[type[AprielHeadConverter]] = AprielHeadConverter
-    apriel_decoder_converter_class: typing.ClassVar[type[AprielDecoderConverter]] = AprielDecoderConverter
+    # Distinct from the parent's ``block_converter_class`` (a single ``ConfigSectionConverter``); this
+    # one holds the per-mixer-type dispatch registries that :class:`ListDispatchConfigConverter` and
+    # :class:`DispatchBlockSequenceWeightConverter` consume.
+    block_dispatcher_class: typing.ClassVar[type[AprielBlockConverter]] = AprielBlockConverter
 
     @classmethod
     def _create_config_converters(cls) -> dict:
-        decoder_cls = cls.apriel_decoder_converter_class
-
-        def _decoder_export(parent: Config) -> dict:
-            return {(k,): v for k, v in decoder_cls.export_config(parent.decoder).items()}
-
-        def _decoder_import(hf_dict: dict) -> dict:
-            return {("decoder",): decoder_cls.import_config(hf_dict)}
-
         return {
             **super()._create_config_converters(),
-            "decoder": CustomConfigConverter(
-                fast_llm_paths=(("decoder",),),
-                # Block converter is the per-position dispatcher (:class:`AprielBlockConverter`), which
-                # unions the HF claims of every leaf-mixer's block converter.
-                hf_paths=(
-                    ("num_hidden_layers",),
-                    ("hybrid_block_layout",),
-                    *decoder_cls.block_converter_class._consumed_hf_paths(),
-                ),
-                export_fn=_decoder_export,
-                import_fn=_decoder_import,
-                fast_llm_recurses=True,
+            "decoder": ListDispatchConfigConverter(
+                fast_llm_path=("decoder",),
+                hf_layout_path=("hybrid_block_layout",),
+                hf_num_blocks_path=("num_hidden_layers",),
+                registry=cls.block_dispatcher_class._converter_classes,
+                layout_names=cls.block_dispatcher_class.layout_names,
             ),
         }
 
     @classmethod
-    def get_converters(cls, config: GPTBaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        return [
-            *cls.embeddings_converter_class.get_converters(config.embeddings, "embeddings", "model"),
-            *cls.apriel_decoder_converter_class.get_converters(config.decoder, "decoder", "model.layers"),
-            *cls.head_converter_class.get_converters(config, exported_config),
-        ]
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        return {
+            **super()._create_weight_converters(),
+            "decoder": DispatchBlockSequenceWeightConverter(
+                "decoder",
+                "model.layers",
+                cls.block_dispatcher_class._converter_classes,
+            ),
+        }
 
 
 class AprielHuggingfaceCheckpointHandler(MistralHuggingfaceCheckpointHandler):

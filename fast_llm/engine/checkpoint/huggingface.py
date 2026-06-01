@@ -1,4 +1,5 @@
 import abc
+import functools
 import json
 import pathlib
 import shutil
@@ -23,30 +24,26 @@ if typing.TYPE_CHECKING:
     import transformers
 
 
-class HuggingFaceBaseModelConverter:
-    @classmethod
-    @abc.abstractmethod
-    def import_config(cls, config: dict) -> dict:
-        pass
+class HuggingFaceBaseModelConverter(ConfigSectionConverter):
+    """Section converter for a full HF model root. Inherits the declarative config-side machinery from
+    :class:`ConfigSectionConverter` (``import_config`` / ``export_config`` driven by
+    ``_create_config_converters``) and adds the weight-side ``get_converters`` aggregation that the
+    enclosing :class:`HuggingfaceStateDictCheckpointHandler` invokes.
+    """
 
     @classmethod
-    @abc.abstractmethod
-    def export_config(cls, config: BaseModelConfig) -> dict:
-        pass
+    def get_converters(cls, config: BaseModelConfig) -> list[WeightConverter]:
+        """Default: walk the section's weight declarations from the root.
 
-    @classmethod
-    @abc.abstractmethod
-    def get_converters(cls, config: BaseModelConfig, exported_config: dict) -> list[WeightConverter]:
-        pass
+        Subclasses override when a section needs cross-section state from the full base-model config
+        (typically when an extension point on the head must read from a sibling section).
+        """
+        return cls.emit_weight_converters(config, "", "")
 
 
 class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, abc.ABC):
     architecture: typing.ClassVar[str]
     base_model_converter_class: typing.ClassVar[type[HuggingFaceBaseModelConverter]]
-
-    def __init__(self, model: "FastLLMModel"):
-        self._exported_config = self._export_config(model.config)
-        super().__init__(model)
 
     @classmethod
     @abc.abstractmethod
@@ -125,29 +122,20 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             },
         )
 
-    # Top-level HF metadata keys that are always permitted, regardless of the converter tree.
-    # Covers transformers' generic ``PretrainedConfig`` fields (always present after ``to_dict()``)
-    # plus a handful of widely-shared metadata that Fast-LLM intentionally does not store.
+    # HF metadata keys that are always permitted, regardless of the converter tree. The generic
+    # ``PretrainedConfig`` fields are added dynamically (see :meth:`_hf_metadata_allowlist`) because the
+    # exact set drifts across the supported transformers range — e.g. the generation kwargs and
+    # ``torchscript`` that v4 dumps into ``to_dict()`` were moved out to ``GenerationConfig`` in v5. This
+    # static set covers the widely-shared metadata that Fast-LLM intentionally does not store but that a
+    # bare ``PretrainedConfig`` does not carry (model-specific defaults like ``max_position_embeddings``).
     _HF_METADATA_ALLOWLIST: typing.ClassVar[frozenset[str]] = frozenset(
         {
-            # transformers PretrainedConfig
-            "_name_or_path",
-            "architectures",
+            # transformers metadata Fast-LLM does not store that a bare ``PretrainedConfig().to_dict()``
+            # omits across the supported range (so the dynamic union would miss them).
             "auto_map",
-            "chunk_size_feed_forward",
-            "dtype",
-            "id2label",
-            "is_encoder_decoder",
-            "label2id",
-            "model_type",
-            "output_attentions",
-            "output_hidden_states",
-            "problem_type",
-            "return_dict",
             "torch_dtype",
-            "transformers_version",
             "use_cache",
-            # Token ids — generation/inference, not architecture.
+            # Token ids — generation/inference, not architecture (a bare v5 config omits these).
             "bos_token_id",
             "decoder_start_token_id",
             "eos_token_id",
@@ -161,16 +149,26 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
     )
 
     @classmethod
+    @functools.cache
+    def _hf_metadata_allowlist(cls) -> frozenset[str]:
+        """Static allowlist unioned with the live ``PretrainedConfig`` field set.
+
+        Every key a bare ``PretrainedConfig`` carries is generic transformers metadata, never
+        architecture, so deriving them from the installed transformers keeps the coverage check correct
+        across the supported version range instead of hard-coding a version-specific set.
+        """
+        import transformers
+
+        return cls._HF_METADATA_ALLOWLIST | frozenset(transformers.PretrainedConfig().to_dict())
+
+    @classmethod
     def _check_hf_coverage(cls, config: dict[str, typing.Any]) -> None:
         """Run the HF-side coverage check at the import boundary.
 
-        Skips silently when the format's base-model converter isn't a :class:`ConfigSectionConverter`
-        (e.g. multimodal aggregators built on top of imperative ``HuggingFaceBaseModelConverter``).
         Subclasses that override :meth:`_import_config` should call this explicitly to keep the check
         active.
         """
-        if issubclass(cls.base_model_converter_class, ConfigSectionConverter):
-            cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._HF_METADATA_ALLOWLIST)
+        cls.base_model_converter_class.check_hf_coverage(config, allowlist=cls._hf_metadata_allowlist())
 
     @classmethod
     def _import_config(cls, config: dict[str, typing.Any]) -> FastLLMModelConfig:
@@ -180,7 +178,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         return cls._model_class.from_dict({"base_model": cls.base_model_converter_class.import_config(config)})
 
     def _create_weight_converters(self) -> list[WeightConverter]:
-        return self.base_model_converter_class.get_converters(self._model.config.base_model, self._exported_config)
+        return self.base_model_converter_class.get_converters(self._model.config.base_model)
 
     def _load_weights(
         self, config: CheckpointLoadConfig, device

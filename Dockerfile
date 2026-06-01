@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7-labs
-FROM nvcr.io/nvidia/pytorch:25.11-py3
+FROM nvcr.io/nvidia/pytorch:26.02-py3
 
 # Install dependencies.
 RUN apt-get update \
@@ -25,7 +25,7 @@ ENV PIP_CONSTRAINT=""
 # We need to compile from the repo because of https://github.com/state-spaces/mamba/issues/720 (same for causal-conv1d)
 # We set the number of workers to avoid OOM when compiling on laptop. (TODO: Can we make it configurable?)
 RUN MAX_JOBS=2 pip install --no-build-isolation "causal-conv1d @ git+https://github.com/Dao-AILab/causal-conv1d@v1.5.4"
-RUN MAX_JOBS=2 pip install --no-build-isolation mamba-ssm==2.2.6.post3
+RUN MAX_JOBS=2 pip install --no-build-isolation mamba-ssm==2.3.2.post1
 RUN MAX_JOBS=2 pip install --no-build-isolation "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention@67eee20c8503cd19eeb52aa1b99821308e9260c5"
 # Copy dependency files. Source files end up root-owned and read-only for non-root processes;
 # /app itself stays writable so the runtime UID can create new files (logs, __pycache__, etc.).
@@ -35,7 +35,7 @@ COPY ./fast_llm/__init__.py fast_llm/
 COPY ./fast_llm/csrc/ fast_llm/csrc/
 
 # Install dependencies within the virtual environment.
-RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,HUGGINGFACE,SSM,VISION,GENERATION,STREAMING,DEV]" triton==3.5.1 "transformers>=5.0.0,<6.0.0"
+RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,HUGGINGFACE,SSM,VISION,GENERATION,STREAMING,DEV]" "transformers>=5.0.0,<6.0.0"
 
 # Copy the remaining source code (read-only for non-root, see the note on dependency files above).
 COPY ./Megatron-LM Megatron-LM

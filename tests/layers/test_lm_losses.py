@@ -14,14 +14,16 @@ from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
+from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
-from fast_llm.layers.language_model.loss.grpo import (
+from fast_llm.layers.language_model.loss.loss import loss_forward_backward
+from fast_llm.layers.language_model.loss.policy_gradient import (
     GRPOMetrics,
     compute_grpo_metrics,
     fused_grpo_loss_forward_backward,
+    fused_gspo_loss_forward_backward,
 )
-from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.z_loss import fused_z_loss_forward_backward, z_loss
 from fast_llm.utils import Assert
 from tests.utils.dataset import get_random_spans
@@ -165,6 +167,50 @@ def reference_grpo_metrics(
         num_tokens=mask.sum(),
         entropy=entropy,
     )
+
+
+def reference_gspo_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    advantages: torch.Tensor,
+    old_log_probabilities: torch.Tensor,
+    document_index: torch.Tensor,
+    num_segments: int,
+    epsilon_low: float = 0.2,
+    epsilon_high: float = 0.2,
+    logits_scale_factor: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    logits_ = logits.float()
+    loss_mask = labels >= 0
+    labels_safe = labels * loss_mask
+    target_log_probabilities = (
+        torch.nn.functional.log_softmax(logits_ * logits_scale_factor, dim=-1)
+        .gather(dim=-1, index=labels_safe.unsqueeze(-1))
+        .squeeze(-1)
+    )
+    log_ratio = target_log_probabilities - old_log_probabilities
+
+    flat_doc = document_index.reshape(-1)
+    flat_mask = loss_mask.reshape(-1)
+    flat_log_ratio = log_ratio.reshape(-1)
+    flat_advantages = advantages.reshape(-1)
+
+    total = log_ratio.new_zeros(())
+    new_logprobs = log_ratio.new_zeros(())
+    for segment in range(num_segments):
+        in_segment = (flat_doc == segment) & flat_mask
+        count = in_segment.sum()
+        if int(count) == 0:
+            continue
+        count_float = count.float()
+        ratio = (flat_log_ratio[in_segment].sum() / count_float).exp()
+        advantage = (flat_advantages[in_segment].sum() / count_float).detach()
+        clipped_ratio = ratio.clamp(1 - epsilon_low, 1 + epsilon_high)
+        total = total + -torch.minimum(ratio * advantage, clipped_ratio * advantage)
+        # Matches the kernel's `sum_t logprob_t * mask_t / N_d` — sum of per-document mean logprobs.
+        new_logprobs = new_logprobs + target_log_probabilities.reshape(-1)[in_segment].sum() / count_float
+    total = total / num_segments
+    return total, new_logprobs
 
 
 def reference_grpo_loss(
@@ -350,6 +396,94 @@ def _test_grpo_loss(
     Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
+def _test_gspo_loss(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    num_segments,
+    accumulate,
+    group=None,
+):
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    # Build per-token segment IDs by partitioning each batch row into `num_segments` contiguous spans.
+    seq_len = batch_shape[-1] if len(batch_shape) > 1 else batch_shape[0]
+    span = max(seq_len // num_segments, 1)
+    base = torch.arange(seq_len, device=target.device) // span
+    document_index = base.clamp(max=num_segments - 1).expand(batch_shape).contiguous()
+    # Per-document labeled-token count broadcast per token, matching what the data
+    # preprocessor produces.
+    flat_doc = document_index.reshape(-1).long()
+    flat_target = target.reshape(-1)
+    labels_per_document = torch.zeros(num_segments, dtype=torch.int32, device=target.device).scatter_add(
+        0, flat_doc, (flat_target >= 0).to(torch.int32)
+    )
+    num_labels_in_seq = labels_per_document[flat_doc].reshape(target.shape)
+    _, ref_new_logprobs = reference_gspo_loss(
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        logits_scale_factor=logits_scale_factor,
+    )
+    out_ref, grad_ref = loss_forward_backward(
+        grad_output,
+        lambda *args, **kwargs: reference_gspo_loss(*args, **kwargs)[0],
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        logits_scale_factor=logits_scale_factor,
+    )
+    if accumulate:
+        previous_grad = torch.randn_like(grad_ref)
+        grad_ref = grad_ref + previous_grad
+        local_previous_grad = split_op(previous_grad, group, -1).contiguous()
+    out_fused, grad_fused, new_logprobs_fused = fused_gspo_loss_forward_backward(
+        split_op(logits, group, -1),
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        divisor=num_segments,
+        grad_logits=local_previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        num_labels_in_seq=num_labels_in_seq,
+    )
+    _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
+    Assert.rms_close_relative(new_logprobs_fused, ref_new_logprobs, 1e-5, 1e-6)
+
+    if not triton_available:
+        return
+    out_triton, grad_triton, new_logprobs_triton = triton_gspo_loss_forward_backward(
+        split_op(logits, group, -1).contiguous(),
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        divisor=num_segments,
+        num_labels_in_seq=num_labels_in_seq,
+        grad_logits=local_previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+    )
+    _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group)
+    Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
+
+
 def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) -> None:
     for name in GRPOMetrics._fields:
         ref_value = getattr(ref, name)
@@ -511,6 +645,35 @@ def test_grpo_loss(
 ):
     _test_grpo_loss(
         batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
+
+
+_GSPO_PARAMETERS = (
+    # (num_columns, grad_output, logits_scale_factor, loss_masking, dtype, num_segments, accumulate)
+    (500, 1.0, 1.0, False, DataType.float32, 4, False),  # Simple
+    (256, 1.0, 1.0, False, DataType.float32, 4, False),  # Power of 2
+    (500, None, 1.0, False, DataType.float32, 4, False),  # No grad
+    (500, 1.0, 1.0, False, DataType.float32, 4, True),  # Accumulate
+    (500, 1.0, 4.0, False, DataType.float32, 4, False),  # Loss scaling
+    (500, 4.0, 1.0, False, DataType.float32, 4, False),  # Grad scaling
+    (500, 1.0, 1.0, True, DataType.float32, 4, False),  # Loss masking
+    (500, 1.0, 1.0, False, DataType.float16, 4, False),  # Fp16
+    (500, 1.0, 1.0, False, DataType.float32, 1, False),  # One segment
+    (500, 1.0, 1.0, True, DataType.float32, 16, True),  # Many segments + masking + accumulate
+)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "num_segments", "accumulate"),
+    _GSPO_PARAMETERS,
+)
+def test_gspo_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, num_segments, accumulate
+):
+    _test_gspo_loss(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, num_segments, accumulate
     )
 
 
