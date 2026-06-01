@@ -338,7 +338,10 @@ def _run_fixed_input(config, input_ids, sequence_length: int) -> None:
         )
         with torch.no_grad():
             multi_stage.setup(distributed, mode=StageMode.training)
-        multi_stage.load_checkpoint(config.pretrained)
+        if config.pretrained.path is not None and config.pretrained.model_weights:
+            multi_stage.load_checkpoint(config.pretrained)
+        else:
+            multi_stage.initialize_weights()
         param_groups, grads_for_norm = multi_stage.get_param_groups(ParamGroup)
         optimizer = config.optimizer.optimizer_cls(
             config.optimizer, param_groups=param_groups, grads_for_norm=grads_for_norm, distributed=distributed

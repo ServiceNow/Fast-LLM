@@ -133,16 +133,26 @@ def grad_category(name: str) -> str:
 
 
 def capture_variant(
-    model_id: str, dtype: torch.dtype, fp32_head: bool, input_ids: torch.Tensor, attn_implementation: str
+    model_id: str,
+    dtype: torch.dtype,
+    fp32_head: bool,
+    input_ids: torch.Tensor,
+    attn_implementation: str,
+    random_init: bool = False,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Forward + backward one variant through a DeepSpeed engine. Returns (chosen_logprob,
     {param_name: gradient}), both on CPU in fp32."""
     import deepspeed
     import transformers
 
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_id, dtype=dtype, attn_implementation=attn_implementation
-    )
+    if random_init:
+        model = transformers.AutoModelForCausalLM.from_config(
+            transformers.AutoConfig.from_pretrained(model_id), dtype=dtype, attn_implementation=attn_implementation
+        )
+    else:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_id, dtype=dtype, attn_implementation=attn_implementation
+        )
     if fp32_head:
         apply_fp32_lm_head(model)
     engine, *_ = deepspeed.initialize(model=model, model_parameters=model.parameters(), config=_ds_config(dtype))
@@ -228,6 +238,12 @@ def main() -> None:
         help="Path to an input_ids.pt saved by tools/evaluate_precision.py. When set, feeds that exact"
         " model input (so Fast-LLM and DeepSpeed see byte-identical tokens); --input-mode is ignored.",
     )
+    parser.add_argument(
+        "--random-init",
+        action="store_true",
+        help="Build the model from config with random weights instead of loading the pretrained"
+        " checkpoint (contrast with the pretrained run; weights won't match Fast-LLM's random init).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -261,7 +277,9 @@ def main() -> None:
     grad_metrics: dict[str, dict[str, list[float]]] = {}
     for name, dtype, fp32_head in _VARIANTS:
         logger.info(f"=== variant {name} (dtype={dtype}, fp32_head={fp32_head}) ===")
-        logprob, grads = capture_variant(args.model, dtype, fp32_head, input_ids, args.attn_implementation)
+        logprob, grads = capture_variant(
+            args.model, dtype, fp32_head, input_ids, args.attn_implementation, args.random_init
+        )
         if name == _REFERENCE_NAME:
             ref_logprob, ref_grads = logprob, grads
         logprob_metrics[name] = compare._compute_diff(_entry(ref_logprob), _entry(logprob), "step", "chosen_logprob")
