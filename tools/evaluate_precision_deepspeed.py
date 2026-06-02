@@ -111,11 +111,11 @@ def build_input_ids(tokenizer, vocab_size: int, sequence_length: int, device: to
     return ids.unsqueeze(0).to(device)
 
 
-def _ds_config(dtype: torch.dtype) -> dict[str, typing.Any]:
-    config: dict[str, typing.Any] = {
-        "train_micro_batch_size_per_gpu": 1,
-        "optimizer": {"type": "Adam", "params": {"lr": 1e-6}},
-    }
+def _ds_config(dtype: torch.dtype, forward_only: bool = False) -> dict[str, typing.Any]:
+    config: dict[str, typing.Any] = {"train_micro_batch_size_per_gpu": 1}
+    if not forward_only:
+        # No optimizer for forward-only: avoids the fp32 master copy + Adam state that would OOM a 7B run.
+        config["optimizer"] = {"type": "Adam", "params": {"lr": 1e-6}}
     if dtype == torch.bfloat16:
         config["bf16"] = {"enabled": True}
     elif dtype == torch.float16:
@@ -140,9 +140,15 @@ def capture_variant(
     input_ids: torch.Tensor,
     attn_implementation: str,
     random_init: bool = False,
+    forward_only: bool = False,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Forward + backward one variant through a DeepSpeed engine. Returns (chosen_logprob,
-    {param_name: gradient}), both on CPU in fp32."""
+    """Capture one variant. Returns (chosen_logprob, {param_name: gradient}), both on CPU in fp32.
+
+    Default: forward + backward through a DeepSpeed engine. `forward_only=True` initializes the same
+    DeepSpeed engine but without an optimizer (no fp32 master copy / Adam state, which would OOM a 7B
+    run) and runs a single `eval()` + `no_grad` forward (returns empty gradients). The engine is kept —
+    DeepSpeed's bf16/fp16 forward is not bit-identical to a plain HF forward in the same dtype, so
+    bypassing it would shift the measured log π."""
     import deepspeed
     import transformers
 
@@ -156,6 +162,15 @@ def capture_variant(
         )
     if fp32_head:
         apply_fp32_lm_head(model)
+    if forward_only:
+        engine, *_ = deepspeed.initialize(model=model, config=_ds_config(dtype, forward_only=True))
+        engine.eval()
+        with torch.no_grad():
+            logprob = chosen_logprob(engine(input_ids).logits, input_ids).detach().float().cpu()
+        del engine, model
+        torch.cuda.empty_cache()
+        return logprob, {}
+
     engine, *_ = deepspeed.initialize(model=model, model_parameters=model.parameters(), config=_ds_config(dtype))
     outputs = engine(input_ids)
     logprob = chosen_logprob(outputs.logits, input_ids)
@@ -246,6 +261,13 @@ def main() -> None:
         " checkpoint (contrast with the pretrained run; weights won't match Fast-LLM's random init).",
     )
     parser.add_argument(
+        "--forward-only",
+        action="store_true",
+        help="Initialize the DeepSpeed engine without an optimizer and run a single eval()+no_grad"
+        " forward (no optimizer state, no gradients). Fits large models (e.g. 7B fp32) where"
+        " forward+backward+Adam would OOM. The gradient table is then empty.",
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help="If set, save each variant's full per-token log π vector to"
@@ -286,7 +308,7 @@ def main() -> None:
     for name, dtype, fp32_head in _VARIANTS:
         logger.info(f"=== variant {name} (dtype={dtype}, fp32_head={fp32_head}) ===")
         logprob, grads = capture_variant(
-            args.model, dtype, fp32_head, input_ids, args.attn_implementation, args.random_init
+            args.model, dtype, fp32_head, input_ids, args.attn_implementation, args.random_init, args.forward_only
         )
         if args.output_dir is not None:
             output_dir = pathlib.Path(args.output_dir)
