@@ -15,9 +15,10 @@ Each engine's per-token log π is a plain fp32 vector saved by its within-engine
 each engine's variant names to three canonical configs and reports two things per regime:
 
   1. the δ distribution (mean = systematic bias, RMS, max, per-sequence sum, PPO clip fraction) over
-     every engine pair, for the fp32 floor and, per low precision (bf16, fp16), the matched config
-     (fp32 head on both sides) and the mismatched config (A keeps the fp32 head, B runs the head in
-     the body dtype — e.g. vLLM's as-shipped bf16 head vs a trainer's fp32 head);
+     every engine pair, for the fp32 floor and, per low precision (bf16, fp16), the full 2×2 of head
+     choice (fp32 upcast vs body-dtype head) on each side — so both matched cases (both fp32, both
+     body) and both mismatch directions appear. In production vLLM emits fp32 logits, so the relevant
+     mismatch is a body-dtype head on the *training* side against vLLM's fp32 head;
   2. the error-correlation decomposition. With e = log π_bf16 − log π_fp32 per engine,
      δ_AB = (fp32 floor) + (e_A − e_B), and RMS(e_A − e_B) is governed by ρ = corr(e_A, e_B):
      ρ→1 means the engines round the same way and the errors cancel (gap collapses to the floor);
@@ -68,13 +69,18 @@ _ENGINE_ORDER = ("fast_llm", "deepspeed", "vllm")
 _ENGINE_LABELS = {"fast_llm": "Fast-LLM", "deepspeed": "DeepSpeed", "vllm": "vLLM"}
 
 
-def _fp32_head(precision: str) -> str:
-    return f"{precision}_fp32head"
+# Head precision per side: "fp32" upcasts the head / logits to fp32; "body" runs the head in the body
+# dtype. In production vLLM always emits fp32 logits, so the relevant mismatch is a body-dtype head on
+# the *training* side against vLLM's fp32 head.
+_HEADS = ("fp32", "body")
 
 
-def _body_head(precision: str) -> str:
-    # Head / logits in the body dtype (no fp32 upcast) — the low-precision-head config.
-    return f"{precision}_{precision}head"
+def _head_config(precision: str, head: str) -> str:
+    return f"{precision}_fp32head" if head == "fp32" else f"{precision}_{precision}head"
+
+
+def _head_label(precision: str, head: str) -> str:
+    return "fp32" if head == "fp32" else precision
 
 
 def _rms(x: torch.Tensor) -> float:
@@ -125,15 +131,19 @@ def _print_delta_table(
 ) -> None:
     print(f"\n=== Cross-engine log π gap{f' [{label}]' if label else ''} (δ = A − B, nats) ===")
     print(f"(per-sequence sum over {sequence_length} tokens; clip = fraction with |δ| > {epsilon})")
-    print("(matched = both engines fp32 head; mismatched = A fp32 head, B body-dtype head)")
-    header = f"{'group':<22} {'A − B':<22} {'mean δ':>10} {'RMS δ':>9} {'max|δ|':>9} {'Σδ (seq)':>10} {'clip%':>7}"
+    print("(head = fp32 upcast vs body-dtype; production has vLLM head fp32, so the relevant")
+    print(" mismatch is a body-dtype head on the trainer side against vLLM's fp32 head)")
+    header = (
+        f"{'group':<11} {'A − B':<22} {'A head':>7} {'B head':>7} {'mean δ':>10} {'RMS δ':>9}"
+        f" {'max|δ|':>9} {'Σδ (seq)':>10} {'clip%':>7}"
+    )
     print(header)
     print("-" * len(header))
-    for group, engine_a, engine_b, stats in rows:
+    for group, engine_a, engine_b, head_a, head_b, stats in rows:
         pair = f"{_ENGINE_LABELS[engine_a]} − {_ENGINE_LABELS[engine_b]}"
         print(
-            f"{group:<22} {pair:<22} {stats['mean']:>+10.4f} {stats['rms']:>9.4f} {stats['max']:>9.4f}"
-            f" {stats['sum']:>+10.2f} {stats['clip'] * 100:>6.2f}%"
+            f"{group:<11} {pair:<22} {head_a:>7} {head_b:>7} {stats['mean']:>+10.4f} {stats['rms']:>9.4f}"
+            f" {stats['max']:>9.4f} {stats['sum']:>+10.2f} {stats['clip'] * 100:>6.2f}%"
         )
 
 
@@ -144,16 +154,16 @@ def _print_decomposition_table(rows: list[tuple[str, str, str, dict[str, float]]
     )
     print("(δ = floor + (e_A − e_B); ρ = corr(e_A, e_B): ρ→1 errors cancel, ρ→0 add in quadrature)")
     header = (
-        f"{'config':<16} {'A − B':<22} {'ρ(err)':>8} {'RMS e_A':>9} {'RMS e_B':>9}"
+        f"{'prec':<5} {'A − B':<22} {'A head':>7} {'B head':>7} {'ρ(err)':>8} {'RMS e_A':>9} {'RMS e_B':>9}"
         f" {'RMS(e_A−e_B)':>13} {'RMS floor':>10} {'slope':>8}"
     )
     print(header)
     print("-" * len(header))
-    for config, engine_a, engine_b, stats in rows:
+    for precision, engine_a, engine_b, head_a, head_b, stats in rows:
         pair = f"{_ENGINE_LABELS[engine_a]} − {_ENGINE_LABELS[engine_b]}"
         print(
-            f"{config:<16} {pair:<22} {stats['rho']:>8.4f} {stats['rms_a']:>9.4f} {stats['rms_b']:>9.4f}"
-            f" {stats['rms_diff']:>13.4f} {stats['rms_floor']:>10.4f} {stats['slope']:>+8.4f}"
+            f"{precision:<5} {pair:<22} {head_a:>7} {head_b:>7} {stats['rho']:>8.4f} {stats['rms_a']:>9.4f}"
+            f" {stats['rms_b']:>9.4f} {stats['rms_diff']:>13.4f} {stats['rms_floor']:>10.4f} {stats['slope']:>+8.4f}"
         )
 
 
@@ -182,45 +192,46 @@ def main() -> None:
     available = [engine for engine in _ENGINE_ORDER if engine in engines]
     pairs = list(itertools.combinations(available, 2))
 
-    # δ table: fp32 floor, then per precision the matched (both fp32 head) and mismatched (A fp32 head,
-    # B body-dtype head) gaps over every available pair.
-    delta_rows: list[tuple[str, str, str, dict[str, float]]] = []
+    # δ table: fp32 floor, then per precision the full 2×2 of head choice (fp32 vs body-dtype) on each
+    # side, over every available pair. The decomposition mirrors each precision/head/pair combination.
+    delta_rows: list[tuple[str, str, str, str, str, dict[str, float]]] = []
     for engine_a, engine_b in pairs:
         if "fp32" in engines[engine_a] and "fp32" in engines[engine_b]:
             stats = _delta_stats(engines[engine_a]["fp32"], engines[engine_b]["fp32"], args.epsilon)
-            delta_rows.append(("fp32 floor", engine_a, engine_b, stats))
-    for precision in _PRECISIONS:
-        fp32_head, body_head = _fp32_head(precision), _body_head(precision)
-        for group_label, config_b in ((f"{precision} matched", fp32_head), (f"{precision} mismatched", body_head)):
-            for engine_a, engine_b in pairs:
-                if fp32_head in engines[engine_a] and config_b in engines[engine_b]:
-                    stats = _delta_stats(engines[engine_a][fp32_head], engines[engine_b][config_b], args.epsilon)
-                    delta_rows.append((group_label, engine_a, engine_b, stats))
+            delta_rows.append(("fp32 floor", engine_a, engine_b, "fp32", "fp32", stats))
 
-    decomposition_rows: list[tuple[str, str, str, dict[str, float]]] = []
+    decomposition_rows: list[tuple[str, str, str, str, str, dict[str, float]]] = []
     for precision in _PRECISIONS:
-        fp32_head, body_head = _fp32_head(precision), _body_head(precision)
-        for mode, config_b in (("matched", fp32_head), ("mismatched", body_head)):
+        for head_a, head_b in itertools.product(_HEADS, repeat=2):
+            config_a, config_b = _head_config(precision, head_a), _head_config(precision, head_b)
+            label_a, label_b = _head_label(precision, head_a), _head_label(precision, head_b)
             for engine_a, engine_b in pairs:
-                if not (
-                    "fp32" in engines[engine_a]
-                    and "fp32" in engines[engine_b]
-                    and fp32_head in engines[engine_a]
-                    and config_b in engines[engine_b]
-                ):
+                if config_a not in engines[engine_a] or config_b not in engines[engine_b]:
                     continue
-                error_a = engines[engine_a][fp32_head] - engines[engine_a]["fp32"]
+                stats = _delta_stats(engines[engine_a][config_a], engines[engine_b][config_b], args.epsilon)
+                delta_rows.append((precision, engine_a, engine_b, label_a, label_b, stats))
+                if "fp32" not in engines[engine_a] or "fp32" not in engines[engine_b]:
+                    continue
+                error_a = engines[engine_a][config_a] - engines[engine_a]["fp32"]
                 error_b = engines[engine_b][config_b] - engines[engine_b]["fp32"]
                 floor = engines[engine_a]["fp32"] - engines[engine_b]["fp32"]
-                stats = {
-                    "rho": _corr(error_a, error_b),
-                    "rms_a": _rms(error_a),
-                    "rms_b": _rms(error_b),
-                    "rms_diff": _rms(error_a - error_b),
-                    "rms_floor": _rms(floor),
-                    "slope": _slope(engines[engine_b][config_b], engines[engine_a][fp32_head]),
-                }
-                decomposition_rows.append((f"{precision} {mode}", engine_a, engine_b, stats))
+                decomposition_rows.append(
+                    (
+                        precision,
+                        engine_a,
+                        engine_b,
+                        label_a,
+                        label_b,
+                        {
+                            "rho": _corr(error_a, error_b),
+                            "rms_a": _rms(error_a),
+                            "rms_b": _rms(error_b),
+                            "rms_diff": _rms(error_a - error_b),
+                            "rms_floor": _rms(floor),
+                            "slope": _slope(engines[engine_b][config_b], engines[engine_a][config_a]),
+                        },
+                    )
+                )
 
     _print_delta_table(delta_rows, sequence_length, args.epsilon, args.label)
     _print_decomposition_table(decomposition_rows, args.label)
