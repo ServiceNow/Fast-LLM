@@ -107,6 +107,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         scales: dict[str, float] = {}
         for name, variant_overrides in runs.items():
             scales[name] = self._calibrate_and_run(name, variant_overrides, input_ids)
+            self._save_chosen_logprob(name)
 
         ref_artifacts = self._artifact_path(_REFERENCE_NAME)
         results = {
@@ -176,6 +177,22 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
     def _artifact_path(self, name: str) -> pathlib.Path:
         return self.output_dir / name / "runs" / "0" / "artifacts"
+
+    def _save_chosen_logprob(self, name: str) -> None:
+        """Persist the full per-token log π vector (token order) as a plain tensor for the
+        cross-engine comparison. The chosen_logprob loss logs the whole tensor with step=1, so the
+        saved samples are the complete ordered vector — aligned 1:1 with vLLM's `prompt_logprobs[1:]`."""
+        import torch
+
+        compare_config = CompareConfig()
+        errors: list[str] = []
+        logs = compare_config._extract_tensor_logs(self._artifact_path(name), errors)
+        for step_logs in logs.values():
+            for tensor_name, entry in step_logs.items():
+                if tensor_name.split(":", 1)[-1].strip() == _CHOSEN_LOGPROB_NAME:
+                    torch.save(entry["samples"].float().cpu(), self.output_dir / f"logprobs_{name}.pt")
+                    return
+        logger.warning(f"[{name}] chosen_logprob not found in tensor logs; cross-engine vector not saved")
 
     def _run_one(
         self,

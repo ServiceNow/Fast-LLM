@@ -25,6 +25,7 @@ import argparse
 import functools
 import logging
 import os
+import pathlib
 import statistics
 import typing
 
@@ -244,6 +245,13 @@ def main() -> None:
         help="Build the model from config with random weights instead of loading the pretrained"
         " checkpoint (contrast with the pretrained run; weights won't match Fast-LLM's random init).",
     )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="If set, save each variant's full per-token log π vector to"
+        " `<output-dir>/logprobs_<variant>.pt` (plain fp32 CPU tensor, aligned 1:1 with vLLM's"
+        " `prompt_logprobs[1:]`) for the cross-engine comparison.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -280,6 +288,10 @@ def main() -> None:
         logprob, grads = capture_variant(
             args.model, dtype, fp32_head, input_ids, args.attn_implementation, args.random_init
         )
+        if args.output_dir is not None:
+            output_dir = pathlib.Path(args.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(logprob, output_dir / f"logprobs_{name}.pt")
         if name == _REFERENCE_NAME:
             ref_logprob, ref_grads = logprob, grads
         logprob_metrics[name] = compare._compute_diff(_entry(ref_logprob), _entry(logprob), "step", "chosen_logprob")
