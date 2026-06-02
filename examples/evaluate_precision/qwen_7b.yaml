@@ -1,0 +1,28 @@
+# Precision-evaluation config on Qwen2.5-7B. Unlike the 0.5B model, the 7B has untied embeddings,
+# so the LM head is a real parameter and an fp32 head genuinely changes the logits (on tied models
+# it can be a no-op). `forward_only` runs a single inference-mode forward so the fp32 reference fits
+# in memory — forward+backward+Adam in fp32 would not.
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/qwen_7b.yaml
+pretrained:
+  path: Qwen/Qwen2.5-7B
+  format: qwen2
+output_dir: /tmp/fast_llm_tests/evaluate_precision/qwen_7b
+sequence_length: 2048
+forward_only: true
+variants:
+  # compute bf16, lm head in compute dtype.
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  # compute bf16, fp32 lm head (the stack default).
+  bf16_fp32_lm_head:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+  # compute fp16, lm head in compute dtype.
+  fp16:
+    model.distributed.compute_dtype: float16
+  # compute fp16, fp32 lm head.
+  fp16_fp32_lm_head:
+    model.distributed.compute_dtype: float16
+    model.base_model.head.fp32_lm_head: true
