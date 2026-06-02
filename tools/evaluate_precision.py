@@ -90,6 +90,14 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         " (`tools/evaluate_precision_deepspeed.py`) can consume the identical model input.",
         hint=FieldHint.feature,
     )
+    forward_only: bool = Field(
+        default=False,
+        desc="Run a single forward pass in inference mode (`StageMode.inference`, no optimizer or"
+        " gradient buffers) instead of forward+backward. Fits large models (e.g. 7B in fp32) that would"
+        " OOM with gradient and optimizer state. Only the per-token log π (chosen_logprob) and forward"
+        " activations are captured — no gradient/parameter-gradient tables, and no gradient scaling.",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         super()._validate()
@@ -106,7 +114,12 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         runs.update(self.variants)
         scales: dict[str, float] = {}
         for name, variant_overrides in runs.items():
-            scales[name] = self._calibrate_and_run(name, variant_overrides, input_ids)
+            if self.forward_only:
+                # No backward -> no gradients to scale; run once directly.
+                self._run_one(name, variant_overrides, input_ids)
+                scales[name] = 1.0
+            else:
+                scales[name] = self._calibrate_and_run(name, variant_overrides, input_ids)
             self._save_chosen_logprob(name)
 
         ref_artifacts = self._artifact_path(_REFERENCE_NAME)
@@ -266,8 +279,6 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         # Tool-required overrides win over variants — a variant must not silently disable tensor logging.
         tool_overrides: dict[tuple[str, ...], typing.Any] = {
             ("model", "multi_stage", "debug_layer_outputs"): log_level,
-            ("model", "multi_stage", "debug_layer_gradients"): log_level,
-            ("model", "multi_stage", "debug_all_param_gradients"): log_level,
             # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
             # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
             ("model", "multi_stage", "debug_hidden_states_log"): [r"head\.logits"],
@@ -275,17 +286,22 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             # Contributes no gradient (weight=0); the comparison code picks it up by name.
             ("model", "base_model", "head", "losses", _CHOSEN_LOGPROB_NAME): {"type": "chosen_logprob"},
         }
-        # When the user hasn't configured any loss, the head defaults to cross-entropy. Adding a
-        # loss explicitly suppresses that default, so re-add it so gradients still flow.
-        if not (self.model.base_model.head.losses or {}):
-            tool_overrides[("model", "base_model", "head", "losses", "cross_entropy")] = {"type": "label"}
+        if not self.forward_only:
+            tool_overrides[("model", "multi_stage", "debug_layer_gradients")] = log_level
+            tool_overrides[("model", "multi_stage", "debug_all_param_gradients")] = log_level
+            # When the user hasn't configured any loss, the head defaults to cross-entropy. Adding a
+            # loss explicitly suppresses that default, so re-add it so gradients still flow.
+            if not (self.model.base_model.head.losses or {}):
+                tool_overrides[("model", "base_model", "head", "losses", "cross_entropy")] = {"type": "label"}
+        # In forward-only mode only chosen_logprob runs (no grad-producing loss), so no backward
+        # happens and `StageMode.inference` (which allocates no gradient buffers) is sufficient.
         logger.info(f"=== Running {name!r} ===")
         if variant_overrides:
             logger.info(f"Variant overrides: {variant_overrides}")
         trainer_class = TrainerConfig.get_subclass(_MODEL_TYPE)
         trainer_config = trainer_class.from_dict(base_dict, fp32_dtypes, variant_updates, tool_overrides)
         trainer_config.configure_logging()
-        _run_fixed_input(trainer_config, input_ids, self.sequence_length)
+        _run_fixed_input(trainer_config, input_ids, self.sequence_length, forward_only=self.forward_only)
 
     def _compare(
         self,
@@ -329,12 +345,20 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         return rows
 
 
-def _run_fixed_input(config, input_ids, sequence_length: int) -> None:
-    """Lean forward+backward on a fixed, already-preprocessed input — like `InferenceRunner` but with a
-    training-phase schedule + an (lr-0) optimizer so `run_step` runs the backward and the existing
-    chosen-logprob loss / `debug_all_param_gradients` logging captures everything. Replaces the trainer
-    + data pipeline so the model sees exactly `input_ids` (the pipeline would re-randomize it) and so the
-    tool stops paying for training/data-loading infrastructure it doesn't need."""
+def _run_fixed_input(config, input_ids, sequence_length: int, *, forward_only: bool = False) -> None:
+    """Lean run on a fixed, already-preprocessed input — like `InferenceRunner` but feeding a fixed input
+    so the model sees exactly `input_ids` (the data pipeline would re-randomize it) and the tool stops
+    paying for training/data-loading infrastructure it doesn't need.
+
+    Default mode is a training-phase schedule + an (lr-0) optimizer so `run_step` runs the backward and
+    the chosen-logprob loss / `debug_all_param_gradients` logging captures everything.
+
+    `forward_only=True` runs a single forward in inference mode: `StageMode.inference` (no gradient
+    buffers), no optimizer, and a validation-phase schedule (forward-only, but still produces labels —
+    `PhaseType.inference` would zero `num_labels`). The head skips all losses in eval mode, so after setup
+    the head(s) are forced back into train mode directly; `run_step`'s per-step `multi_stage.train(False)`
+    is a guarded no-op once `_training` is False, so the head stays trained and logs chosen_logprob.
+    Valid only because no grad-producing loss is configured, so no backward touches the missing buffers."""
     import gc
 
     import torch
@@ -347,31 +371,39 @@ def _run_fixed_input(config, input_ids, sequence_length: int) -> None:
     from fast_llm.engine.schedule.runner import ScheduleRunner
     from fast_llm.engine.schedule.schedule import Schedule
 
+    phase = PhaseType.validation if forward_only else PhaseType.training
     distributed = Distributed(config.model.distributed)
     run = config.get_run(distributed)
+    optimizer = None
     with run:
         multi_stage = config.model.get_model_class()(
-            config.model, optimizer_state_names=config.optimizer.state_names()
+            config.model, optimizer_state_names=() if forward_only else config.optimizer.state_names()
         )
         with torch.no_grad():
-            multi_stage.setup(distributed, mode=StageMode.training)
+            multi_stage.setup(distributed, mode=StageMode.inference if forward_only else StageMode.training)
         if config.pretrained.path is not None and config.pretrained.model_weights:
             multi_stage.load_checkpoint(config.pretrained)
         else:
             multi_stage.initialize_weights()
-        param_groups, grads_for_norm = multi_stage.get_param_groups(ParamGroup)
-        optimizer = config.optimizer.optimizer_cls(
-            config.optimizer, param_groups=param_groups, grads_for_norm=grads_for_norm, distributed=distributed
-        )
-        optimizer.reset_state()
+        if not forward_only:
+            param_groups, grads_for_norm = multi_stage.get_param_groups(ParamGroup)
+            optimizer = config.optimizer.optimizer_cls(
+                config.optimizer, param_groups=param_groups, grads_for_norm=grads_for_norm, distributed=distributed
+            )
+            optimizer.reset_state()
         runner = ScheduleRunner(
             config=config.schedule, multi_stage=multi_stage, distributed_config=config.model.distributed
         )
         with torch.no_grad():
             runner.setup(distributed, optimizer)
-        preprocessing_config = multi_stage.get_preprocessing_config(
-            PhaseType.training, config.schedule.micro_batch_splits
-        )
+        if forward_only:
+            from fast_llm.layers.language_model.head import LanguageModelHead
+
+            multi_stage.train(False)
+            for module in multi_stage.base_model.modules():
+                if isinstance(module, LanguageModelHead):
+                    module.train(True)
+        preprocessing_config = multi_stage.get_preprocessing_config(phase, config.schedule.micro_batch_splits)
         # `get_model_inputs` splits off `num_labels` tokens for the shifted next-token labels, so the
         # actual model input is `len(tokens) - num_labels`. The schedule meta must match that length.
         schedule = Schedule(
@@ -379,7 +411,7 @@ def _run_fixed_input(config, input_ids, sequence_length: int) -> None:
             multi_stage=multi_stage,
             batch_meta=preprocessing_config.get_input_meta(sequence_length - preprocessing_config.num_labels),
             distributed_config=config.model.distributed,
-            phase=PhaseType.training,
+            phase=phase,
         )
         tokens = input_ids.flatten().to(device=distributed.device, dtype=torch.int64)
         batch = LanguageModelBatch(tokens=tokens, lengths=[tokens.numel()])
