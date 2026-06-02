@@ -457,7 +457,7 @@ update_and_add_testing_config(
     # Config + weight conversion works (test_conversion passes). The convert group stays `broken`
     # because test_huggingface_model fails: the custom modeling `from_pretrained` requires a
     # generation_config.json that Fast-LLM does not export (unlike `dream`, which ships one). Behind
-    # that, the forward likely diverges as for `dream` below — DiffusionLlama is a bidirectional
+    # that, the forward likely diverges as for `dream` — DiffusionLlama is a bidirectional
     # diffusion LM, while Fast-LLM runs it causal — but that is unverified since loading fails first.
     # Neither is a converter bug. `generate` is broken for the same diffusion-decoding reason.
     groups={
