@@ -139,6 +139,7 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "bos_token_id",
             "decoder_start_token_id",
             "eos_token_id",
+            "mask_token_id",
             "pad_token_id",
             "sep_token_id",
             # Initialization / pretraining metadata Fast-LLM does not consume.
