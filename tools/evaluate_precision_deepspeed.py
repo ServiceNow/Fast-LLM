@@ -191,6 +191,43 @@ def capture_variant(
     return logprob, grads
 
 
+def capture_variant_multi(
+    model_id: str,
+    dtype: torch.dtype,
+    fp32_head: bool,
+    sequences: list[torch.Tensor],
+    attn_implementation: str,
+    random_init: bool = False,
+) -> list[torch.Tensor]:
+    """Forward-only over many independent sequences on one resident DeepSpeed engine (no optimizer, so no
+    fp32 master copy / Adam state). Returns one per-token chosen_logprob vector per sequence, on CPU in
+    fp32. The engine is kept (not bypassed for plain HF) because DeepSpeed's bf16/fp16 forward is not
+    bit-identical to a plain HF forward in the same dtype."""
+    import deepspeed
+    import transformers
+
+    if random_init:
+        model = transformers.AutoModelForCausalLM.from_config(
+            transformers.AutoConfig.from_pretrained(model_id), dtype=dtype, attn_implementation=attn_implementation
+        )
+    else:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_id, dtype=dtype, attn_implementation=attn_implementation
+        )
+    if fp32_head:
+        apply_fp32_lm_head(model)
+    engine, *_ = deepspeed.initialize(model=model, config=_ds_config(dtype, forward_only=True))
+    engine.eval()
+    vectors: list[torch.Tensor] = []
+    with torch.no_grad():
+        for sequence in sequences:
+            input_ids = sequence.unsqueeze(0)
+            vectors.append(chosen_logprob(engine(input_ids).logits, input_ids).detach().float().cpu())
+    del engine, model
+    torch.cuda.empty_cache()
+    return vectors
+
+
 def _entry(tensor: torch.Tensor) -> dict[str, typing.Any]:
     return {"shape": list(tensor.shape), "step": 1, "samples": tensor}
 
@@ -274,6 +311,14 @@ def main() -> None:
         " `<output-dir>/logprobs_<variant>.pt` (plain fp32 CPU tensor, aligned 1:1 with vLLM's"
         " `prompt_logprobs[1:]`) for the cross-engine comparison.",
     )
+    parser.add_argument(
+        "--inputs-file",
+        default=None,
+        help="Path to a multi-sequence inputs.pt saved by tools/evaluate_precision.py (a dict with"
+        " 'input_ids' = list of per-sequence token tensors). Runs one forward-only pass per sequence and"
+        " saves each variant's per-sequence log π list to `<output-dir>/logprobs_<variant>.pt`. Requires"
+        " --output-dir; --input-file / --input-mode / gradient table are ignored.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -291,6 +336,22 @@ def main() -> None:
     from fast_llm.engine.config_utils.compare_tensor_logs import CompareConfig
 
     device = torch.device("cuda:0")
+    if args.inputs_file is not None:
+        assert args.output_dir is not None, "--inputs-file requires --output-dir"
+        data = torch.load(args.inputs_file)
+        sequences = [tensor.to(device=device, dtype=torch.int64) for tensor in data["input_ids"]]
+        output_dir = pathlib.Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Multi-sequence: {len(sequences)} sequences from {args.inputs_file}")
+        for name, dtype, fp32_head in _VARIANTS:
+            logger.info(f"=== variant {name} (dtype={dtype}, fp32_head={fp32_head}) ===")
+            vectors = capture_variant_multi(
+                args.model, dtype, fp32_head, sequences, args.attn_implementation, args.random_init
+            )
+            torch.save(vectors, output_dir / f"logprobs_{name}.pt")
+            logger.info(f"variant {name}: saved {len(vectors)} per-sequence log π vectors")
+        return
+
     if args.input_file is not None:
         input_ids = torch.load(args.input_file).to(device=device, dtype=torch.int64)
         logger.info(f"Loaded shared model input {tuple(input_ids.shape)} from {args.input_file}")

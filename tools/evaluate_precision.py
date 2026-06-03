@@ -31,6 +31,17 @@ _SPARSE_GRAD_OVERRIDES = {r"Global gradient: embeddings\.": _SPARSE_GRAD_LEVEL}
 _CHOSEN_LOGPROB_NAME = "chosen_logprob"
 # Seed for the random-token fixed input when no input text file is given.
 _INPUT_SEED = 0
+# Multi-sequence (per-sequence / GSPO) mode: build many independent sequences from an HF dataset, run one
+# inference-mode forward each, and save per-sequence log π so the cross-engine tool can report the
+# across-sequence distribution of the length-normalized log-ratio. Field names and the system prompt are
+# calibrated for `HuggingFaceH4/MATH-500` (the stack's math eval set); the system prompt mirrors
+# PipelineRL's math domain. Each sequence is the chat-templated prompt (system + problem) followed by the
+# reference solution; the prompt length is recorded so the completion region can be isolated downstream.
+_DATASET_SPLIT = "test"
+_DATASET_PROMPT_FIELD = "problem"
+_DATASET_COMPLETION_FIELD = "solution"
+_DATASET_SYSTEM_PROMPT = "Please reason step by step, and put your final answer within \\boxed{}."
+_MULTI_INPUTS_NAME = "inputs.pt"
 # Auto-calibration of the constant gradient scaler. Each variant runs a calibration pass at
 # `scale=1` (no overflow risk), then the actual run uses the largest power-of-2 scale that
 # keeps logged gradient magnitudes (and a small safety factor for hidden in-kernel
@@ -98,6 +109,21 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         " activations are captured — no gradient/parameter-gradient tables, and no gradient scaling.",
         hint=FieldHint.feature,
     )
+    input_dataset: str | None = Field(
+        default=None,
+        desc="If set, build a multi-sequence input from this HuggingFace dataset (each example becomes one"
+        " independent sequence: chat-templated prompt + reference solution) and run one inference-mode"
+        " forward per sequence, saving the per-sequence log π to `output_dir/logprobs_<variant>.pt`."
+        " Implies forward-only; produces no per-layer tables. The sequence set (token ids + prompt"
+        " lengths) is saved to `output_dir/inputs.pt` so the other engines' tools consume the same"
+        " sequences. `sequence_length` caps each sequence (longer ones are truncated).",
+        hint=FieldHint.feature,
+    )
+    num_sequences: int = Field(
+        default=256,
+        desc="Number of dataset examples (sequences) to run in multi-sequence mode (`input_dataset`).",
+        hint=FieldHint.feature,
+    )
 
     def _validate(self) -> None:
         super()._validate()
@@ -109,6 +135,9 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
 
     def run(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        if self.input_dataset is not None:
+            self._run_multi_sequence()
+            return
         input_ids = self._prepare_input_ids()
         runs: dict[str, dict[str, typing.Any]] = {_REFERENCE_NAME: {}}
         runs.update(self.variants)
@@ -136,6 +165,69 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         for name, rows in results.items():
             _print_table(name, rows)
         _print_summary(results)
+
+    def _run_multi_sequence(self) -> None:
+        """Multi-sequence mode: build a set of independent sequences, run one inference-mode forward per
+        sequence per variant, and save each variant's per-sequence log π list. The per-layer comparison
+        tables don't apply (one forward per sequence, no backward); the cross-engine tool consumes the
+        saved sequence set and per-sequence log π lists."""
+        import torch
+
+        input_sequences, prompt_lengths = self._build_dataset_inputs()
+        inputs_path = self.output_dir / _MULTI_INPUTS_NAME
+        torch.save({"input_ids": input_sequences, "prompt_lengths": prompt_lengths}, inputs_path)
+        lengths = [int(ids.numel()) for ids in input_sequences]
+        logger.info(
+            f"Multi-sequence input: {len(input_sequences)} sequences"
+            f" (tokens min/median/max {min(lengths)}/{int(statistics.median(lengths))}/{max(lengths)},"
+            f" prompt median {int(statistics.median(prompt_lengths))}) saved to {inputs_path}"
+        )
+        runs: dict[str, dict[str, typing.Any]] = {_REFERENCE_NAME: {}}
+        runs.update(self.variants)
+        for name, variant_overrides in runs.items():
+            self._run_one(name, variant_overrides, input_sequences, multi_sequence=True)
+            self._save_chosen_logprob_multi(name, len(input_sequences))
+        logger.info("Multi-sequence run complete; compare with tools/evaluate_precision_cross_engine.py.")
+
+    def _build_dataset_inputs(self) -> tuple[list["torch.Tensor"], list[int]]:
+        """Build one independent sequence per dataset example: the chat-templated prompt (system + problem)
+        followed by the reference solution, truncated to `sequence_length`. Returns the token-id tensors
+        and the per-sequence prompt length (the boundary before the scored completion)."""
+        import datasets
+        import torch
+        import transformers
+
+        tokenizer = transformers.AutoTokenizer.from_pretrained(str(self.pretrained.path))
+        dataset = datasets.load_dataset(self.input_dataset, split=_DATASET_SPLIT)
+        count = min(self.num_sequences, len(dataset))
+        input_sequences: list[torch.Tensor] = []
+        prompt_lengths: list[int] = []
+        for row in dataset.select(range(count)):
+            prompt_ids = _chat_prompt_ids(tokenizer, row[_DATASET_PROMPT_FIELD])
+            completion_ids = tokenizer(row[_DATASET_COMPLETION_FIELD], add_special_tokens=False).input_ids
+            ids = (prompt_ids + completion_ids)[: self.sequence_length]
+            input_sequences.append(torch.tensor(ids, dtype=torch.int64))
+            prompt_lengths.append(min(len(prompt_ids), len(ids)))
+        return input_sequences, prompt_lengths
+
+    def _save_chosen_logprob_multi(self, name: str, num_sequences: int) -> None:
+        """Collect the per-sequence chosen_logprob vectors (one tensor-log flush per sequence, named by a
+        zero-padded sequence index so string sort = sequence order) into an ordered list and save it."""
+        import torch
+
+        compare_config = CompareConfig()
+        errors: list[str] = []
+        logs = compare_config._extract_tensor_logs(self._artifact_path(name), errors)
+        vectors: list[torch.Tensor] = []
+        for step_name in sorted(logs):
+            for tensor_name, entry in logs[step_name].items():
+                if tensor_name.split(":", 1)[-1].strip() == _CHOSEN_LOGPROB_NAME:
+                    vectors.append(entry["samples"].float().cpu())
+        assert (
+            len(vectors) == num_sequences
+        ), f"[{name}] expected {num_sequences} chosen_logprob logs, found {len(vectors)}"
+        torch.save(vectors, self.output_dir / f"logprobs_{name}.pt")
+        logger.info(f"[{name}] saved {len(vectors)} per-sequence log π vectors")
 
     def _calibrate_and_run(
         self, name: str, variant_overrides: dict[str, typing.Any], input_ids: "torch.Tensor"
@@ -211,10 +303,11 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         self,
         name: str,
         variant_overrides: dict[str, typing.Any],
-        input_ids: "torch.Tensor",
+        input_ids: "torch.Tensor | list[torch.Tensor]",
         *,
         constant_scale: float | None = None,
         experiment_dir: pathlib.Path | None = None,
+        multi_sequence: bool = False,
     ) -> None:
         # The trainer's Run picks the next `runs/<n>` subdir based on what already exists; wipe
         # any prior contents so each invocation lands in `runs/0` and stale artifacts can't be
@@ -276,17 +369,22 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             for key, value in variant_overrides.items()
             if not key.startswith(_TORCH_BACKEND_PREFIX) and key != _TORCH_MATMUL_PRECISION_KEY
         }
+        # Multi-sequence mode is forward-only and cares only about chosen_logprob (one forward per
+        # sequence, no per-layer tables), so the per-layer activation/gradient logs are dropped to keep
+        # the per-sequence artifacts tiny.
+        forward_only = self.forward_only or multi_sequence
         # Tool-required overrides win over variants — a variant must not silently disable tensor logging.
         tool_overrides: dict[tuple[str, ...], typing.Any] = {
-            ("model", "multi_stage", "debug_layer_outputs"): log_level,
-            # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
-            # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
-            ("model", "multi_stage", "debug_hidden_states_log"): [r"head\.logits"],
             # Diagnostic loss that logs log π(label) per position via the tensor-log pipeline.
             # Contributes no gradient (weight=0); the comparison code picks it up by name.
             ("model", "base_model", "head", "losses", _CHOSEN_LOGPROB_NAME): {"type": "chosen_logprob"},
         }
-        if not self.forward_only:
+        if not multi_sequence:
+            tool_overrides[("model", "multi_stage", "debug_layer_outputs")] = log_level
+            # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
+            # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
+            tool_overrides[("model", "multi_stage", "debug_hidden_states_log")] = [r"head\.logits"]
+        if not forward_only:
             tool_overrides[("model", "multi_stage", "debug_layer_gradients")] = log_level
             tool_overrides[("model", "multi_stage", "debug_all_param_gradients")] = log_level
             # When the user hasn't configured any loss, the head defaults to cross-entropy. Adding a
@@ -301,7 +399,8 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         trainer_class = TrainerConfig.get_subclass(_MODEL_TYPE)
         trainer_config = trainer_class.from_dict(base_dict, fp32_dtypes, variant_updates, tool_overrides)
         trainer_config.configure_logging()
-        _run_fixed_input(trainer_config, input_ids, self.sequence_length, forward_only=self.forward_only)
+        input_sequences = input_ids if isinstance(input_ids, list) else [input_ids]
+        _run_fixed_input(trainer_config, input_sequences, forward_only=forward_only)
 
     def _compare(
         self,
@@ -345,20 +444,22 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         return rows
 
 
-def _run_fixed_input(config, input_ids, sequence_length: int, *, forward_only: bool = False) -> None:
-    """Lean run on a fixed, already-preprocessed input — like `InferenceRunner` but feeding a fixed input
-    so the model sees exactly `input_ids` (the data pipeline would re-randomize it) and the tool stops
+def _run_fixed_input(config, input_sequences: "list[torch.Tensor]", *, forward_only: bool = False) -> None:
+    """Lean run on fixed, already-preprocessed inputs — like `InferenceRunner` but feeding fixed inputs so
+    the model sees exactly `input_sequences` (the data pipeline would re-randomize them) and the tool stops
     paying for training/data-loading infrastructure it doesn't need.
 
     Default mode is a training-phase schedule + an (lr-0) optimizer so `run_step` runs the backward and
     the chosen-logprob loss / `debug_all_param_gradients` logging captures everything.
 
-    `forward_only=True` runs a single forward in inference mode: `StageMode.inference` (no gradient
+    `forward_only=True` runs a forward in inference mode per sequence: `StageMode.inference` (no gradient
     buffers), no optimizer, and a validation-phase schedule (forward-only, but still produces labels —
     `PhaseType.inference` would zero `num_labels`). The head skips all losses in eval mode, so after setup
     the head(s) are forced back into train mode directly; `run_step`'s per-step `multi_stage.train(False)`
     is a guarded no-op once `_training` is False, so the head stays trained and logs chosen_logprob.
-    Valid only because no grad-producing loss is configured, so no backward touches the missing buffers."""
+    Valid only because no grad-producing loss is configured, so no backward touches the missing buffers.
+    With more than one sequence (forward-only), each sequence's tensor logs are flushed to a separate
+    artifact file (named by zero-padded sequence index) so they stay separable downstream."""
     import gc
 
     import torch
@@ -375,6 +476,7 @@ def _run_fixed_input(config, input_ids, sequence_length: int, *, forward_only: b
     distributed = Distributed(config.model.distributed)
     run = config.get_run(distributed)
     optimizer = None
+    per_sequence_flush = forward_only and len(input_sequences) > 1
     with run:
         multi_stage = config.model.get_model_class()(
             config.model, optimizer_state_names=() if forward_only else config.optimizer.state_names()
@@ -404,23 +506,43 @@ def _run_fixed_input(config, input_ids, sequence_length: int, *, forward_only: b
                 if isinstance(module, LanguageModelHead):
                     module.train(True)
         preprocessing_config = multi_stage.get_preprocessing_config(phase, config.schedule.micro_batch_splits)
-        # `get_model_inputs` splits off `num_labels` tokens for the shifted next-token labels, so the
-        # actual model input is `len(tokens) - num_labels`. The schedule meta must match that length.
-        schedule = Schedule(
-            config=config.schedule,
-            multi_stage=multi_stage,
-            batch_meta=preprocessing_config.get_input_meta(sequence_length - preprocessing_config.num_labels),
-            distributed_config=config.model.distributed,
-            phase=phase,
-        )
-        tokens = input_ids.flatten().to(device=distributed.device, dtype=torch.int64)
-        batch = LanguageModelBatch(tokens=tokens, lengths=[tokens.numel()])
-        model_inputs = batch.get_model_inputs(preprocessing_config)
-        runner.run_step(iter((tuple(model_inputs),)), schedule, iteration=1)
+        for index, input_ids in enumerate(input_sequences):
+            tokens = input_ids.flatten().to(device=distributed.device, dtype=torch.int64)
+            # `get_model_inputs` splits off `num_labels` tokens for the shifted next-token labels, so the
+            # actual model input is `len(tokens) - num_labels`. The schedule meta must match that length.
+            schedule = Schedule(
+                config=config.schedule,
+                multi_stage=multi_stage,
+                batch_meta=preprocessing_config.get_input_meta(tokens.numel() - preprocessing_config.num_labels),
+                distributed_config=config.model.distributed,
+                phase=phase,
+            )
+            batch = LanguageModelBatch(tokens=tokens, lengths=[tokens.numel()])
+            model_inputs = batch.get_model_inputs(preprocessing_config)
+            runner.run_step(iter((tuple(model_inputs),)), schedule, iteration=index + 1)
+            if per_sequence_flush:
+                run.save_logged_tensors(f"{index:05d}")
     # Break the trainer/model/runner reference cycles so each variant's GPU memory is reclaimed.
     del multi_stage, optimizer, runner, schedule, distributed, run
     gc.collect()
     torch.cuda.empty_cache()
+
+
+def _chat_prompt_ids(tokenizer, problem: str) -> list[int]:
+    """Tokenize the chat-templated prompt (system + user problem) up to the assistant generation prompt.
+    Renders the template to text first (the return type of `tokenize=True` varies across transformers
+    versions) and tokenizes once, so the result is always a plain `list[int]` and special tokens already
+    in the template aren't duplicated. Falls back to manual ChatML when there is no chat template."""
+    messages = [
+        {"role": "system", "content": _DATASET_SYSTEM_PROMPT},
+        {"role": "user", "content": problem},
+    ]
+    if tokenizer.chat_template is not None:
+        text = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    else:
+        text = "".join(f"<|im_start|>{message['role']}\n{message['content']}<|im_end|>\n" for message in messages)
+        text += "<|im_start|>assistant\n"
+    return tokenizer(text, add_special_tokens=False).input_ids
 
 
 def _is_gradient_like(tensor_name: str) -> bool:

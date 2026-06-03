@@ -87,6 +87,14 @@ def resolve_fp32_head_prefix(model: str, prefix: str) -> str:
     return "embed_tokens" if tied else "lm_head"
 
 
+def _next_token_logprobs(prompt_logprobs: list, token_ids: list[int]) -> torch.Tensor:
+    """prompt_logprobs[i] is log P(t_i | t_0..t_{i-1}); [0] is None. Take the actual token at each position
+    from i=1 on -> n-1 next-token log-probs aligned with the trainers' chosen_logprob."""
+    return torch.tensor(
+        [prompt_logprobs[i][token_ids[i]].logprob for i in range(1, len(token_ids))], dtype=torch.float32
+    )
+
+
 def run_worker(
     model: str,
     variant: str,
@@ -94,10 +102,15 @@ def run_worker(
     quantization: str | None,
     attention_backend: str | None,
     fp32_head_prefix: str,
-    input_file: str,
+    input_file: str | None,
     output_dir: str,
+    inputs_file: str | None = None,
 ) -> None:
-    """Load the model at one precision variant, feed the fixed prompt, save per-token chosen log-π."""
+    """Load the model at one precision variant, feed the fixed prompt(s), save per-token chosen log-π.
+
+    Single-sequence (`input_file`): one prompt, saved as a flat log-π tensor. Multi-sequence (`inputs_file`,
+    a dict with 'input_ids' = list of per-sequence token tensors): all sequences fed in one batched
+    `generate` call, saved as a list of per-sequence log-π tensors."""
     import os
 
     # Force a single attention backend across all variants so the fp32-vs-bf16 diff reflects precision,
@@ -111,8 +124,10 @@ def run_worker(
 
     import vllm
 
-    input_ids = torch.load(input_file).flatten().to(torch.int64)
-    token_ids = input_ids.tolist()
+    if inputs_file is not None:
+        token_id_lists = [tensor.flatten().to(torch.int64).tolist() for tensor in torch.load(inputs_file)["input_ids"]]
+    else:
+        token_id_lists = [torch.load(input_file).flatten().to(torch.int64).tolist()]
 
     llm = vllm.LLM(
         model=model,
@@ -121,22 +136,28 @@ def run_worker(
         seed=0,
         enforce_eager=True,
         gpu_memory_utilization=0.9,
-        max_model_len=len(token_ids) + 16,
+        max_model_len=max(len(token_ids) for token_ids in token_id_lists) + 16,
         enable_prefix_caching=False,
         logprobs_mode="processed_logprobs",
     )
     sampling_params = vllm.SamplingParams(temperature=1.0, max_tokens=1, prompt_logprobs=0)
-    output = llm.generate(prompts=[{"prompt_token_ids": token_ids}], sampling_params=sampling_params)[0]
-
-    # prompt_logprobs[i] is log P(t_i | t_0..t_{i-1}); [0] is None. Take the actual token at each
-    # position from i=1 on -> n-1 next-token log-probs aligned with the trainers' chosen_logprob.
-    prompt_logprobs = output.prompt_logprobs
-    logprobs = torch.tensor(
-        [prompt_logprobs[i][token_ids[i]].logprob for i in range(1, len(token_ids))], dtype=torch.float32
+    # vLLM returns outputs in input order, so zip pairs each output with its source token ids.
+    outputs = llm.generate(
+        prompts=[{"prompt_token_ids": token_ids} for token_ids in token_id_lists], sampling_params=sampling_params
     )
+    vectors = [
+        _next_token_logprobs(output.prompt_logprobs, token_ids)
+        for output, token_ids in zip(outputs, token_id_lists, strict=True)
+    ]
     path = pathlib.Path(output_dir) / f"logprobs_{variant}.pt"
-    torch.save(logprobs, path)
-    logger.info(f"variant {variant}: {logprobs.numel()} tokens, scale {logprobs.square().mean().sqrt():.4g} -> {path}")
+    if inputs_file is not None:
+        torch.save(vectors, path)
+        logger.info(f"variant {variant}: saved {len(vectors)} per-sequence log π vectors -> {path}")
+    else:
+        torch.save(vectors[0], path)
+        logger.info(
+            f"variant {variant}: {vectors[0].numel()} tokens, scale {vectors[0].square().mean().sqrt():.4g} -> {path}"
+        )
 
 
 def _entry(tensor: torch.Tensor) -> dict[str, typing.Any]:
@@ -173,6 +194,14 @@ def main() -> None:
         default=None,
         help="Tokenize this text file (same tokenizer + truncation as Fast-LLM) for a realistic-text"
         " prompt instead of random tokens. Ignored when --input-file is set.",
+    )
+    parser.add_argument(
+        "--inputs-file",
+        default=None,
+        help="Path to a multi-sequence inputs.pt saved by tools/evaluate_precision.py (a dict with"
+        " 'input_ids' = list of per-sequence token tensors). Feeds all sequences in one batched generate"
+        " call and saves each variant's per-sequence log π list to `<output-dir>/logprobs_<variant>.pt`"
+        " (the within-engine table is skipped; use the cross-engine tool). Overrides --input-file.",
     )
     parser.add_argument("--output-dir", default="/tmp/fast_llm_tests/evaluate_precision/vllm")
     parser.add_argument(
@@ -211,10 +240,14 @@ def main() -> None:
             fp32_head_prefix,
             args.input_file,
             args.output_dir,
+            args.inputs_file,
         )
         return
 
-    if args.input_file is not None:
+    if args.inputs_file is not None:
+        logger.info(f"Multi-sequence: using shared sequence set {args.inputs_file}")
+        input_file = None
+    elif args.input_file is not None:
         input_file = args.input_file
         logger.info(f"Using shared model input {input_file}")
     else:
@@ -232,8 +265,6 @@ def main() -> None:
             "tools.evaluate_precision_vllm",
             "--model",
             args.model,
-            "--input-file",
-            input_file,
             "--output-dir",
             args.output_dir,
             "--attention-backend",
@@ -245,9 +276,15 @@ def main() -> None:
             "--worker-dtype",
             dtype,
         ]
+        cmd += ["--inputs-file", args.inputs_file] if args.inputs_file is not None else ["--input-file", input_file]
         if quantization is not None:
             cmd += ["--worker-quantization", quantization]
         subprocess.run(cmd, check=True)
+
+    if args.inputs_file is not None:
+        # Multi-sequence: per-sequence log π lists are saved; the cross-engine tool does the analysis.
+        logger.info("Multi-sequence vLLM run complete; compare with tools/evaluate_precision_cross_engine.py.")
+        return
 
     from fast_llm.engine.config_utils.compare_tensor_logs import CompareConfig
 
