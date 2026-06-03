@@ -8,9 +8,10 @@ from fast_llm.engine.checkpoint.external import (
     NestedWeightConverter,
     OutputProjectionWeightConverter,
     RenameConfigConverter,
+    RepeatWeightConverter,
     WeightConverter,
 )
-from fast_llm.models.gpt.config import GPTBaseModelConfig, GPTModelConfig
+from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.models.gpt.conversion.config import MTPLlamaCheckpointFormat
 from fast_llm.models.gpt.conversion.llama import (
     LlamaBaseModelConverter,
@@ -36,9 +37,9 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
     @classmethod
     @functools.cache
     def _create_weight_converters(cls) -> dict[str, WeightConverter]:
-        # MTP-Llama places the first prediction head's final norm under ``model.mtp_norms.0`` instead
-        # of the standard ``model.norm``; the additional MTP blocks/norms come from the imperative
-        # ``get_converters`` override below since their count depends on ``head.prediction_heads``.
+        # MTP-Llama places the first prediction head's final norm under ``model.mtp_norms.0`` instead of
+        # the standard ``model.norm``. The additional per-prediction-distance blocks and norms are
+        # declared on the base-model converter (they live at the model root, not under ``head``).
         return {
             "final_norm": NestedWeightConverter(
                 "final_norm", "model.mtp_norms.0", cls.normalization_converter_class, config_attr="normalization"
@@ -46,30 +47,33 @@ class MTPLlamaHeadConverter(LlamaHeadConverter):
             "output_weights": OutputProjectionWeightConverter("output_weights", "lm_head.weight"),
         }
 
-    @classmethod
-    def get_converters(
-        cls,
-        config: GPTBaseModelConfig,
-    ) -> list[WeightConverter]:
-        converters = list(cls.emit_weight_converters(config.head, "head", "", root_config=config))
-        for prediction_distance in range(2, config.head.prediction_heads + 1):
-            converters += cls.block_converter_class.emit_weight_converters(
-                config.decoder.last_block_config,
-                f"multi_token_prediction.blocks.{prediction_distance - 2}",
-                f"model.mtp_heads.{prediction_distance - 2}",
-                root_config=config,
-            )
-            converters += cls.normalization_converter_class.emit_weight_converters(
-                config.head.normalization,
-                f"multi_token_prediction.heads.{prediction_distance - 2}.final_norm",
-                f"model.mtp_norms.{prediction_distance - 1}",
-                root_config=config,
-            )
-        return converters
-
 
 class MTPLlamaBaseModelConverter(LlamaBaseModelConverter):
     head_converter_class: typing.ClassVar[type[MTPLlamaHeadConverter]] = MTPLlamaHeadConverter
+
+    @classmethod
+    @functools.cache
+    def _create_weight_converters(cls) -> dict[str, WeightConverter]:
+        # The extra prediction-distance heads (distances 2..prediction_heads) repeat the main decoder's
+        # last block and the head normalization. They sit at the model root as ``multi_token_prediction.*``,
+        # interleaved on the HF side with the base head's ``model.mtp_norms.0`` (declared on the head).
+        return {
+            **super()._create_weight_converters(),
+            "multi_token_prediction_blocks": RepeatWeightConverter(
+                cls.block_converter_class,
+                count=lambda config: config.head.prediction_heads - 1,
+                sub_config=lambda config: config.decoder.last_block_config,
+                fast_llm_prefix=lambda index: f"multi_token_prediction.blocks.{index}",
+                hf_prefix=lambda index: f"model.mtp_heads.{index}",
+            ),
+            "multi_token_prediction_norms": RepeatWeightConverter(
+                cls.head_converter_class.normalization_converter_class,
+                count=lambda config: config.head.prediction_heads - 1,
+                sub_config=lambda config: config.head.normalization,
+                fast_llm_prefix=lambda index: f"multi_token_prediction.heads.{index}.final_norm",
+                hf_prefix=lambda index: f"model.mtp_norms.{index + 1}",
+            ),
+        }
 
 
 class MTPLlamaHuggingfaceCheckpointHandler(LlamaHuggingfaceCheckpointHandler):

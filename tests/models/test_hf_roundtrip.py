@@ -15,8 +15,6 @@ import pytest
 import torch
 from transformers import (
     AutoConfig,
-    Gemma4ForCausalLM,
-    Gemma4TextConfig,
     LlamaConfig,
     LlamaForCausalLM,
     MistralConfig,
@@ -53,6 +51,12 @@ from fast_llm_external_models.apriel2.conversion.qwen2.config import convert_con
 from fast_llm_external_models.apriel2.modeling_apriel2 import Apriel2ForCausalLM
 from fast_llm_external_models.mtp_llama.configuration_mtp_llama import MTPLlamaConfig
 from fast_llm_external_models.mtp_llama.modeling_mtp_llama import MTPLlamaForCausalLM
+
+try:
+    # Available only in transformers builds that ship Gemma 4.
+    from transformers import Gemma4ForCausalLM, Gemma4TextConfig
+except ImportError:
+    Gemma4ForCausalLM = Gemma4TextConfig = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -247,7 +251,19 @@ _HF_ROUNDTRIP_CASES = [
 ]
 
 
-@pytest.mark.parametrize("case", [pytest.param(c, id=c.name) for c in _HF_ROUNDTRIP_CASES])
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            case,
+            id=case.name,
+            marks=pytest.mark.skipif(
+                case.model_class is None, reason="transformers build does not provide this model class"
+            ),
+        )
+        for case in _HF_ROUNDTRIP_CASES
+    ],
+)
 def test_hf_roundtrip(case: HFRoundtripCase, result_path: pathlib.Path):
     """HF model survives HF → Fast-LLM → HF with identical config and weights."""
     base = result_path / "hf_roundtrip" / case.name
