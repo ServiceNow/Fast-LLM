@@ -4,6 +4,7 @@ import threading
 import time
 
 import fakeredis
+import redis
 
 from fast_llm.data.dataset.config import (
     REDIS_DATA_STREAM,
@@ -64,6 +65,10 @@ def redis_batch_producer(config: RedisConfig, sequence_length):
             client.close()
 
 
+def _redis_major_version() -> int:
+    return int(redis.__version__.split(".", maxsplit=1)[0])
+
+
 @contextlib.contextmanager
 def fake_redis_server(config: RedisConfig):
     # ----- Monkey-patch handler to suppress broken pipes -----
@@ -82,18 +87,12 @@ def fake_redis_server(config: RedisConfig):
     fakeredis._tcp_server.TCPFakeRequestHandler.handle = safe_handle
 
     # ----- Monkey-patch setup to use Resp2Writer instead of Resp3Writer -----
-    # fakeredis 2.34+ hardcodes Resp3Writer for all connections, causing blocked
-    # XREADGROUP timeouts to return RESP3 null (b'_\r\n') even on RESP2 connections
-    # (i.e. clients that never sent HELLO 3). The redis-py RESP2 parser raises
-    # Protocol Error: b'_' on this byte. Fix: replace with Resp2Writer at setup time.
-    # The Resp2Writer class was introduced alongside the bug in 2.34, so use its
-    # presence as the version guard.
     orig_setup = fakeredis._tcp_server.TCPFakeRequestHandler.setup
-    if hasattr(fakeredis._tcp_server, "Resp3Writer"):
-        # fakeredis 2.34+ hardcodes Resp3Writer for all connections, causing blocked
-        # XREADGROUP timeouts to return RESP3 null (b'_\r\n') even on RESP2 connections
-        # (i.e. clients that never sent HELLO 3). The redis-py RESP2 parser raises
-        # Protocol Error: b'_' on this byte. Fix: replace with Resp2Writer at setup time.
+    if _redis_major_version() < 8 and hasattr(fakeredis._tcp_server, "Resp3Writer"):
+        # redis-py < 8 defaults to RESP2. fakeredis 2.34+ hardcodes Resp3Writer
+        # for TCP connections, so blocked XREADGROUP timeouts return RESP3 null
+        # (b'_\r\n') to a RESP2 parser. Redis-py 8 defaults to RESP3 and works with
+        # the fakeredis default writer, so this workaround must stay version-gated.
         if not hasattr(fakeredis._tcp_server, "Resp2Writer"):
             raise RuntimeError(
                 f"fakeredis {fakeredis.__version__} has Resp3Writer but not Resp2Writer — "
@@ -103,6 +102,7 @@ def fake_redis_server(config: RedisConfig):
 
         def resp2_setup(self):
             orig_setup(self)
+            self.current_client._client_info["resp"] = 2
             if not isinstance(self.writer, fakeredis._tcp_server.Resp2Writer):
                 self.writer = fakeredis._tcp_server.Resp2Writer(self.client_address, self.wfile, self)
                 self.current_client.writer = self.writer
