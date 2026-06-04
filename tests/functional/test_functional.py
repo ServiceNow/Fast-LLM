@@ -87,7 +87,6 @@ def test_mlp_recomputation(gated, activation, testing_device):
 
 # Takes ~6s, much more if it needs to compile, reducing the hidden size doesn't help.
 @pytest.mark.slow
-@pytest.mark.skip("Dropless MoE is broken")
 def test_dropless_mlp(testing_device):
     device = torch.device(testing_device)
     num_experts = 4
