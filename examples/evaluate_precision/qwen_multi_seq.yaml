@@ -19,6 +19,9 @@ output_dir: /tmp/fast_llm_tests/evaluate_precision/qwen_multi_seq
 input_dataset: HuggingFaceH4/MATH-500
 num_sequences: 256
 sequence_length: 2048
+# Forward-only: one inference forward per sequence, saving per-sequence log π for the cross-engine
+# comparison (no per-layer tables). The layer-wise variant (qwen_multi_seq_layerwise.yaml) sets this false.
+forward_only: true
 variants:
   bf16:
     model.distributed.compute_dtype: bfloat16

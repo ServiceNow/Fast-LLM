@@ -4,6 +4,7 @@ import math
 import pathlib
 import shutil
 import statistics
+import time
 import typing
 
 from fast_llm.config import Field, FieldHint, config_class
@@ -167,10 +168,18 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         _print_summary(results)
 
     def _run_multi_sequence(self) -> None:
-        """Multi-sequence mode: build a set of independent sequences, run one inference-mode forward per
-        sequence per variant, and save each variant's per-sequence log π list. The per-layer comparison
-        tables don't apply (one forward per sequence, no backward); the cross-engine tool consumes the
-        saved sequence set and per-sequence log π lists."""
+        """Multi-sequence mode: build a set of independent sequences from the dataset and run each through
+        every variant. `forward_only` selects what is captured:
+
+        - `forward_only=True`: one inference-mode forward per sequence, saving each variant's per-sequence
+          log π list for the cross-engine tool. No per-layer tables (no backward, layer logs suppressed to
+          keep artifacts tiny).
+        - `forward_only=False`: a full forward+backward per sequence with the per-layer debug logs enabled,
+          then the per-tensor error metrics are aggregated *across* sequences. Averaging over many real
+          sequences damps per-token noise (~1/√(N·T)) while systematic per-layer bias persists — the
+          length-normalized / GSPO-relevant view of the layer-wise precision the single-sequence mode
+          reports on one fixed input. Per-variant gradient-scale calibration runs as in single-sequence
+          mode (a single scale per variant, calibrated on the whole sequence set)."""
         import torch
 
         input_sequences, prompt_lengths = self._build_dataset_inputs()
@@ -184,10 +193,34 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         )
         runs: dict[str, dict[str, typing.Any]] = {_REFERENCE_NAME: {}}
         runs.update(self.variants)
+        scales: dict[str, float] = {}
         for name, variant_overrides in runs.items():
-            self._run_one(name, variant_overrides, input_sequences, multi_sequence=True)
+            if self.forward_only:
+                self._run_one(name, variant_overrides, input_sequences, multi_sequence=True)
+                scales[name] = 1.0
+            else:
+                scales[name] = self._calibrate_and_run(name, variant_overrides, input_sequences, multi_sequence=True)
             self._save_chosen_logprob_multi(name, len(input_sequences))
-        logger.info("Multi-sequence run complete; compare with tools/evaluate_precision_cross_engine.py.")
+        if self.forward_only:
+            logger.info("Multi-sequence run complete; compare with tools/evaluate_precision_cross_engine.py.")
+            return
+
+        ref_artifacts = self._artifact_path(_REFERENCE_NAME)
+        results = {
+            name: self._compare_aggregated(
+                ref_artifacts, self._artifact_path(name), scales[_REFERENCE_NAME], scales[name]
+            )
+            for name in self.variants
+        }
+        report_path = self.output_dir / "precision_report.json"
+        report_path.write_text(
+            json.dumps({"scales": scales, "num_sequences": len(input_sequences), "variants": results}, indent=2)
+        )
+        logger.info(f"Wrote report to {report_path}")
+        logger.info(f"Per-variant gradient scales: {scales}")
+        for name, rows in results.items():
+            _print_table(name, rows)
+        _print_summary(results)
 
     def _build_dataset_inputs(self) -> tuple[list["torch.Tensor"], list[int]]:
         """Build one independent sequence per dataset example: the chat-templated prompt (system + problem)
@@ -230,7 +263,11 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         logger.info(f"[{name}] saved {len(vectors)} per-sequence log π vectors")
 
     def _calibrate_and_run(
-        self, name: str, variant_overrides: dict[str, typing.Any], input_ids: "torch.Tensor"
+        self,
+        name: str,
+        variant_overrides: dict[str, typing.Any],
+        input_ids: "torch.Tensor | list[torch.Tensor]",
+        multi_sequence: bool = False,
     ) -> float:
         """Pick a power-of-2 gradient scale for this variant via a calibration pass, then run with it.
 
@@ -242,9 +279,16 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         import torch
 
         cal_dir = self.output_dir / f"{_CALIBRATION_SUBDIR_PREFIX}{name}"
-        self._run_one(name, variant_overrides, input_ids, constant_scale=1.0, experiment_dir=cal_dir)
+        self._run_one(
+            name,
+            variant_overrides,
+            input_ids,
+            constant_scale=1.0,
+            experiment_dir=cal_dir,
+            multi_sequence=multi_sequence,
+        )
         max_unscaled = _scan_max_grad(cal_dir / "runs" / "0" / "artifacts")
-        shutil.rmtree(cal_dir)
+        _robust_rmtree(cal_dir, tolerate_failure=True)
         if max_unscaled <= 0.0:
             scale = 1.0
             logger.warning(f"[{name}] calibration found no nonzero gradient — falling back to scale=1.0")
@@ -253,7 +297,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             optimal_unrounded = fp16_max / max_unscaled / _HIDDEN_INTERMEDIATE_HEADROOM
             scale = float(2 ** max(0, math.floor(math.log2(optimal_unrounded))))
         logger.info(f"[{name}] calibration: max_unscaled={max_unscaled:.4e} -> gradient_scaler.constant={scale:g}")
-        self._run_one(name, variant_overrides, input_ids, constant_scale=scale)
+        self._run_one(name, variant_overrides, input_ids, constant_scale=scale, multi_sequence=multi_sequence)
         return scale
 
     def _prepare_input_ids(self) -> "torch.Tensor":
@@ -315,7 +359,7 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
         if experiment_dir is None:
             experiment_dir = self.output_dir / name
         if experiment_dir.exists():
-            shutil.rmtree(experiment_dir)
+            _robust_rmtree(experiment_dir)
         # Base config: hardcoded training/optimizer/data/run skeleton plus the user's model/pretrained.
         # Forced fp32 on the reference baseline lives in here too so a variant can override it.
         optimizer_config: dict[str, typing.Any] = {
@@ -369,17 +413,18 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
             for key, value in variant_overrides.items()
             if not key.startswith(_TORCH_BACKEND_PREFIX) and key != _TORCH_MATMUL_PRECISION_KEY
         }
-        # Multi-sequence mode is forward-only and cares only about chosen_logprob (one forward per
-        # sequence, no per-layer tables), so the per-layer activation/gradient logs are dropped to keep
-        # the per-sequence artifacts tiny.
-        forward_only = self.forward_only or multi_sequence
+        forward_only = self.forward_only
+        # The logprob-only multi-sequence mode (forward-only) drops the per-layer activation/gradient logs
+        # to keep the per-sequence artifacts tiny — it cares only about chosen_logprob. Every other mode
+        # (single-sequence, and forward+backward multi-sequence) captures the per-layer tables.
+        capture_layers = not (multi_sequence and forward_only)
         # Tool-required overrides win over variants — a variant must not silently disable tensor logging.
         tool_overrides: dict[tuple[str, ...], typing.Any] = {
             # Diagnostic loss that logs log π(label) per position via the tensor-log pipeline.
             # Contributes no gradient (weight=0); the comparison code picks it up by name.
             ("model", "base_model", "head", "losses", _CHOSEN_LOGPROB_NAME): {"type": "chosen_logprob"},
         }
-        if not multi_sequence:
+        if capture_layers:
             tool_overrides[("model", "multi_stage", "debug_layer_outputs")] = log_level
             # Capture the LM-head logits via the `output_hidden_states` mechanism: the head's
             # `_debug(logits, ...)` call matches this pattern and emits to `tensor_logs`.
@@ -443,6 +488,85 @@ class EvaluatePrecisionConfig(PretrainedGPTModelConfig, RunnableConfig):
                 )
         return rows
 
+    def _compare_aggregated(
+        self,
+        ref_path: pathlib.Path,
+        test_path: pathlib.Path,
+        ref_scale: float,
+        test_scale: float,
+    ) -> list[dict[str, typing.Any]]:
+        """Per-sequence comparison aggregated across sequences. Each sequence's tensor logs live in their
+        own artifact file (zero-padded index); compare each variant tensor against the *same sequence's*
+        fp32 reference, then report each per-tensor metric averaged over sequences, plus the across-sequence
+        std and max of the relative RMS. Row layout matches `_compare`, so the same table/summary printers
+        apply — they now read the across-sequence mean."""
+        compare_config = CompareConfig()
+        errors: list[str] = []
+        ref_logs = compare_config._extract_tensor_logs(ref_path, errors)
+        test_logs = compare_config._extract_tensor_logs(test_path, errors)
+        for error in errors:
+            logger.warning(error)
+        _unscale_gradients_in_place(ref_logs, ref_scale)
+        _unscale_gradients_in_place(test_logs, test_scale)
+        # tensor_name -> {metric -> [value per sequence]}, plus first-seen order and shape.
+        metrics_by_tensor: dict[str, dict[str, list[float]]] = {}
+        order: list[str] = []
+        shapes: dict[str, typing.Any] = {}
+        for step_name in sorted(ref_logs):
+            if step_name not in test_logs:
+                continue
+            step_ref = ref_logs[step_name]
+            step_test = test_logs[step_name]
+            for tensor_name, ref in step_ref.items():
+                if tensor_name not in step_test:
+                    continue
+                metrics = compare_config._compute_diff(ref, step_test[tensor_name], step_name, tensor_name)
+                if metrics is None:
+                    continue
+                if tensor_name not in metrics_by_tensor:
+                    metrics_by_tensor[tensor_name] = {key: [] for key in metrics}
+                    order.append(tensor_name)
+                    shapes[tensor_name] = ref["shape"]
+                for key, value in metrics.items():
+                    metrics_by_tensor[tensor_name][key].append(value)
+        rows: list[dict[str, typing.Any]] = []
+        for tensor_name in order:
+            per_metric = metrics_by_tensor[tensor_name]
+            rms_rel_values = per_metric["rms_rel"]
+            row: dict[str, typing.Any] = {
+                "tensor_name": tensor_name,
+                "kind": _classify(tensor_name),
+                "shape": shapes[tensor_name],
+                "num_sequences": len(rms_rel_values),
+                "rms_rel_std": statistics.pstdev(rms_rel_values) if len(rms_rel_values) > 1 else 0.0,
+                "rms_rel_max": max(rms_rel_values),
+            }
+            for key, values in per_metric.items():
+                row[key] = statistics.fmean(values)
+            rows.append(row)
+        return rows
+
+
+def _robust_rmtree(path: pathlib.Path, *, tolerate_failure: bool = False) -> None:
+    # Shared network filesystems can transiently report a directory as non-empty mid-deletion (stale
+    # listing, or an open file getting silly-renamed to .nfsXXXX). Retry, then optionally give up:
+    # `tolerate_failure` is for temporary directories whose leftovers don't affect correctness (the
+    # calibration artifacts live under a separate path from the compared run).
+    for attempt in range(5):
+        if not path.exists():
+            return
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError:
+            if attempt < 4:
+                time.sleep(1.0)
+            elif tolerate_failure:
+                logger.warning(f"Could not fully remove {path}; leaving leftovers (does not affect results).")
+                return
+            else:
+                raise
+
 
 def _run_fixed_input(config, input_sequences: "list[torch.Tensor]", *, forward_only: bool = False) -> None:
     """Lean run on fixed, already-preprocessed inputs — like `InferenceRunner` but feeding fixed inputs so
@@ -458,8 +582,9 @@ def _run_fixed_input(config, input_sequences: "list[torch.Tensor]", *, forward_o
     the head(s) are forced back into train mode directly; `run_step`'s per-step `multi_stage.train(False)`
     is a guarded no-op once `_training` is False, so the head stays trained and logs chosen_logprob.
     Valid only because no grad-producing loss is configured, so no backward touches the missing buffers.
-    With more than one sequence (forward-only), each sequence's tensor logs are flushed to a separate
-    artifact file (named by zero-padded sequence index) so they stay separable downstream."""
+    With more than one sequence, each sequence's tensor logs are flushed to a separate artifact file
+    (named by zero-padded sequence index) so they stay separable downstream — `run_step` zeros gradients
+    at the start of each training-phase step, so per-sequence gradient logs don't accumulate."""
     import gc
 
     import torch
@@ -476,7 +601,7 @@ def _run_fixed_input(config, input_sequences: "list[torch.Tensor]", *, forward_o
     distributed = Distributed(config.model.distributed)
     run = config.get_run(distributed)
     optimizer = None
-    per_sequence_flush = forward_only and len(input_sequences) > 1
+    per_sequence_flush = len(input_sequences) > 1
     with run:
         multi_stage = config.model.get_model_class()(
             config.model, optimizer_state_names=() if forward_only else config.optimizer.state_names()

@@ -1,0 +1,43 @@
+# Layer-wise precision over multiple real sequences, on Qwen2.5-0.5B. Reproduces the single-input
+# layer-wise tables (per-layer forward activation / backward gradient / parameter-gradient RMS vs an
+# fp32 reference), but aggregated across many real MATH-500 sequences. Each example becomes one
+# independent sequence (chat-templated problem + reference solution); the tool runs a full
+# forward+backward per sequence with the per-layer debug logs on, then averages each per-tensor metric
+# across sequences (the report also keeps the across-sequence std/max of the relative RMS). Averaging
+# over sequences damps per-token noise (~1/√(N·T)) while systematic per-layer bias persists — the
+# GSPO-relevant view of the layer-wise precision.
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/qwen_multi_seq_layerwise.yaml
+pretrained:
+  path: Qwen/Qwen2.5-0.5B
+  format: qwen2
+output_dir: /tmp/fast_llm_tests/evaluate_precision/qwen_multi_seq_layerwise
+input_dataset: HuggingFaceH4/MATH-500
+num_sequences: 32
+sequence_length: 2048
+# Forward+backward per sequence: capture the full per-layer activation / gradient tables. (The
+# logprob-only cross-engine config, qwen_multi_seq.yaml, sets this true for a forward-only run.)
+forward_only: false
+variants:
+  # Baseline bf16: compute_dtype=bf16 + Fast-LLM defaults (fp32 grad accumulation, bf16 residual, bf16 head).
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  # Full-precision residual stream on.
+  bf16_fp32_residual:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+  # fp32 LM-head matmul on (the stack default).
+  bf16_fp32_lm_head:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+  # Both stability features on (most precise bf16-compute configuration).
+  bf16_max_precision:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+    model.base_model.head.fp32_lm_head: true
+  fp16:
+    model.distributed.compute_dtype: float16
+  fp16_fp32_lm_head:
+    model.distributed.compute_dtype: float16
+    model.base_model.head.fp32_lm_head: true

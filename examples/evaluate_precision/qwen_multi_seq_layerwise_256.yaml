@@ -1,0 +1,20 @@
+# Layer-wise precision over 256 real sequences, trimmed to the variants that matter for the
+# systematic-gradient-bias question: reference fp32 + bf16 + fp16 only. Forward+backward per sequence,
+# per-tensor metrics averaged across sequences. More sequences lower the noise floor on the bias estimate
+# (floor ~ 1/sqrt(N_sequences)); 256 puts the measured bias well above the floor.
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/qwen_multi_seq_layerwise_256.yaml
+pretrained:
+  path: Qwen/Qwen2.5-0.5B
+  format: qwen2
+output_dir: /tmp/fast_llm_tests/evaluate_precision/qwen_multi_seq_layerwise_256
+input_dataset: HuggingFaceH4/MATH-500
+num_sequences: 256
+sequence_length: 2048
+forward_only: false
+variants:
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  fp16:
+    model.distributed.compute_dtype: float16
