@@ -220,6 +220,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 sample[self._source_schema.messages],
                 True,
                 True,
+                train_on_eos=self._source_schema.train_on_eos,
                 data_type=self._data_type,
             )
             token_spans_by_type[SpanType.loss_masking] = loss_masking_spans

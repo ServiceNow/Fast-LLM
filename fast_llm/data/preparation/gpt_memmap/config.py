@@ -170,6 +170,12 @@ class ConversationSourceConfig(LanguageModelSourceConfig):
         desc="Field containing the conversation messages list. Each message should have 'role' and 'content' keys.",
         hint=FieldHint.core,
     )
+    train_on_eos: bool = Field(
+        default=False,
+        desc="Include the end-of-sequence token appended after the final message in the training loss."
+        " When disabled, that token is masked from the loss.",
+        hint=FieldHint.optional,
+    )
 
     @functools.cached_property
     def columns(self) -> list[str]:
