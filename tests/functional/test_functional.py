@@ -6,6 +6,7 @@ from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.mlp import mlp_autograd, mlp_autograd_looped, torch_mlp_activation
 from fast_llm.functional.triton.sparse_copy import get_sparse_map
 from fast_llm.utils import Assert
+from tests.utils.utils import requires_cuda
 
 
 def _get_target_log_probability_for_spans(log_probabilities: torch.Tensor, spans: list[list[tuple[int, int]]]):
@@ -86,6 +87,7 @@ def test_mlp_recomputation(gated, activation, testing_device):
 
 
 # Takes ~6s, much more if it needs to compile, reducing the hidden size doesn't help.
+@requires_cuda  # The dropless MoE kernel is Triton-only and has no CPU fallback.
 @pytest.mark.slow
 def test_dropless_mlp(testing_device):
     device = torch.device(testing_device)
