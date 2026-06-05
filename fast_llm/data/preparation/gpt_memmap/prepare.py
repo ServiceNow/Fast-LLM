@@ -141,6 +141,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             )
         if self._config.add_eos and self._tokenizer.eod_id is None:
             raise ValueError("`add_eos` is set but the tokenizer does not define an EOS token; set `add_eos=False`.")
+        if self._source_schema.has_preference_spans and self._tokenizer.bod_id is None:
+            raise ValueError(
+                "Preference-span preparation requires a tokenizer that defines a BOS token (used as a separator);"
+                " specify `tokenizer.bos_token` or use a tokenizer that has one."
+            )
 
         # Validate chat template for conversation format
         if isinstance(self._source_schema, ConversationSourceConfig):
