@@ -306,6 +306,16 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
         desc="Configuration for the tokenizer.",
         hint=FieldHint.feature,
     )
+    add_bos: bool = Field(
+        default=True,
+        desc="Prepend the tokenizer's BOS token at the beginning of each document.",
+        hint=FieldHint.optional,
+    )
+    add_eos: bool = Field(
+        default=True,
+        desc="Append the tokenizer's EOS token at the end of each document.",
+        hint=FieldHint.optional,
+    )
     image_patches: ImagePreparationConfig = Field(
         desc="Configuration for the image patches, if enabled.",
         hint=FieldHint.feature,

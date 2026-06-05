@@ -134,6 +134,14 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
         # Load tokenizer
         self._tokenizer = self._config.tokenizer.get_tokenizer()
 
+        if self._config.add_bos and self._tokenizer.bod_id is None:
+            raise ValueError(
+                "`add_bos` is set but the tokenizer does not define a BOS token;"
+                " set `add_bos=False` or specify `tokenizer.bos_token`."
+            )
+        if self._config.add_eos and self._tokenizer.eod_id is None:
+            raise ValueError("`add_eos` is set but the tokenizer does not define an EOS token; set `add_eos=False`.")
+
         # Validate chat template for conversation format
         if isinstance(self._source_schema, ConversationSourceConfig):
             self._tokenizer.validate_chat_template()
@@ -218,8 +226,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Conversation format: tokenize messages and get loss masking spans from chat template
             tokens, loss_masking_spans = self._tokenizer.tokenize_chat(
                 sample[self._source_schema.messages],
-                True,
-                True,
+                self._config.add_bos,
+                self._config.add_eos,
                 data_type=self._data_type,
             )
             token_spans_by_type[SpanType.loss_masking] = loss_masking_spans
@@ -289,7 +297,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
             # Tokenize the text, and determine the span locations in the tokenized text.
             tokens, token_spans = self._tokenizer.tokenize_with_spans(
-                text, True, True, text_spans=spans, data_type=self._data_type
+                text, self._config.add_bos, self._config.add_eos, text_spans=spans, data_type=self._data_type
             )
 
             # Gather token spans by type.

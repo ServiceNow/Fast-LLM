@@ -69,10 +69,6 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         )
         if self._config.bos_token is not None:
             self.tokenizer.bos_token = self._config.bos_token
-        if self.tokenizer.eos_token_id is None:
-            raise ValueError("Tokenizer does not have an EOS token.")
-        if self.tokenizer.bos_token_id is None:
-            raise ValueError("Tokenizer does not have an BOS token.")
         self.eod_id = self.tokenizer.eos_token_id
         self.bod_id = self.tokenizer.bos_token_id
 
