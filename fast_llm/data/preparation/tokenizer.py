@@ -69,10 +69,6 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         )
         if self._config.bos_token is not None:
             self.tokenizer.bos_token = self._config.bos_token
-        if self.tokenizer.eos_token_id is None:
-            raise ValueError("Tokenizer does not have an EOS token.")
-        if self.tokenizer.bos_token_id is None:
-            raise ValueError("Tokenizer does not have an BOS token.")
         self.eod_id = self.tokenizer.eos_token_id
         self.bod_id = self.tokenizer.bos_token_id
 
@@ -264,6 +260,7 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         messages: list[dict[str, str]],
         begin: bool = True,
         end: bool = True,
+        train_on_eos: bool = False,
         data_type: DataType = DataType.int64,
     ) -> tuple["torch.Tensor", list[tuple[int, int]]]:
         """
@@ -291,7 +288,7 @@ class Tokenizer[ConfigType: TokenizerConfig](Configurable[ConfigType]):
         prepend_bos = begin and self.bod_id not in tokens
         append_eos = end and self.eod_id not in tokens
         tokens = [self.bod_id] * prepend_bos + list(tokens) + [self.eod_id] * append_eos
-        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [False] * append_eos
+        train_mask = [False] * prepend_bos + [bool(m) for m in train_mask] + [train_on_eos] * append_eos
 
         # Convert boolean train mask to loss masking spans (spans where train_mask[i] == False)
         loss_masking_spans = _train_mask_to_loss_spans(train_mask)

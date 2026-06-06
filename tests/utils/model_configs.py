@@ -454,8 +454,12 @@ update_and_add_testing_config(
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=DiffusionLlamaCheckpointFormat,
-    # TODO: Conversion is broken.
-    # TODO: Add back generate as `normal` when stable.
+    # Config + weight conversion works (test_conversion passes). The convert group stays `broken`
+    # because test_huggingface_model fails: the custom modeling `from_pretrained` requires a
+    # generation_config.json that Fast-LLM does not export (unlike `dream`, which ships one). Behind
+    # that, the forward likely diverges as for `dream` — DiffusionLlama is a bidirectional
+    # diffusion LM, while Fast-LLM runs it causal — but that is unverified since loading fails first.
+    # Neither is a converter bug. `generate` is broken for the same diffusion-decoding reason.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -530,8 +534,11 @@ update_and_add_testing_config(
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=DiffusionDreamCheckpointFormat,
-    # TODO: Conversion is broken.
-    # TODO: Add back generate as `normal` when stable.
+    # Config + weight conversion works (test_conversion passes). The convert group stays `broken`
+    # because test_huggingface_model fails: Dream is a bidirectional diffusion LM, so the HF forward
+    # diverges from Fast-LLM's causal run (structurally different logits/hidden states, confirmed — not
+    # a tolerance miss). Matching it needs bidirectional-attention modeling, not a converter change.
+    # `generate` is broken for the same diffusion-decoding reason.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
@@ -1051,22 +1058,27 @@ update_and_add_testing_config(
         ("model", "base_model", "decoder"): {
             "type": "pattern",
             "blocks": {
+                # Sub-dicts in ``_gemma4_block_overrides`` / ``_gemma4_mixer_overrides`` are deepcopied
+                # per block. Without this the two blocks' nested override dicts would alias, and
+                # ``Config._from_dict`` (which mutates its input via ``pop``) would consume the
+                # shared sub-dicts when processing the first block, leaving the second to silently
+                # fall back to type defaults (LayerNorm / output_scale.enabled=None).
                 "sliding_attention": {
                     **copy.deepcopy(_llama_block),
-                    **_gemma4_block_overrides,
+                    **copy.deepcopy(_gemma4_block_overrides),
                     "mixer": {
                         **copy.deepcopy(_llama_block["mixer"]),
-                        **_gemma4_mixer_overrides,
+                        **copy.deepcopy(_gemma4_mixer_overrides),
                         "window_size": 128,
                     },
                     "mlp": copy.deepcopy(_gemma4_moe_mlp),
                 },
                 "full_attention": {
                     **copy.deepcopy(_llama_block),
-                    **_gemma4_block_overrides,
+                    **copy.deepcopy(_gemma4_block_overrides),
                     "mixer": {
                         **copy.deepcopy(_llama_block["mixer"]),
-                        **_gemma4_mixer_overrides,
+                        **copy.deepcopy(_gemma4_mixer_overrides),
                         "rotary": {"type": "proportional", "partial_rotary_factor": 0.25},
                     },
                     "mlp": copy.deepcopy(_gemma4_moe_mlp),
@@ -1106,6 +1118,20 @@ def model_testing_config(request) -> ModelTestingConfig:
     return MODEL_CONFIGS[request.param]
 
 
+@functools.cache
+def _hf_config_class_available(checkpoint_format: type[CheckpointFormat]) -> bool:
+    """Whether the installed transformers provides the format's HF config class.
+
+    Conversion tests need it; older-but-supported transformers builds may lack a recent model
+    (e.g. no Gemma 4 before transformers v5), in which case the convert group skips rather than errors.
+    """
+    try:
+        checkpoint_format.get_handler_class().get_transformers_configuration_class()
+    except (ImportError, AttributeError):
+        return False
+    return True
+
+
 def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slow: bool, show_skipped: bool) -> bool:
     if "model_testing_group" in item.keywords:
         assert hasattr(item, "callspec") and "model_testing_config" in item.callspec.params, item.nodeid
@@ -1115,6 +1141,15 @@ def testing_group_enabled(item: pytest.Function, skip_slow: bool, skip_extra_slo
         if model_config.requires_cuda and not torch.cuda.is_available():
             item.add_marker(pytest.mark.skip(reason=f"Cuda not available."))
         for group in groups:
+            if (
+                group == ModelTestingGroup.convert
+                and model_config.checkpoint_format is not None
+                and not _hf_config_class_available(model_config.checkpoint_format)
+            ):
+                item.add_marker(
+                    pytest.mark.skip(reason=f"transformers build lacks the HF config class for {model_testing_config}")
+                )
+                continue
             action = model_config.groups.get(group, ModelTestingGroupAction.unimportant)
             if action == ModelTestingGroupAction.main:
                 pass

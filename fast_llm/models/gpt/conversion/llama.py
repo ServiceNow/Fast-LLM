@@ -91,6 +91,7 @@ def _llama_rotary_export(config: AttentionConfig) -> dict:
         rope_parameters.update(
             {
                 "rope_type": "yarn",
+                "factor": rotary.scale_factor,
                 "attention_factor": rotary.attention_factor,
                 "beta_fast": rotary.beta_fast,
                 "beta_slow": rotary.beta_slow,
@@ -132,6 +133,7 @@ def _llama_rotary_import(hf_dict: dict) -> dict:
     elif rope_type == "yarn":
         rotary_config.update(
             {
+                "scale_factor": rope_params["factor"],
                 "attention_factor": rope_params["attention_factor"],
                 "beta_fast": rope_params["beta_fast"],
                 "beta_slow": rope_params["beta_slow"],
