@@ -1,6 +1,7 @@
 import json
 import pathlib
 import typing
+import warnings
 
 import numpy as np
 import torch
@@ -40,8 +41,14 @@ class MemmapDataset[DocumentType: Document](IndexedDataset[DocumentType]):
             config_bytes = stream.read(config_size)
             reader_config = MemmapIndexDatasetReaderConfig.from_dict(json.loads(config_bytes.decode("utf-8")))
 
-        self._memmap = np.memmap(self._path, mode="c")
-        self._reader = reader_config.get_reader(memoryview(self._memmap))
+        # Read-only mapping: a private "c" (copy-on-write) mapping is charged in full against
+        # RLIMIT_DATA, which blows up for large multi-shard datasets; "r" is shared/file-backed and
+        # isn't. The reader only reads (documents are copied out via `.to()`), so read-only is safe.
+        self._memmap = np.memmap(self._path, mode="r")
+        with warnings.catch_warnings():
+            # `torch.frombuffer` warns about the non-writable buffer; moot for our read-only access.
+            warnings.filterwarnings("ignore", message="The given buffer is not writable", category=UserWarning)
+            self._reader = reader_config.get_reader(memoryview(self._memmap))
 
     def __getstate__(self) -> tuple[str, pathlib.Path]:
         # We pass the reader config to force its import in data loader workers.
