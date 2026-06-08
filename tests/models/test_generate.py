@@ -151,7 +151,9 @@ def _test_for_batches(
     if tokenizer is not None:
         inputs = _prepare_data(tokenizer, use_batch_size2=False)
     else:
-        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=False)
+        inputs = _prepare_rand_data(
+            fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size, use_batch_size2=False
+        )
     outputs = _generate(
         inputs,
         hf_model,
@@ -163,7 +165,9 @@ def _test_for_batches(
     if tokenizer is not None:
         inputs = _prepare_data(tokenizer, use_batch_size2=True)
     else:
-        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=True)
+        inputs = _prepare_rand_data(
+            fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size, use_batch_size2=True
+        )
     outputs = _generate(
         inputs,
         hf_model,
@@ -334,7 +338,7 @@ def _test_forward_return_hidden_states(
 
     inputs_ids = torch.randint(
         1,
-        fast_llm_model.config.fast_llm_config.base_model.vocab_size if vocab_size is None else vocab_size,
+        fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size if vocab_size is None else vocab_size,
         [1, 10],
         dtype=torch.int64,
         generator=torch.Generator().manual_seed(42),
@@ -345,8 +349,8 @@ def _test_forward_return_hidden_states(
         input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False
     )
 
-    # hidden_states include embeddings layer
-    assert len(res_fast_llm.hidden_states) - 1 == len(fast_llm_model.config.fast_llm_config.base_model.decoder)
+    # Embeddings + one state per decoder block (the last block's output carries the final norm).
+    assert len(res_fast_llm.hidden_states) == fast_llm_model.config.fast_llm_config.base_model.decoder.num_blocks + 1
 
 
 @pytest.mark.extra_slow

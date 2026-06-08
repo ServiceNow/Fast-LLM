@@ -249,3 +249,9 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
     def inner_forward(self, *args, **kwargs) -> tuple | transformers.utils.generic.ModelOutput:
         # Meant to be overridden in derived classes
         raise NotImplementedError()
+
+    @classmethod
+    def can_generate(cls) -> bool:
+        # `PreTrainedModel.can_generate` walks `__bases__` by name and stops at any base containing
+        # "PreTrainedModel"; this intermediate base hides the `GenerationMixin` inheritance from that check.
+        return True
