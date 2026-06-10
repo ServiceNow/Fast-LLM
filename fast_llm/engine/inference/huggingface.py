@@ -10,6 +10,7 @@ import transformers.utils.generic
 
 from fast_llm.core.distributed import broadcast, broadcast_object, safe_barrier
 from fast_llm.engine.checkpoint.config import CheckpointLoadConfig, FastLLMCheckpointFormat
+from fast_llm.engine.checkpoint.huggingface import HuggingfaceStateDictCheckpointHandler
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.inference.config import _TRANSFORMERS_V4, HuggingfaceModelConfig
 from fast_llm.engine.inference.runner import InferenceRunner
@@ -113,7 +114,21 @@ class HuggingfacePreTrainedModel(transformers.PreTrainedModel, transformers.gene
             stage_filter=stage_filter,
         )
 
-        return cls(fast_llm_model, **kwargs)
+        model = cls(fast_llm_model, **kwargs)
+        model._apply_generation_token_ids(pretrained_model_name_or_path)
+        return model
+
+    def _apply_generation_token_ids(self, pretrained: CheckpointLoadConfig) -> None:
+        # Honor the source HF config's generation token ids: Fast-LLM's import drops them (they are
+        # generation metadata, not architecture), so `generate` would otherwise never stop at EOS.
+        # Only external (HF) checkpoints carry them; native Fast-LLM checkpoints leave the defaults.
+        handler_class = pretrained.format.get_handler_class()
+        if not issubclass(handler_class, HuggingfaceStateDictCheckpointHandler):
+            return
+        hf_config = handler_class._load_config(pretrained.path)
+        for key in ("bos_token_id", "eos_token_id", "pad_token_id"):
+            if (token_id := hf_config.get(key)) is not None:
+                setattr(self.generation_config, key, token_id)
 
     def _init_weights(self, module) -> None:
         raise NotImplementedError(module)

@@ -47,6 +47,10 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         return_all_prediction_heads: bool = False,
+        # `generate` passes version-dependent plumbing kwargs (`cache_position`, `logits_to_keep`, ...).
+        # They don't apply to the `use_cache=False` path: positions are reconstructed from `attention_mask`,
+        # and the full logits are computed and the last position selected downstream.
+        **kwargs,
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         return self._inner_forward(
             self._get_batch(input_ids, attention_mask),

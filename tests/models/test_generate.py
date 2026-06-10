@@ -10,6 +10,7 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import PretrainedGPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingGroup
 
 
@@ -108,7 +109,9 @@ def _get_fast_llm_model_from_model(
 
     multi_stage.load_checkpoint(config.pretrained)
 
-    return HuggingfaceGPTModelForCausalLM(multi_stage, runner=runner)
+    model = HuggingfaceGPTModelForCausalLM(multi_stage, runner=runner)
+    model._apply_generation_token_ids(config.pretrained)
+    return model
 
 
 def _trim_output(output, inputs):
@@ -246,11 +249,14 @@ def test_export_for_generate(run_test_script_for_all_models, model_testing_confi
     if model_testing_config.checkpoint_format is None:
         pytest.skip(f"Conversion not supported for {model_testing_config.name}")
     run_test_script_for_all_models(
-        [
-            "training.train_iters=1",
-            f"training.export.format={model_testing_config.checkpoint_format.name}",
-            "training.export.interval=1",
-        ],
+        distributed_testing_config=DistributedTestingConfig(
+            name="test_export_for_generate",
+            config_args=[
+                "training.train_iters=1",
+                f"training.export.format={model_testing_config.checkpoint_format.name}",
+                "training.export.interval=1",
+            ],
+        )
     )
 
 
