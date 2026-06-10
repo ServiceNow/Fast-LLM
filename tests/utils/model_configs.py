@@ -487,13 +487,11 @@ update_and_add_testing_config(
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
     checkpoint_format=MTPLlamaCheckpointFormat,
-    # `generate` matches HF, but the forward hidden-states check stays `broken`: multi-token prediction
-    # returns extra per-head states the single-head count assertion doesn't model.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },

@@ -360,8 +360,10 @@ def _test_forward_return_hidden_states(
         input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False
     )
 
-    # Embeddings + one state per decoder block (the last block's output carries the final norm).
-    assert len(res_fast_llm.hidden_states) == fast_llm_model.config.fast_llm_config.base_model.decoder.num_blocks + 1
+    # Embeddings + one state per decoder block + one final-norm state per prediction head
+    # (the last block's output is carried by the heads' final norms).
+    base_model = fast_llm_model.config.fast_llm_config.base_model
+    assert len(res_fast_llm.hidden_states) == base_model.decoder.num_blocks + base_model.head.prediction_heads
 
 
 @requires_cuda

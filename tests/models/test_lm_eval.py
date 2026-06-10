@@ -108,7 +108,7 @@ def test_lm_eval_evaluation_from_pretrained(
 
 # TODO: rewrite for a new distributed test function
 # @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
-# @pytest.mark.model_testing_group(ModelTestingGroup.generate, ModelTestingGroup.distributed)
+# @pytest.mark.model_testing_group(ModelTestingGroup.lm_eval, ModelTestingGroup.distributed)
 # def test_lm_eval_in_training_dp2(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):
 #     run_test_script_for_all_models(
 #         distributed_testing_config=DistributedTestingConfig(
