@@ -359,12 +359,13 @@ update_and_add_testing_config(
         "--no-position-embedding",
     ],
     checkpoint_format=None,
-    # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        # No HF checkpoint format: the native conversion round-trip is redundant with other models,
+        # and the export-based generate tests can't run.
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
