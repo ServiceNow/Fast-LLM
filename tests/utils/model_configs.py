@@ -515,7 +515,8 @@ update_and_add_testing_config(
     megatron_args=None,
     checkpoint_format=Qwen2CheckpointFormat,
     # `generate` matches HF in fp32 but diverges in bf16/flash: a near-tie argmax flips on numerical
-    # noise within the compared horizon. Stays `broken` pending a curated low-margin-free case.
+    # noise within the compared horizon. Stays `broken` pending a curated case free of near-tie
+    # (low-margin) argmax positions.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
