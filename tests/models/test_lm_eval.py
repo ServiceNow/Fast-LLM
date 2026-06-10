@@ -54,7 +54,7 @@ def get_lm_eval_config(tokenizer_path, monkeypatch):
 # "gsm8k,xnli_en,wikitext"
 
 
-@pytest.mark.model_testing_group(ModelTestingGroup.generate)
+@pytest.mark.model_testing_group(ModelTestingGroup.lm_eval)
 def test_lm_eval_in_training(run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config):
     run_test_script_for_all_models(
         distributed_testing_config=DistributedTestingConfig(
@@ -75,7 +75,7 @@ def copy_training_output(run_test_script_base_path: pathlib.Path):
 
 
 @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.generate)
+@pytest.mark.model_testing_group(ModelTestingGroup.lm_eval)
 def test_lm_eval_evaluation_last_checkpoint(
     run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config, copy_training_output
 ):
@@ -89,7 +89,7 @@ def test_lm_eval_evaluation_last_checkpoint(
 
 
 @pytest.mark.depends_on(on=["test_lm_eval_in_training[{model_testing_config}]"])
-@pytest.mark.model_testing_group(ModelTestingGroup.generate)
+@pytest.mark.model_testing_group(ModelTestingGroup.lm_eval)
 def test_lm_eval_evaluation_from_pretrained(
     run_test_script_for_all_models, run_test_script_base_path, get_lm_eval_config
 ):

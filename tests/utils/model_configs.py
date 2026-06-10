@@ -48,6 +48,7 @@ class ModelTestingGroup(enum.StrEnum):
     checkpoint = "checkpoint"
     convert = "convert"
     generate = "generate"
+    lm_eval = "lm_eval"
     megatron = "megatron"
     distributed = "distributed"
     streaming = "streaming"
@@ -393,12 +394,11 @@ update_and_add_testing_config(
         "--untie-embeddings-and-output-weights",
     ],
     checkpoint_format=LlamaCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
         ModelTestingGroup.convert: ModelTestingGroupAction.main,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
         ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
@@ -486,7 +486,8 @@ update_and_add_testing_config(
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
     checkpoint_format=MTPLlamaCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
+    # `generate` matches HF, but the forward hidden-states check stays `broken`: multi-token prediction
+    # returns extra per-head states the single-head count assertion doesn't model.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -514,7 +515,8 @@ update_and_add_testing_config(
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=Qwen2CheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
+    # `generate` matches HF in fp32 but diverges in bf16/flash: a near-tie argmax flips on numerical
+    # noise within the compared horizon. Stays `broken` pending a curated low-margin-free case.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -560,12 +562,11 @@ update_and_add_testing_config(
     # Megatron doesn't support sliding windows.
     megatron_args=None,
     checkpoint_format=MistralCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
@@ -653,7 +654,7 @@ update_and_add_testing_config(
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
