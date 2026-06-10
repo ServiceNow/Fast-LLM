@@ -135,6 +135,9 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "auto_map",
             "torch_dtype",
             "use_cache",
+            # Architecture-family marker some transformers v4 configs carry (e.g. LlamaConfig); dropped
+            # in v5, not consumed by Fast-LLM, and absent from a bare ``PretrainedConfig``.
+            "is_llama_config",
             # Token ids — generation/inference, not architecture (a bare v5 config omits these).
             "bos_token_id",
             "decoder_start_token_id",
