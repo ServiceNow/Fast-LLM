@@ -1,0 +1,81 @@
+# Stage 1 — from-scratch warmup of a Qwen2.5-0.5B model to a mid-early-training branch point.
+# This prefix is throwaway: only the final checkpoint is reused, as `pretrained` init for the arms.
+# Run data-parallel on 4 GPUs; stop at ~1h wall-clock and branch from the last checkpoint.
+#   torchrun --nproc_per_node=4 -m fast_llm.cli train gpt --config examples/batch_size_scaling/warmup.yaml
+#
+# Global batch = micro_batch_size (2048) x depth_first_micro_batches (128) x data_parallel (4)
+#             = 512 sequences of length 2048  (matches Qwen2.5's pretraining batch).
+training:
+  train_iters: 1000          # cap only — kill at ~1h and use the latest checkpoint
+  num_workers: 8
+  wandb:
+    entity_name: null  # set to your W&B entity to enable logging
+    project_name: batch_size_scaling
+    group_name: warmup
+  logs:
+    interval: 10
+  checkpoint:
+    interval: 100            # frequent saves so we can branch near the 1h mark
+    keep: 3
+schedule:
+  depth_first_micro_batches: 128
+data:
+  datasets:
+    training:
+      type: file
+      path: data/batch_size/fineweb_edu_qwen/fast_llm_config_warmup.yaml
+  micro_batch_size: 2048
+optimizer:
+  learning_rate:
+    base: 1.0e-04
+    decay_style: constant
+    warmup_iterations: 100
+  weight_decay: 0.0
+  beta_1: 0.9
+  beta_2: 0.95
+  epsilon: 1.0e-08
+  gradient_norm_clipping: 1.0
+model:
+  base_model:
+    embeddings:
+      vocab_size: 151936
+      dropout: 0.0
+    decoder:
+      block:
+        mixer:
+          type: attention
+          rotary:
+            type: default
+            theta: 1000000
+          heads: 14
+          head_groups: 2
+          head_size: 64
+          add_linear_biases: false
+          query_layer: {bias: {enabled: true}}
+          key_layer: {bias: {enabled: true}}
+          value_layer: {bias: {enabled: true}}
+          dense_layer: {bias: {enabled: false}}
+          dropout: 0.0
+        mlp:
+          intermediate_size: 4864
+          add_linear_biases: false
+          gated: true
+          activation: silu
+        normalization:
+          type: rms_norm
+          epsilon: 1.0e-06
+        dropout: 0.0
+      num_blocks: 24
+    head:
+      normalization:
+        type: rms_norm
+        epsilon: 1.0e-06
+    hidden_size: 896
+    tied_embedding_weight: true
+  multi_stage:
+    zero_stage: 2
+  distributed:
+    compute_dtype: bf16
+    seed: 1234
+run:
+  experiment_dir: experiments/batch_size/warmup

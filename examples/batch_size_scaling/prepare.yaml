@@ -1,0 +1,22 @@
+# Stage 0 — tokenize FineWeb-Edu with the Qwen2.5 tokenizer into a Fast-LLM memmap dataset,
+# partitioned into three disjoint splits:
+#   warmup     — the throwaway from-scratch prefix (stage 1)
+#   experiment — fresh, unseen-by-warmup data, shared by every arm (stage 2)
+#   validation — held out, shared by all runs for comparable eval-loss curves
+#
+#   fast-llm prepare gpt_memmap --config examples/batch_size_scaling/prepare.yaml
+output_path: data/batch_size/fineweb_edu_qwen
+dataset:
+  path: HuggingFaceFW/fineweb-edu
+  config_name: sample-100BT
+  split: train
+  trust_remote_code: true
+tokenizer:
+  path: Qwen/Qwen2.5-0.5B
+# Qwen has no native BOS; skip it and separate documents by EOS (<|endoftext|>) only (PR #534).
+add_bos: false
+add_eos: true
+splits:
+  warmup: 0.05
+  experiment: 0.94
+  validation: 0.01
