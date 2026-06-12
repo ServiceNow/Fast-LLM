@@ -223,9 +223,12 @@ windowed to the post-17.69B novel-data region.
 ### Status & caveats
 
 - Runs are **ongoing and not converged**; numbers are preliminary and expected to firm up.
-- Comparisons use **training loss**, not validation: the loss evaluator currently logs 0
-  ([#538](https://github.com/ServiceNow/Fast-LLM/issues/538)). Training loss is a valid *relative*
-  comparison here because all data features are shared across arms (paired design).
+- Comparisons use **training loss** — but on a **single epoch** this *is* effectively a held-out
+  measure: each batch's loss is computed before the model trains on it, and (post-revisit) on
+  never-before-seen data, so there is no real train/validation distinction. The broken eval-loss
+  logging ([#538](https://github.com/ServiceNow/Fast-LLM/issues/538)) is therefore not a real
+  limitation here. The one exception is the 17.69B re-read prefix (data the branch parent already
+  saw) — memorization-contaminated, and excluded from all comparisons.
 - Single 0.5B model, one dataset; the secondary signals are ~1.5σ per bin individually, credible only
   via cross-bin directional consistency.
 
