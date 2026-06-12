@@ -77,7 +77,7 @@ class TokenBatch(Batch, TokenDocument):
                 tokens.append(tokens[0].new_full([padding], -100))
                 lengths.append(padding)
         return cls(
-            tokens=torch.cat(tokens),
+            tokens=torch.cat(tokens).to(torch.int64),
             lengths=lengths,
             unpadded_length=unpadded_length,
         )
