@@ -10,7 +10,9 @@ from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.models.gpt.config import PretrainedGPTModelConfig
 from fast_llm.models.gpt.conversion.config import LlamaCheckpointFormat
 from fast_llm.models.gpt.huggingface import HuggingfaceGPTModelForCausalLM
+from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.model_configs import ModelTestingGroup
+from tests.utils.utils import requires_cuda
 
 
 def _prepare_data(tokenizer, use_batch_size2: bool):
@@ -108,7 +110,9 @@ def _get_fast_llm_model_from_model(
 
     multi_stage.load_checkpoint(config.pretrained)
 
-    return HuggingfaceGPTModelForCausalLM(multi_stage, runner=runner)
+    model = HuggingfaceGPTModelForCausalLM(multi_stage, runner=runner)
+    model._apply_generation_token_ids(config.pretrained)
+    return model
 
 
 def _trim_output(output, inputs):
@@ -151,7 +155,9 @@ def _test_for_batches(
     if tokenizer is not None:
         inputs = _prepare_data(tokenizer, use_batch_size2=False)
     else:
-        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=False)
+        inputs = _prepare_rand_data(
+            fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size, use_batch_size2=False
+        )
     outputs = _generate(
         inputs,
         hf_model,
@@ -163,7 +169,9 @@ def _test_for_batches(
     if tokenizer is not None:
         inputs = _prepare_data(tokenizer, use_batch_size2=True)
     else:
-        inputs = _prepare_rand_data(fast_llm_model.config.fast_llm_config.base_model.vocab_size, use_batch_size2=True)
+        inputs = _prepare_rand_data(
+            fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size, use_batch_size2=True
+        )
     outputs = _generate(
         inputs,
         hf_model,
@@ -204,6 +212,7 @@ def _test_generate(
     )
 
 
+@requires_cuda
 @pytest.mark.extra_slow
 @pytest.mark.parametrize(
     "use_flash_attention, use_bf16, max_new_tokens, min_matching_tokens_batch_size_1, min_matching_tokens_batch_size_2",
@@ -242,14 +251,18 @@ def test_export_for_generate(run_test_script_for_all_models, model_testing_confi
     if model_testing_config.checkpoint_format is None:
         pytest.skip(f"Conversion not supported for {model_testing_config.name}")
     run_test_script_for_all_models(
-        [
-            "training.train_iters=1",
-            f"training.export.format={model_testing_config.checkpoint_format.name}",
-            "training.export.interval=1",
-        ],
+        distributed_testing_config=DistributedTestingConfig(
+            name="test_export_for_generate",
+            config_args=[
+                "training.train_iters=1",
+                f"training.export.format={model_testing_config.checkpoint_format.name}",
+                "training.export.interval=1",
+            ],
+        )
     )
 
 
+@requires_cuda
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 @pytest.mark.parametrize(
@@ -303,6 +316,7 @@ def _test_generate_from_model(model_path, tokenizer, fast_llm_checkpoint_format)
     )
 
 
+@requires_cuda
 @pytest.mark.extra_slow
 def test_generate_from_model(
     model_path,
@@ -310,6 +324,7 @@ def test_generate_from_model(
     _test_generate_from_model(model_path, AutoTokenizer.from_pretrained(model_path), LlamaCheckpointFormat)
 
 
+@requires_cuda
 @pytest.mark.slow
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
@@ -334,7 +349,7 @@ def _test_forward_return_hidden_states(
 
     inputs_ids = torch.randint(
         1,
-        fast_llm_model.config.fast_llm_config.base_model.vocab_size if vocab_size is None else vocab_size,
+        fast_llm_model.config.fast_llm_config.base_model.embeddings.vocab_size if vocab_size is None else vocab_size,
         [1, 10],
         dtype=torch.int64,
         generator=torch.Generator().manual_seed(42),
@@ -345,10 +360,13 @@ def _test_forward_return_hidden_states(
         input_ids=inputs_ids, output_hidden_states=True, return_dict=True, use_cache=False
     )
 
-    # hidden_states include embeddings layer
-    assert len(res_fast_llm.hidden_states) - 1 == len(fast_llm_model.config.fast_llm_config.base_model.decoder)
+    # Embeddings + one state per decoder block + one final-norm state per prediction head
+    # (the last block's output is carried by the heads' final norms).
+    base_model = fast_llm_model.config.fast_llm_config.base_model
+    assert len(res_fast_llm.hidden_states) == base_model.decoder.num_blocks + base_model.head.prediction_heads
 
 
+@requires_cuda
 @pytest.mark.extra_slow
 def test_forward_return_hidden_states(model_path):
     _test_forward_return_hidden_states(
@@ -356,6 +374,7 @@ def test_forward_return_hidden_states(model_path):
     )
 
 
+@requires_cuda
 @pytest.mark.slow
 @pytest.mark.model_testing_group(ModelTestingGroup.generate)
 @pytest.mark.depends_on(on=["test_export_for_generate[{model_testing_config}]"])
