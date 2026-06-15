@@ -11,6 +11,7 @@ reference using RMS error. Results are printed as a table per case.
 
 import dataclasses
 import math
+import statistics
 import time
 import typing
 
@@ -153,31 +154,34 @@ class VariantResult:
 # --------------------------------------------------------------------------- timing
 
 
+# Per-rep samples for the timing distribution. Device kernel time is stable, so a
+# small fixed count gives tight stats without profiling thousands of reps.
+_MAX_PROFILE_REPS = 50
+
+
 def bench_fn(
     fn: typing.Callable[[], typing.Any],
     reset: typing.Callable[[], None] | None = None,
     warmup_ms: float = 25.0,
     rep_ms: float = 100.0,
     min_reps: int = 5,
-    max_reps: int = 10_000,
 ) -> TimingStats:
     """Benchmark `fn` — it should be a no-arg callable that invokes the kernel
     being timed (close over inputs). Returns timing statistics in ms.
 
-    Reports GPU kernel time: the profiler's summed per-kernel device self-time,
-    not a wall-clock window around `fn`. A CUDA-event window also counts GPU-idle
-    bubbles from per-call allocation and (for autograd variants) Python/engine
-    launch overhead — benchmarking artifacts that don't occur in a real run where
-    the CPU runs ahead and the allocator serves cached buffers, and which vary
-    by variant (the eager C++ engine starves the GPU far less than a Python
-    autograd Function). Summing device self-time isolates the work the GPU
-    actually does. Device time is deterministic to <1% run-to-run, so the
-    per-rep mean is reported across all stat fields.
+    Reports GPU kernel time: each rep sums the profiler's per-kernel device
+    self-time, and stats are computed over the per-rep samples. A CUDA-event
+    window around `fn` instead counts GPU-idle bubbles from per-call allocation
+    and (for autograd variants) Python/engine launch overhead — benchmarking
+    artifacts that don't occur in a real run where the CPU runs ahead and the
+    allocator serves cached buffers, and which vary by variant (the eager C++
+    engine starves the GPU far less than a Python autograd Function). Summing
+    device self-time isolates the work the GPU actually does.
     """
     if not torch.cuda.is_available():
         # CPU / Triton interpret: single timed run with wall clock. min_reps,
-        # max_reps, warmup_ms, rep_ms are ignored — this path is for smoke
-        # testing kernel correctness, not measurement.
+        # warmup_ms, rep_ms are ignored — this path is for smoke testing kernel
+        # correctness, not measurement.
         if reset is not None:
             reset()
         fn()  # warmup
@@ -223,34 +227,32 @@ def bench_fn(
     torch.cuda.synchronize()
     one_rep_ms = max(post_start.elapsed_time(post_end), 0.001)
 
-    num_reps = max(min_reps, min(max_reps, int(rep_ms / one_rep_ms)))
+    num_reps = max(min_reps, min(_MAX_PROFILE_REPS, int(rep_ms / one_rep_ms)))
 
-    # The L2 flush is itself a device kernel (a fill); profile it alone to learn
-    # its kernel key so it can be excluded from the measured sum below.
-    with profile(activities=[ProfilerActivity.CUDA]) as flush_prof:
+    # Profile each rep separately and sum its kernels' device self-time, building a
+    # per-rep sample distribution. The L2 flush stays outside the profiled region so
+    # its fill kernel isn't measured; it still runs before `fn` on the same stream,
+    # so each kernel reads cold. Only CUDA-device entries contribute — runtime/launch
+    # entries carry no device time, and a single fn() call has no autograd CPU node.
+    samples_ms: list[float] = []
+    for _ in range(num_reps):
+        if reset is not None:
+            reset()
         flush_buffer.zero_()
-        torch.cuda.synchronize()
-    flush_keys = {k.key for k in flush_prof.key_averages() if k.device_type == DeviceType.CUDA}
-
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
-        for _ in range(num_reps):
-            if reset is not None:
-                reset()
-            # Cold L2 between reps so each kernel re-reads from DRAM. Its fill
-            # kernel is excluded from the sum via `flush_keys`.
-            flush_buffer.zero_()
+        with profile(activities=[ProfilerActivity.CUDA]) as prof:
             fn()
-        torch.cuda.synchronize()
+            torch.cuda.synchronize()
+        kernel_us = sum(k.self_device_time_total for k in prof.key_averages() if k.device_type == DeviceType.CUDA)
+        samples_ms.append(kernel_us / 1000)
 
-    # Sum only CUDA-device entries: custom-autograd CPU nodes carry their
-    # children's device time and would double-count.
-    kernel_us = sum(
-        k.self_device_time_total
-        for k in prof.key_averages()
-        if k.device_type == DeviceType.CUDA and k.key not in flush_keys
+    return TimingStats(
+        median_ms=statistics.median(samples_ms),
+        mean_ms=statistics.fmean(samples_ms),
+        min_ms=min(samples_ms),
+        max_ms=max(samples_ms),
+        std_ms=statistics.pstdev(samples_ms) if len(samples_ms) > 1 else 0.0,
+        num_reps=num_reps,
     )
-    per_rep_ms = kernel_us / num_reps / 1000
-    return TimingStats(per_rep_ms, per_rep_ms, per_rep_ms, per_rep_ms, 0.0, num_reps)
 
 
 # --------------------------------------------------------------------------- memory
