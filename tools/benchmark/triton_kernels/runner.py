@@ -4,18 +4,19 @@ Core benchmarking infrastructure for Fast-LLM Triton kernels.
 Each benchmark file defines a list of `Case` objects (input shape/dtype
 sweep) and a list of `Variant` objects (implementations to compare — e.g.
 pytorch eager, pytorch compiled, Triton). The runner invokes each variant
-on each case, measures timing (median + mean + percentiles via CUDA events),
-measures peak/final memory, and compares outputs against an fp32 reference
-using RMS error. Results are printed as a table per case.
+on each case, measures GPU kernel time (summed per-kernel device time via the
+profiler), measures peak/final memory, and compares outputs against an fp32
+reference using RMS error. Results are printed as a table per case.
 """
 
 import dataclasses
 import math
-import statistics
 import time
 import typing
 
 import torch
+from torch.autograd import DeviceType
+from torch.profiler import ProfilerActivity, profile
 
 from fast_llm.utils import header
 from tools.benchmark.triton_kernels.gpu_specs import GpuSpec, detect_gpu_spec
@@ -163,8 +164,15 @@ def bench_fn(
     """Benchmark `fn` — it should be a no-arg callable that invokes the kernel
     being timed (close over inputs). Returns timing statistics in ms.
 
-    Mirrors `triton.testing.do_bench` logic but returns raw per-rep list so we
-    can compute {median, mean, min, max, std} from one set of runs.
+    Reports GPU kernel time: the profiler's summed per-kernel device self-time,
+    not a wall-clock window around `fn`. A CUDA-event window also counts GPU-idle
+    bubbles from per-call allocation and (for autograd variants) Python/engine
+    launch overhead — benchmarking artifacts that don't occur in a real run where
+    the CPU runs ahead and the allocator serves cached buffers, and which vary
+    by variant (the eager C++ engine starves the GPU far less than a Python
+    autograd Function). Summing device self-time isolates the work the GPU
+    actually does. Device time is deterministic to <1% run-to-run, so the
+    per-rep mean is reported across all stat fields.
     """
     if not torch.cuda.is_available():
         # CPU / Triton interpret: single timed run with wall clock. min_reps,
@@ -217,28 +225,32 @@ def bench_fn(
 
     num_reps = max(min_reps, min(max_reps, int(rep_ms / one_rep_ms)))
 
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_reps)]
-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_reps)]
-    for i in range(num_reps):
-        if reset is not None:
-            reset()
-        # The L2 flush is enqueued before start_events[i] on the same stream, so
-        # the timed window starts after the zero completes — only fn() is timed.
+    # The L2 flush is itself a device kernel (a fill); profile it alone to learn
+    # its kernel key so it can be excluded from the measured sum below.
+    with profile(activities=[ProfilerActivity.CUDA]) as flush_prof:
         flush_buffer.zero_()
-        start_events[i].record()
-        fn()
-        end_events[i].record()
-    torch.cuda.synchronize()
+        torch.cuda.synchronize()
+    flush_keys = {k.key for k in flush_prof.key_averages() if k.device_type == DeviceType.CUDA}
 
-    times = [start_events[i].elapsed_time(end_events[i]) for i in range(num_reps)]
-    return TimingStats(
-        median_ms=statistics.median(times),
-        mean_ms=statistics.fmean(times),
-        min_ms=min(times),
-        max_ms=max(times),
-        std_ms=statistics.pstdev(times) if len(times) > 1 else 0.0,
-        num_reps=num_reps,
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+        for _ in range(num_reps):
+            if reset is not None:
+                reset()
+            # Cold L2 between reps so each kernel re-reads from DRAM. Its fill
+            # kernel is excluded from the sum via `flush_keys`.
+            flush_buffer.zero_()
+            fn()
+        torch.cuda.synchronize()
+
+    # Sum only CUDA-device entries: custom-autograd CPU nodes carry their
+    # children's device time and would double-count.
+    kernel_us = sum(
+        k.self_device_time_total
+        for k in prof.key_averages()
+        if k.device_type == DeviceType.CUDA and k.key not in flush_keys
     )
+    per_rep_ms = kernel_us / num_reps / 1000
+    return TimingStats(per_rep_ms, per_rep_ms, per_rep_ms, per_rep_ms, 0.0, num_reps)
 
 
 # --------------------------------------------------------------------------- memory
