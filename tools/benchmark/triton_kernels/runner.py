@@ -16,8 +16,6 @@ import time
 import typing
 
 import torch
-from torch.autograd import DeviceType
-from torch.profiler import ProfilerActivity, profile
 
 from fast_llm.utils import header
 from tools.benchmark.triton_kernels.gpu_specs import GpuSpec, detect_gpu_spec
@@ -241,10 +239,12 @@ def bench_fn(
             reset()
         flush_buffer.zero_()
         torch.cuda.synchronize()
-        with profile(activities=[ProfilerActivity.CUDA]) as prof:
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
             fn()
             torch.cuda.synchronize()
-        kernel_us = sum(k.self_device_time_total for k in prof.key_averages() if k.device_type == DeviceType.CUDA)
+        kernel_us = sum(
+            k.self_device_time_total for k in prof.key_averages() if k.device_type == torch.autograd.DeviceType.CUDA
+        )
         samples_ms.append(kernel_us / 1000)
 
     return TimingStats(
