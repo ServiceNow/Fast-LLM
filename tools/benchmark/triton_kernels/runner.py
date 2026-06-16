@@ -230,15 +230,17 @@ def bench_fn(
     num_reps = max(min_reps, min(_MAX_PROFILE_REPS, int(rep_ms / one_rep_ms)))
 
     # Profile each rep separately and sum its kernels' device self-time, building a
-    # per-rep sample distribution. The L2 flush stays outside the profiled region so
-    # its fill kernel isn't measured; it still runs before `fn` on the same stream,
-    # so each kernel reads cold. Only CUDA-device entries contribute — runtime/launch
-    # entries carry no device time, and a single fn() call has no autograd CPU node.
+    # per-rep sample distribution. The L2 flush stays outside the profiled region and
+    # is synced before the profiler opens, so its fill kernel can't land in the capture
+    # window while each kernel still reads cold. CUDA-only profiling records no CPU op
+    # nodes (which would otherwise carry their children's device time and double-count);
+    # the device_type == CUDA filter drops the zero-device-time runtime/launch entries.
     samples_ms: list[float] = []
     for _ in range(num_reps):
         if reset is not None:
             reset()
         flush_buffer.zero_()
+        torch.cuda.synchronize()
         with profile(activities=[ProfilerActivity.CUDA]) as prof:
             fn()
             torch.cuda.synchronize()
