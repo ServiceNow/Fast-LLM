@@ -33,6 +33,9 @@ torch._dynamo.config.cache_size_limit = 64
 # mutated inputs" when using max-autotune. The fallback is correct; suppress noise.
 warnings.filterwarnings("ignore", message=".*[Ss]kipping (cuda|CUDA)[Gg]raphs.*")
 logging.getLogger("torch._inductor.cudagraph_trees").setLevel(logging.ERROR)
+# The per-measurement profiler session emits a one-time note about event cycles; the
+# runner reads key_averages right after each session, so it doesn't apply here.
+warnings.filterwarnings("ignore", message=".*Profiler clears events.*")
 
 _BENCHMARKS = {
     "entropy_loss": bench_entropy_loss,
