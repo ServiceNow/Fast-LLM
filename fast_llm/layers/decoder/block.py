@@ -127,6 +127,7 @@ class DecoderBlock[ConfigType: DecoderBlockConfig](Block[ConfigType]):
         self.output_scale = self._config.output_scale.get_parameter(
             (scalar_dim,),
             default_initialization=init_ones_,
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )

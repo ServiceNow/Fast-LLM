@@ -248,7 +248,7 @@ class ParameterMeta(TensorMeta):
         tensor_name: str = "",
         dims: tuple[TensorDim, ...],
         init_method: "Initialization | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None" = None,
-        weight_decay: bool = True,
+        weight_decay: float | bool = True,
         # Pass a list to split the parameter in contiguous (dim=0) chunks of equal size for optimization.
         lr_scale: float | None | tuple[float | None, ...] = None,
         requires_grad: bool = True,
@@ -285,7 +285,7 @@ class ParameterMeta(TensorMeta):
         tensor_name: str = "",
         dims: tuple[TensorDim, ...],
         init_method: "Initializer | typing.Callable[[ParameterMeta, torch.Tensor, torch.Generator], None] | None",
-        weight_decay: bool = True,
+        weight_decay: float | bool = True,
         lr_scale: float | None | tuple[float | None, ...] = None,
         allow_sequence_tensor_parallel: bool = True,
         allow_no_grad: bool = False,

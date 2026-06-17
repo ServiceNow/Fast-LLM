@@ -264,7 +264,9 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                         name: [optimizer_state[i][slice_] for slice_ in slices]
                         for name, optimizer_state in optimizer_state_shards.items()
                     },
-                    weight_decay=None if weight_decay else 0.0,  # noqa
+                    weight_decay=(
+                        (None if weight_decay else 0.0) if isinstance(weight_decay, bool) else weight_decay
+                    ),  # noqa
                     lr_scale=lr_scale,  # noqa
                 )
                 for (weight_decay, lr_scale), slices in grouped_parameter_slices.items()
@@ -343,14 +345,15 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
 
     @classmethod
     def _reorder_parameter_metas(cls, parameter_metas):
-        reorder_index = sorted(
-            range(len(parameter_metas)),
-            key=lambda i: (
-                parameter_metas[i].param_weight_decay,
-                parameter_metas[i].param_weight_decay == parameter_metas[i].is_tensor_parallel,
-                parameter_metas[i].param_weight_decay != parameter_metas[i].sequence_tensor_parallel,
-            ),
-        )
-        reordered_metas = [parameter_metas[i] for i in reorder_index]
+        def _sort_key(i):
+            # `param_weight_decay` may be a float; reduce it to a bool so the ordering (and the
+            # sequence-parallel contiguity it guarantees) follows the decayed/not-decayed split.
+            weight_decay = bool(parameter_metas[i].param_weight_decay)
+            return (
+                weight_decay,
+                weight_decay == parameter_metas[i].is_tensor_parallel,
+                weight_decay != parameter_metas[i].sequence_tensor_parallel,
+            )
 
-        return reordered_metas
+        reorder_index = sorted(range(len(parameter_metas)), key=_sort_key)
+        return [parameter_metas[i] for i in reorder_index]
