@@ -460,13 +460,14 @@ def fused_gspo_loss_forward_backward(
     """GSPO loss: sequence-level geometric-mean IS-ratio clipping.
 
     Per-segment ratio R_s = exp(mean_t(log p_new_t / p_old_t)), clipped per segment.
-    Per-segment loss = -min(R_s * A_s, clip(R_s) * A_s), summed over segments and divided by `divisor`.
+    Per-segment loss = -min(R_s * A_s, clip(R_s) * A_s), multiplied by the segment
+    token count, summed over segments, and divided by `divisor`.
     Computed as an equivalent per-token sum so the gradient chain mirrors GRPO.
 
     `num_labels_in_seq[t]` is the labeled-token count for the document containing token `t`
-    (broadcast per token by the data preprocessor); it doubles as the geometric-mean denominator
-    and the per-token weight. Using it directly — rather than aggregating token counts inside the
-    kernel — is what makes the loss correct when a document spans SDP/SP ranks (numerator
+    (broadcast per token by the data preprocessor); it is the geometric-mean denominator.
+    Using it directly — rather than aggregating token counts inside the kernel — is what
+    makes the loss correct when a document spans SDP/SP ranks (numerator
     `log_ratio_sum` is all-reduced; denominator is constant and available locally).
 
     Constraint: each document must be visible to a single kernel call (modulo SDP/SP, where
@@ -493,17 +494,17 @@ def fused_gspo_loss_forward_backward(
     # Per-token weight: mask / per-document label count, from the preprocessor.
     # Each labeled token contributes `1 / N_d` so all of doc d's tokens sum to 1 (across
     # SDP/SP ranks too), regardless of how the doc is sharded.
-    token_weight = flat_mask / num_labels_in_seq.reshape(-1).to(log_ratio.dtype).clamp(min=1)
+    mean_token_weight = flat_mask / num_labels_in_seq.reshape(-1).to(log_ratio.dtype).clamp(min=1)
     # Pre-divide the per-token contributions by the per-doc label count, then sum per segment.
     # All tokens in a segment share the same N_d, so this is mathematically equivalent to
     # `log_ratio_sum / N_d` but avoids any per-segment denominator extraction.
     mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, log_ratio.reshape(-1) * token_weight
+        0, flat_document_index, log_ratio.reshape(-1) * mean_token_weight
     )
     # Accumulate in `log_ratio.dtype` (fp32). Casting the product back to `advantages.dtype`
     # before summing would round each token's contribution to a possibly-low input dtype.
     mean_advantage_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, advantages.reshape(-1).to(log_ratio.dtype) * token_weight
+        0, flat_document_index, advantages.reshape(-1).to(log_ratio.dtype) * mean_token_weight
     )
     for reduce_group in (sdp_group, sp_group):
         if reduce_group is not None:
@@ -519,13 +520,13 @@ def fused_gspo_loss_forward_backward(
 
     probability_ratio = segment_ratio[flat_document_index].reshape(log_ratio.shape)
     advantage_per_token = segment_advantage[flat_document_index].reshape(log_ratio.shape)
-    token_weight = token_weight.reshape(log_ratio.shape)
+    loss_weight = loss_mask.to(log_ratio.dtype)
 
     losses = -torch.min(
         probability_ratio * advantage_per_token,
         torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantage_per_token,
     )
-    loss = (losses * token_weight).sum() / divisor
+    loss = (losses * loss_weight).sum() / divisor
 
     new_logprobs_mean = (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
 
@@ -536,7 +537,7 @@ def fused_gspo_loss_forward_backward(
                 torch.clamp_min(advantage_per_token, 0) * (probability_ratio <= 1 + epsilon_high)
                 + torch.clamp_max(advantage_per_token, 0) * (probability_ratio >= 1 - epsilon_low)
             )
-            * token_weight
+            * loss_weight
         )
         predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze_(-1)
         grad = (probability_ratio_grad * probability_ratio).unsqueeze(-1) * predicted_probabilities.scatter_add(

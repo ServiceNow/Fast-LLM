@@ -206,7 +206,7 @@ def reference_gspo_loss(
         ratio = (flat_log_ratio[in_segment].sum() / count_float).exp()
         advantage = (flat_advantages[in_segment].sum() / count_float).detach()
         clipped_ratio = ratio.clamp(1 - epsilon_low, 1 + epsilon_high)
-        total = total + -torch.minimum(ratio * advantage, clipped_ratio * advantage)
+        total = total + -torch.minimum(ratio * advantage, clipped_ratio * advantage) * count_float
         # Matches the kernel's `sum_t logprob_t * mask_t / N_d` — sum of per-document mean logprobs.
         new_logprobs = new_logprobs + target_log_probabilities.reshape(-1)[in_segment].sum() / count_float
     total = total / num_segments
