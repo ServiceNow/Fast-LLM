@@ -245,7 +245,14 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
                     end = fsdp.index_buffer_to_shard(buffer_begin + (lr_scale_index + 1) * chunk_size)
                     if lr_scale == 0 or begin == end:
                         continue
-                    optimizer_params = (parameter_meta.param_weight_decay, lr_scale)
+                    # Resolve to the optimizer weight decay so the group key is unambiguous:
+                    # `True` -> `None` (optimizer default), `False` -> `0.0`, a float -> itself.
+                    # Keying on the raw value would merge `True` with a literal `1.0`.
+                    weight_decay = parameter_meta.param_weight_decay
+                    group_weight_decay = (
+                        (None if weight_decay else 0.0) if isinstance(weight_decay, bool) else weight_decay
+                    )
+                    optimizer_params = (group_weight_decay, lr_scale)
                     if optimizer_params in grouped_parameter_slices:
                         last_slice = grouped_parameter_slices[optimizer_params][-1]
                         if begin == last_slice.stop:
@@ -257,19 +264,17 @@ class StageBase[ConfigType: StageConfig](Configurable[ConfigType]):
 
             param_groups += [
                 param_group_cls(
-                    name=f"wd_{weight_decay}_lr_scale_{lr_scale}",  # noqa
+                    name=f"wd_{group_weight_decay}_lr_scale_{lr_scale}",  # noqa
                     params=[fsdp.weight_shard[slice_] for slice_ in slices],  # noqa
                     grads=[fsdp.grad_shard[slice_] for slice_ in slices],  # noqa
                     **{  # noqa
                         name: [optimizer_state[i][slice_] for slice_ in slices]
                         for name, optimizer_state in optimizer_state_shards.items()
                     },
-                    weight_decay=(
-                        (None if weight_decay else 0.0) if isinstance(weight_decay, bool) else weight_decay
-                    ),  # noqa
+                    weight_decay=group_weight_decay,  # noqa
                     lr_scale=lr_scale,  # noqa
                 )
-                for (weight_decay, lr_scale), slices in grouped_parameter_slices.items()
+                for (group_weight_decay, lr_scale), slices in grouped_parameter_slices.items()
             ]
 
         # Get the weight slices to use for grad norm computation, merging consecutive slices.
