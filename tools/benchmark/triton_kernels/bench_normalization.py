@@ -29,14 +29,30 @@ try:
 except ImportError:
     _fast_normalization_available = False
 
-# (batch*seq, hidden). Numel fixed at 32M to mimic a constant training memory
-# budget across model widths; hidden swept from 1K to 16K.
+# (batch*seq, hidden). Three isovolumetric bands (32M / 16M / 8M elements) each
+# sweep hidden from 1K to 16K, so the column-width effect can be read at a fixed
+# total size and row-count scaling at a fixed width (e.g. cols=2048 at rows
+# 16384/8192/4096). Smaller bands cover tensor-parallel-sharded / smaller-model
+# regimes where the per-rank hidden lands in the problematic wide range.
 _SHAPES = [
+    # 32M elements
     (32768, 1024),
     (16384, 2048),
     (8192, 4096),
     (4096, 8192),
     (2048, 16384),
+    # 16M elements
+    (16384, 1024),
+    (8192, 2048),
+    (4096, 4096),
+    (2048, 8192),
+    (1024, 16384),
+    # 8M elements
+    (8192, 1024),
+    (4096, 2048),
+    (2048, 4096),
+    (1024, 8192),
+    (512, 16384),
 ]
 _EPS = 1e-5
 
@@ -138,6 +154,11 @@ def _layer_norm_triton_fwd_bwd(inputs: Inputs) -> dict:
     }
 
 
+def _layer_norm_triton_backward(inputs: Inputs):
+    output = _layer_norm_triton(inputs)
+    return lambda: output.backward(inputs["grad_output"])
+
+
 def _rms_norm_triton_fwd(inputs: Inputs) -> dict:
     return {"output": _rms_norm_triton(inputs)}
 
@@ -150,6 +171,11 @@ def _rms_norm_triton_fwd_bwd(inputs: Inputs) -> dict:
         "grad_input": inputs["input"].grad,
         "grad_weight": _param_grad(inputs["weight"]),
     }
+
+
+def _rms_norm_triton_backward(inputs: Inputs):
+    output = _rms_norm_triton(inputs)
+    return lambda: output.backward(inputs["grad_output"])
 
 
 def _layer_norm_apex_fused(input_: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
@@ -186,6 +212,7 @@ def benchmarks(
         grad_input_keys=("input", "weight", "bias"),
         grad_output_key="grad_output",
         extra_functions=_LAYER_NORM_EXTRAS,
+        isolate_backward=True,
     )
     if TritonConfig.enabled():
         layer_norm_variants.append(
@@ -193,6 +220,7 @@ def benchmarks(
                 name="fast_llm_triton",
                 fwd=_layer_norm_triton_fwd,
                 fwd_bwd=_layer_norm_triton_fwd_bwd,
+                backward=_layer_norm_triton_backward,
                 reset_inputs=make_grad_reset(("input", "weight", "bias")),
             )
         )
@@ -202,6 +230,7 @@ def benchmarks(
         grad_input_keys=("input", "weight"),
         grad_output_key="grad_output",
         extra_functions=_RMS_NORM_EXTRAS,
+        isolate_backward=True,
     )
     if TritonConfig.enabled():
         rms_norm_variants.append(
@@ -209,6 +238,7 @@ def benchmarks(
                 name="fast_llm_triton",
                 fwd=_rms_norm_triton_fwd,
                 fwd_bwd=_rms_norm_triton_fwd_bwd,
+                backward=_rms_norm_triton_backward,
                 reset_inputs=make_grad_reset(("input", "weight")),
             )
         )

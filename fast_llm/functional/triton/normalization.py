@@ -59,6 +59,44 @@ def triton_normalization_forward_kernel(
 
 
 @triton_jit()
+def _normalization_backward_terms(
+    output_ptr,
+    grad_output_ptr,
+    weight_ptr,
+    bias_ptr,
+    offsets,
+    cols,
+    mask,
+    col_mask,
+    inv_var,
+    eps,
+    has_bias: tl_constexpr,
+    has_weight: tl_constexpr,
+    zero_centered: tl_constexpr,
+):
+    # Load one (block_size_row, block_size_col) tile and derive the two per-element terms the
+    # backward needs: the normalized input and `weight * grad_output * inv_var`. Also returns
+    # the loaded grad_output for the parameter-grad partials.
+    output = tl.load(output_ptr + offsets, mask=mask, other=0).to(tl.float32)
+    grad_output = tl.load(grad_output_ptr + offsets, mask=mask, other=0).to(tl.float32)
+    if has_bias:
+        bias = tl.load(bias_ptr + cols, mask=col_mask).to(tl.float32)
+        output = output - bias
+    if has_weight:
+        weight = tl.load(weight_ptr + cols, mask=col_mask).to(tl.float32)
+        if zero_centered:
+            weight += 1
+        weight_regularised = tl.where(weight >= 0, tl.maximum(weight, eps), tl.minimum(weight, -eps))
+        input_normalized = tl.where(mask, output / weight_regularised, 0.0)
+        weight_grad_output = tl.where(mask, weight * grad_output * inv_var, 0.0)
+    else:
+        # weight == 1 everywhere: forward output = input * inv_var, so input_normalized = output
+        input_normalized = tl.where(mask, output, 0.0)
+        weight_grad_output = tl.where(mask, grad_output * inv_var, 0.0)
+    return input_normalized, weight_grad_output, grad_output
+
+
+@triton_jit()
 def triton_normalization_backward_kernel_1(
     grad_input_ptr,
     grad_output_ptr,
@@ -75,64 +113,141 @@ def triton_normalization_backward_kernel_1(
     has_weight: tl_constexpr,
     parameter_grad: tl_constexpr,
     zero_centered: tl_constexpr,
-    block_size: tl_constexpr,
+    block_size_col: tl_constexpr,
     block_size_row: tl_constexpr,
+    two_pass: tl_constexpr,
 ):
-    # row_start = tl.program_id(0)*block_size_row
-    rows = tl.program_id(0) * block_size_row + tl_arange(0, block_size_row)[:, None]
-    row_mask = rows < n_rows
+    # Each program owns a `block_size_row × block_size_col` register tile (occupancy set by the
+    # tile, independent of n_cols) and writes grad_input for every row it visits while
+    # accumulating the per-column parameter-grad partials that kernel_2 later reduces.
+    #
+    # grad_input[r, c] = weight_grad_output[r, c] - input_normalized[r, c] * correction[r],
+    # where correction[r] = mean_c(input_normalized * weight_grad_output) (+ mean_c(weight_grad_output)
+    # for the bias term). The column mean needs a full row, so a row wider than one chunk uses two
+    # passes (pass 1 reduces the per-row corrections, pass 2 re-reads to write grad_input and the
+    # partials); a row that fits in one chunk is single pass.
+    #
+    # Single pass grid-strides the rows: the launch bounds the program count (and thus the
+    # partial-buffer height kernel_2 reduces) independently of n_rows, so each program folds many
+    # row tiles into one fp32-accumulated partial instead of emitting one partial per tile — the
+    # difference between a small reduction for kernel_2 and one whose height grows with n_rows.
+    # Two pass keeps one tile per program (its rows already stride the column chunks, and a
+    # per-chunk cross-tile accumulator would not fit in registers at wide n_cols).
+    row_block = tl.program_id(0)
 
-    cols = tl_arange(0, block_size)[None, :]
+    if two_pass:
+        rows = row_block * block_size_row + tl_arange(0, block_size_row)[:, None]
+        row_mask = rows < n_rows
+        inv_var = tl.load(inv_var_ptr + rows, mask=row_mask)
+        normalization_correction = tl_full((block_size_row, 1), 0.0, dtype=tl.float32)
+        if has_bias:
+            bias_correction = tl_full((block_size_row, 1), 0.0, dtype=tl.float32)
+        for col_start in range(0, n_cols, block_size_col):
+            cols = col_start + tl_arange(0, block_size_col)[None, :]
+            col_mask = cols < n_cols
+            mask = col_mask & row_mask
+            input_normalized, weight_grad_output, _ = _normalization_backward_terms(
+                output_ptr,
+                grad_output_ptr,
+                weight_ptr,
+                bias_ptr,
+                rows * n_cols + cols,
+                cols,
+                mask,
+                col_mask,
+                inv_var,
+                eps,
+                has_bias,
+                has_weight,
+                zero_centered,
+            )
+            normalization_correction += tl.sum(input_normalized * weight_grad_output, axis=1)[:, None]
+            if has_bias:
+                bias_correction += tl.sum(weight_grad_output, axis=1)[:, None]
+        normalization_correction = normalization_correction / n_cols
+        if has_bias:
+            bias_correction = bias_correction / n_cols
 
-    col_mask = cols < n_cols
-    mask = col_mask & row_mask
-    offsets = rows * n_cols + cols
-
-    # Load data
-    output = tl.load(output_ptr + offsets, mask=mask, other=0).to(tl.float32)
-    grad_output = tl.load(grad_output_ptr + offsets, mask=mask, other=0).to(tl.float32)
-    inv_var = tl.load(inv_var_ptr + rows, mask=row_mask)
-
-    # Bias
-    if has_bias:
-        bias = tl.load(bias_ptr + cols, mask=col_mask).to(tl.float32)
-        output = output - bias
-
-    # Input grad
-    if has_weight:
-        weight = tl.load(weight_ptr + cols, mask=col_mask).to(tl.float32)
-        if zero_centered:
-            weight += 1
-        weight_regularised = tl.where(weight >= 0, tl.maximum(weight, eps), tl.minimum(weight, -eps))
-        input_normalized = tl.where(mask, output / weight_regularised, 0.0)
-        weight_grad_output = tl.where(mask, weight * grad_output * inv_var, 0.0)
+        for col_start in range(0, n_cols, block_size_col):
+            cols = col_start + tl_arange(0, block_size_col)[None, :]
+            col_mask = cols < n_cols
+            mask = col_mask & row_mask
+            offsets = rows * n_cols + cols
+            input_normalized, weight_grad_output, grad_output = _normalization_backward_terms(
+                output_ptr,
+                grad_output_ptr,
+                weight_ptr,
+                bias_ptr,
+                offsets,
+                cols,
+                mask,
+                col_mask,
+                inv_var,
+                eps,
+                has_bias,
+                has_weight,
+                zero_centered,
+            )
+            grad_input = weight_grad_output - input_normalized * normalization_correction
+            if has_bias:
+                grad_input = grad_input - bias_correction
+            tl.store(grad_input_ptr + offsets, grad_input, mask=mask)
+            if parameter_grad:
+                # Reduce the row partials in fp32 (the product/sum stay fp32; the store casts to
+                # the partial buffer's dtype). Casting before the sum would reduce in low
+                # precision and degrade the parameter grads.
+                parameter_offsets = row_block * n_cols + cols
+                grad_weight_partial = tl.sum(grad_output * input_normalized, axis=0)[None, :]
+                tl.store(grad_weight_partial_ptr + parameter_offsets, grad_weight_partial, mask=col_mask)
+                if has_bias:
+                    grad_bias_partial = tl.sum(grad_output, axis=0)[None, :]
+                    tl.store(grad_bias_partial_ptr + parameter_offsets, grad_bias_partial, mask=col_mask)  # noqa
     else:
-        # weight == 1 everywhere: forward output = input * inv_var, so input_normalized = output
-        input_normalized = tl.where(mask, output, 0.0)
-        weight_grad_output = tl.where(mask, grad_output * inv_var, 0.0)
-
-    grad_input = weight_grad_output - input_normalized * (
-        tl.sum(input_normalized * weight_grad_output, axis=1)[:, None] / n_cols
-    )
-
-    if has_bias:
-        grad_input = grad_input - tl.sum(weight_grad_output, axis=1)[:, None] / n_cols
-    tl.store(grad_input_ptr + offsets, grad_input, mask=mask)
-
-    # Parameter grad partial sums
-    if parameter_grad:
-        parameter_offsets = tl.program_id(0) * n_cols + cols
-        grad_weight_partial_ptr = grad_weight_partial_ptr + parameter_offsets
-        grad_weight_partial = (grad_output * input_normalized).to(weight.dtype)
-        grad_weight_partial = tl.sum(grad_weight_partial, axis=0)[None, :]
-
-        if has_bias:
-            grad_bias_partial_ptr = grad_bias_partial_ptr + parameter_offsets
-            grad_bias_partial = tl.sum(grad_output.to(weight.dtype), axis=0)[None, :]
-
-        tl.store(grad_weight_partial_ptr, grad_weight_partial, mask=col_mask)
-        if has_bias:
-            tl.store(grad_bias_partial_ptr, grad_bias_partial, mask=col_mask)  # noqa
+        cols = tl_arange(0, block_size_col)[None, :]
+        col_mask = cols < n_cols
+        if parameter_grad:
+            # fp32 accumulator folded over every row tile this program visits (one store per
+            # program, so kernel_2 reduces only `num_programs` rows). fp32 here, store casts.
+            grad_weight_partial = tl_full((1, block_size_col), 0.0, dtype=tl.float32)
+            if has_bias:
+                grad_bias_partial = tl_full((1, block_size_col), 0.0, dtype=tl.float32)
+        row_step = tl.num_programs(0) * block_size_row
+        for row_start in range(row_block * block_size_row, n_rows, row_step):
+            rows = row_start + tl_arange(0, block_size_row)[:, None]
+            row_mask = rows < n_rows
+            inv_var = tl.load(inv_var_ptr + rows, mask=row_mask)
+            mask = col_mask & row_mask
+            offsets = rows * n_cols + cols
+            input_normalized, weight_grad_output, grad_output = _normalization_backward_terms(
+                output_ptr,
+                grad_output_ptr,
+                weight_ptr,
+                bias_ptr,
+                offsets,
+                cols,
+                mask,
+                col_mask,
+                inv_var,
+                eps,
+                has_bias,
+                has_weight,
+                zero_centered,
+            )
+            grad_input = weight_grad_output - input_normalized * (
+                tl.sum(input_normalized * weight_grad_output, axis=1)[:, None] / n_cols
+            )
+            if has_bias:
+                grad_input = grad_input - tl.sum(weight_grad_output, axis=1)[:, None] / n_cols
+            tl.store(grad_input_ptr + offsets, grad_input, mask=mask)
+            if parameter_grad:
+                grad_weight_partial += tl.sum(grad_output * input_normalized, axis=0)[None, :]
+                if has_bias:
+                    grad_bias_partial += tl.sum(grad_output, axis=0)[None, :]
+        if parameter_grad:
+            parameter_offsets = row_block * n_cols + cols
+            tl.store(grad_weight_partial_ptr + parameter_offsets, grad_weight_partial, mask=col_mask)
+            if has_bias:
+                tl.store(grad_bias_partial_ptr + parameter_offsets, grad_bias_partial, mask=col_mask)  # noqa
 
 
 @triton_jit()
@@ -223,6 +338,49 @@ def triton_normalization_forward(
     return output, context
 
 
+# kernel_1 launch configuration. block_size_row × block_size_col is the register tile
+# that governs occupancy; rows wider than one chunk use the two-pass path.
+_KERNEL_1_TILE = 8192  # target register tile (elements) for the two-pass path
+_KERNEL_1_COL_CHUNK = 2048  # column-chunk width once a row no longer fits in one tile
+_KERNEL_1_SINGLE_PASS_MAX_COLS = 4096  # widest row still handled in a single pass
+_KERNEL_1_MAX_ROWS = 8  # cap on block_size_row (the register-tile height)
+# Single-pass bound on the program count (and thus the partial-buffer height kernel_2 reduces):
+# enough programs per SM to saturate memory bandwidth, but small enough that kernel_2's reduction
+# stays cheap. Two waves is the knee on H100 — one wave (×1) starves grad_input latency-hiding on
+# tall-narrow rows, more only re-inflates kernel_2. Programs beyond `n_rows / block_size_row` are
+# pointless, so it is also capped there.
+_KERNEL_1_ROW_BLOCKS_PER_SM = 2
+
+_kernel_1_sm_count: int | None = None
+
+
+def _kernel_1_target_row_blocks(device: torch.device) -> int:
+    global _kernel_1_sm_count
+    if _kernel_1_sm_count is None:
+        _kernel_1_sm_count = torch.cuda.get_device_properties(device).multi_processor_count
+    return _kernel_1_sm_count * _KERNEL_1_ROW_BLOCKS_PER_SM
+
+
+def _triton_normalization_backward_kernel_1_config(n_cols: int) -> tuple[int, int, bool, int]:
+    block_size = triton.next_power_of_2(n_cols)
+    max_block_size = TritonConfig.MAX_BLOCK_SIZE_BYTES // 4
+    if block_size <= _KERNEL_1_SINGLE_PASS_MAX_COLS:
+        # Whole row fits in one chunk: single pass, no column re-read. Cap the row count so a
+        # narrow row doesn't blow up the register tile (the old `max_block_size // block_size`
+        # gave 16 rows at 1024 cols, hurting occupancy); wider rows keep their smaller count.
+        block_size_col = block_size
+        two_pass = False
+        block_size_row = max(1, min(max_block_size // block_size_col, _KERNEL_1_MAX_ROWS))
+    else:
+        # Wide row: chunk the columns so the register tile stays small while block_size_row is
+        # chosen independently of n_cols, keeping kernel_2's partial buffer small.
+        block_size_col = _KERNEL_1_COL_CHUNK
+        two_pass = True
+        block_size_row = max(1, _KERNEL_1_TILE // block_size_col)
+    num_warps = min(max(block_size_col // 256, 1), 8)
+    return block_size_col, block_size_row, two_pass, num_warps
+
+
 def triton_normalization_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> torch.Tensor:
     output, weight, bias, inv_var, eps, zero_centered = context
     # We delete the context to prevent a memory leak
@@ -246,14 +404,12 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
     block_size_m = 64
     block_size_n = 8
 
-    block_size = triton.next_power_of_2(n_cols)
-    max_block_size = TritonConfig.MAX_BLOCK_SIZE_BYTES // 4
-    assert block_size <= max_block_size
-    block_size_row = max_block_size // block_size
+    block_size_col, block_size_row, two_pass, num_warps = _triton_normalization_backward_kernel_1_config(n_cols)
 
-    num_warps = min(max(block_size // 256, 1), 8)
-
-    num_blocks_row = triton.cdiv(n_rows, block_size_row)
+    num_tiles = triton.cdiv(n_rows, block_size_row)
+    # Single pass grid-strides the rows, so the program count (the partial-buffer height) is bounded
+    # below the tile count; two pass keeps one program per tile.
+    num_blocks_row = num_tiles if two_pass else min(num_tiles, _kernel_1_target_row_blocks(grad_output.device))
 
     grad_input = torch.empty_like(grad_output)
 
@@ -290,8 +446,9 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
         has_weight,
         parameter_grad,
         zero_centered,
-        block_size,
+        block_size_col,
         block_size_row,
+        two_pass,
         num_warps=num_warps,
     )
     if parameter_grad:
