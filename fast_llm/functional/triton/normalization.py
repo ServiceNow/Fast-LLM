@@ -338,12 +338,15 @@ def triton_normalization_forward(
     return output, context
 
 
-# kernel_1 launch configuration. block_size_row × block_size_col is the register tile
-# that governs occupancy; rows wider than one chunk use the two-pass path.
-_KERNEL_1_TILE = 8192  # target register tile (elements) for the two-pass path
-_KERNEL_1_COL_CHUNK = 2048  # column-chunk width once a row no longer fits in one tile
-_KERNEL_1_SINGLE_PASS_MAX_COLS = 4096  # widest row still handled in a single pass
-_KERNEL_1_MAX_ROWS = 8  # cap on block_size_row (the register-tile height)
+# kernel_1 launch configuration. block_size_row × block_size_col is the register tile that governs
+# occupancy. A row is handled in one pass when its tile fits in registers; otherwise the columns are
+# chunked and the row is processed in two passes (reduce the corrections, then re-read to write
+# grad_input and the partials). The re-read is the cost of two-pass, so single pass is used as wide
+# as it fits.
+_KERNEL_1_NARROW_MAX_COLS = 4096  # rows this narrow always fit a multi-row single-pass tile
+_KERNEL_1_MAX_ROWS = 8  # cap on block_size_row (the register-tile height) for narrow rows
+_KERNEL_1_WIDE_COL_CHUNK = 4096  # two-pass column-chunk width
+_KERNEL_1_WIDE_ROWS = 4  # two-pass block_size_row
 # Single-pass bound on the program count (and thus the partial-buffer height kernel_2 reduces):
 # enough programs per SM to saturate memory bandwidth, but small enough that kernel_2's reduction
 # stays cheap. Two waves is the knee on H100 — one wave (×1) starves grad_input latency-hiding on
@@ -361,24 +364,41 @@ def _kernel_1_target_row_blocks(device: torch.device) -> int:
     return _kernel_1_sm_count * _KERNEL_1_ROW_BLOCKS_PER_SM
 
 
-def _triton_normalization_backward_kernel_1_config(n_cols: int) -> tuple[int, int, bool, int]:
+def _kernel_1_wide_single_pass(block_size: int, n_rows: int, has_bias: bool, max_block_size: int) -> bool:
+    # A wide row can still go single pass — one warp-saturated tile spanning the whole row — which
+    # avoids the two-pass re-read. Bias roughly doubles the live registers per element, so the tile
+    # only fits up to half the cap with bias. When it fits, single pass wins once there are enough
+    # rows to fill the SMs; with fewer rows the two-pass chunking is faster.
+    fits = block_size <= (max_block_size // 2 if has_bias else max_block_size)
+    enough_rows = n_rows >= block_size // (2 if has_bias else 8)
+    return fits and enough_rows
+
+
+def _triton_normalization_backward_kernel_1_config(
+    n_cols: int, n_rows: int, has_bias: bool
+) -> tuple[int, int, bool, int, int]:
     block_size = triton.next_power_of_2(n_cols)
     max_block_size = TritonConfig.MAX_BLOCK_SIZE_BYTES // 4
-    if block_size <= _KERNEL_1_SINGLE_PASS_MAX_COLS:
-        # Whole row fits in one chunk: single pass, no column re-read. Cap the row count so a
-        # narrow row doesn't blow up the register tile (the old `max_block_size // block_size`
-        # gave 16 rows at 1024 cols, hurting occupancy); wider rows keep their smaller count.
+    if block_size <= _KERNEL_1_NARROW_MAX_COLS:
+        # Whole row in one chunk, multiple rows per tile. Cap the row count so a narrow row doesn't
+        # blow up the register tile (hurting occupancy); wider rows keep their smaller count.
         block_size_col = block_size
-        two_pass = False
         block_size_row = max(1, min(max_block_size // block_size_col, _KERNEL_1_MAX_ROWS))
+        two_pass = False
+        num_warps = min(max(block_size_col // 256, 1), 8)
+    elif _kernel_1_wide_single_pass(block_size, n_rows, has_bias, max_block_size):
+        # Whole row in one chunk, one row per tile, maximum warps to cover the wide reduction.
+        block_size_col = block_size
+        block_size_row = 1
+        two_pass = False
+        num_warps = 32
     else:
-        # Wide row: chunk the columns so the register tile stays small while block_size_row is
-        # chosen independently of n_cols, keeping kernel_2's partial buffer small.
-        block_size_col = _KERNEL_1_COL_CHUNK
+        # Wide row: chunk the columns and re-read.
+        block_size_col = _KERNEL_1_WIDE_COL_CHUNK
+        block_size_row = _KERNEL_1_WIDE_ROWS
         two_pass = True
-        block_size_row = max(1, _KERNEL_1_TILE // block_size_col)
-    num_warps = min(max(block_size_col // 256, 1), 8)
-    return block_size_col, block_size_row, two_pass, num_warps
+        num_warps = 16
+    return block_size_col, block_size_row, two_pass, num_warps, 1
 
 
 def triton_normalization_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> torch.Tensor:
@@ -404,7 +424,9 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
     block_size_m = 64
     block_size_n = 8
 
-    block_size_col, block_size_row, two_pass, num_warps = _triton_normalization_backward_kernel_1_config(n_cols)
+    block_size_col, block_size_row, two_pass, num_warps, num_stages = _triton_normalization_backward_kernel_1_config(
+        n_cols, n_rows, has_bias
+    )
 
     num_tiles = triton.cdiv(n_rows, block_size_row)
     # Single pass grid-strides the rows, so the program count (the partial-buffer height) is bounded
@@ -450,6 +472,7 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
         block_size_row,
         two_pass,
         num_warps=num_warps,
+        num_stages=num_stages,
     )
     if parameter_grad:
         triton_normalization_backward_kernel_2[(triton.cdiv(n_cols, block_size_n),)](
