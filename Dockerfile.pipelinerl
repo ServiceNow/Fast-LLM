@@ -1,0 +1,113 @@
+# syntax=docker/dockerfile:1.7-labs
+FROM nvcr.io/nvidia/vllm:26.02-py3
+
+# Install dependencies.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y acl git-lfs libjpeg-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && git lfs install
+
+# Set the working directory.
+WORKDIR /app
+# Make /app and /home world-rwx so the cluster's dynamically-assigned UIDs can write to them.
+# Subdirs are created explicitly because Docker uses the wrong permissions for implicit creation;
+# the default ACL then propagates to files copied or created under each path. Our primary cluster
+# mounts /home from the outside, but other deployments may run the image as-is with the
+# in-image /home, so we keep it permissive here. /usr/local/lib/python3.12 deliberately stays at
+# default perms so a compromised process can't tamper with installed Python packages or system
+# binaries.
+RUN mkdir -m 777 /app/Megatron-LM /app/examples /app/fast_llm /app/tests /app/tools \
+    && setfacl -m d:u::rwx,d:g::rwx,d:o::rwx,u::rwx,g::rwx,o::rwx /app /home
+
+# The base image enforces versions for things like pytest for no good reason.
+ENV PIP_CONSTRAINT=""
+RUN pip install --no-cache-dir "pybind11>=3.0.1"
+RUN git clone --depth 1 https://github.com/NVIDIA/apex.git /opt/apex
+RUN cd /opt/apex \
+    && python - <<'PY'
+from pathlib import Path
+
+setup_py = Path("setup.py")
+source = setup_py.read_text()
+for extension_name in [
+    "syncbn",
+    "mlp_cuda",
+    "fused_dense_cuda",
+    "scaled_upper_triang_masked_softmax_cuda",
+    "generic_scaled_masked_softmax_cuda",
+    "scaled_masked_softmax_cuda",
+    "scaled_softmax_cuda",
+    "fused_rotary_positional_embedding",
+    "fused_weight_gradient_mlp_cuda",
+]:
+    marker = f'name="{extension_name}"'
+    index = source.find(marker)
+    if index < 0:
+        raise RuntimeError(f"Could not find Apex extension {extension_name}")
+    start = source.rfind("ext_modules.append(", 0, index)
+    depth = 0
+    end = start
+    while end < len(source):
+        if source[end] == "(":
+            depth += 1
+        elif source[end] == ")":
+            depth -= 1
+            if depth == 0:
+                end += 1
+                break
+        end += 1
+    source = source[:start] + source[end:]
+setup_py.write_text(source)
+PY
+RUN cd /opt/apex \
+    && TORCH_CUDA_ARCH_LIST="9.0" MAX_JOBS=2 pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation \
+    --config-settings "--build-option=--cpp_ext" \
+    --config-settings "--build-option=--cuda_ext" \
+    --config-settings "--build-option=--fast_layer_norm" \
+    .
+# There is no pre-build mamba image for pytorch 2.8, we build it before the rest to avoid rebuilds.
+# We need to compile from the repo because of https://github.com/state-spaces/mamba/issues/720 (same for causal-conv1d)
+# We set the number of workers to avoid OOM when compiling on laptop. (TODO: Can we make it configurable?)
+RUN MAX_JOBS=2 pip install --no-build-isolation "causal-conv1d @ git+https://github.com/Dao-AILab/causal-conv1d@v1.5.4"
+RUN MAX_JOBS=2 pip install --no-build-isolation mamba-ssm==2.3.2.post1
+RUN MAX_JOBS=2 pip install --no-build-isolation "flash-linear-attention @ git+https://github.com/fla-org/flash-linear-attention@67eee20c8503cd19eeb52aa1b99821308e9260c5"
+# Copy dependency files. Source files end up root-owned and read-only for non-root processes;
+# /app itself stays writable so the runtime UID can create new files (logs, __pycache__, etc.).
+COPY setup.py setup.cfg pyproject.toml ./
+COPY ./fast_llm_external_models/__init__.py fast_llm_external_models/
+COPY ./fast_llm/__init__.py fast_llm/
+COPY ./fast_llm/csrc/ fast_llm/csrc/
+
+# Install dependencies within the virtual environment.
+RUN pip install --no-cache-dir --no-build-isolation -e ".[CORE,OPTIONAL,HUGGINGFACE,SSM,VISION,GENERATION,STREAMING,DEV]" "transformers>=4.57.3,<5.0.0"
+
+# Build DeepSpeed before PipelineRL so DeepSpeed comparisons fail at image build time, not at runtime.
+RUN TORCH_CUDA_ARCH_LIST="9.0" MAX_JOBS=2 DS_BUILD_UTILS=1 \
+    pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation "deepspeed~=0.18.0" \
+    && python -c "import deepspeed; print('deepspeed', deepspeed.__version__)"
+
+# Install PipelineRL without replacing the NVIDIA vLLM stack.
+RUN python -c "import torch, transformers, vllm; print('before torch', torch.__version__); print('before transformers', transformers.__version__); print('before vllm', vllm.__version__)" \
+    && git clone --depth 1 --branch fast-llm https://github.com/ServiceNow/PipelineRL.git /opt/PipelineRL \
+    && cd /opt/PipelineRL \
+    && sed -i -E \
+        -e '/^[[:space:]]*"torch[[:space:]]*[~<>=!]/d' \
+        -e '/^[[:space:]]*"vllm[[:space:]]*[~<>=!]/d' \
+        -e '/^[[:space:]]*"transformers[[:space:]]*[~<>=!]/d' \
+        pyproject.toml \
+    && pip install --no-cache-dir --no-build-isolation -e ".[lora]" \
+    && python -c "import fast_llm, pipelinerl, torch, transformers, vllm; print('after torch', torch.__version__); print('after transformers', transformers.__version__); print('after vllm', vllm.__version__)" \
+    && pip check
+
+# Copy the remaining source code (read-only for non-root, see the note on dependency files above).
+COPY ./Megatron-LM Megatron-LM
+COPY ./examples examples
+COPY ./tests tests
+COPY ./tools tools
+COPY ./fast_llm_external_models fast_llm_external_models
+COPY --exclude=./fast_llm/csrc/ ./fast_llm/ fast_llm/
+
+# Set a dummy default user so we don't run in root by default.
+# The image is still compatible with any user id.
+RUN useradd user
+USER user
