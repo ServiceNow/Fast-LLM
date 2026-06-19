@@ -49,6 +49,13 @@ class ParameterConfig(ModuleConfig):
         " Combines multiplicatively with the scale set by the parent layer, if applicable.",
         hint=FieldHint.feature,
     )
+    weight_decay: float | bool | None = Field(
+        default=None,
+        desc="Override the default weight decay for this parameter."
+        " Set to `True` or `False` to enable or disable the optimizer weight decay,"
+        " or to a number to use a specific value.",
+        hint=FieldHint.feature,
+    )
     # TODO: Initialization, lr_scale
 
     def get_parameter(
@@ -67,7 +74,7 @@ class ParameterConfig(ModuleConfig):
             dims,
             init_method=default_initialization if self.initialization.is_default else self.initialization,
             lr_scale=combine_lr_scales(lr_scale, self.lr_scale),
-            weight_decay=weight_decay,
+            weight_decay=weight_decay if self.weight_decay is None else self.weight_decay,
             allow_sequence_tensor_parallel=allow_sequence_tensor_parallel,
         )
         if peft is not None:

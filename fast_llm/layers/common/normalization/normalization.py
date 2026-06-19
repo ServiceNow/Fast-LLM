@@ -216,12 +216,14 @@ class LayerNormalization[ConfigType: LayerNormalizationConfig](Normalization[Con
         self.weight = self._config.weight.get_parameter(
             (hidden_dim,),
             default_initialization=init_zeros_ if self._config.zero_centered else init_ones_,
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=None,
         )
         self.bias = self._config.bias.get_parameter(
             (hidden_dim,),
             default_initialization=init_zeros_,
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=None,
         )
@@ -282,6 +284,7 @@ class RMSNormalization[ConfigType: RMSNormalizationConfig](Normalization[ConfigT
         self.weight = self._config.weight.get_parameter(
             (hidden_dim,),
             default_initialization=init_zeros_ if self._config.zero_centered else init_ones_,
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=None,
         )
