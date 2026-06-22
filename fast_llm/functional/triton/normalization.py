@@ -354,14 +354,13 @@ _KERNEL_1_WIDE_ROWS = 4  # two-pass block_size_row
 # pointless, so it is also capped there.
 _KERNEL_1_ROW_BLOCKS_PER_SM = 2
 
-_kernel_1_sm_count: int | None = None
+_kernel_1_sm_counts: dict[int | None, int] = {}
 
 
 def _kernel_1_target_row_blocks(device: torch.device) -> int:
-    global _kernel_1_sm_count
-    if _kernel_1_sm_count is None:
-        _kernel_1_sm_count = torch.cuda.get_device_properties(device).multi_processor_count
-    return _kernel_1_sm_count * _KERNEL_1_ROW_BLOCKS_PER_SM
+    if device.index not in _kernel_1_sm_counts:
+        _kernel_1_sm_counts[device.index] = torch.cuda.get_device_properties(device).multi_processor_count
+    return _kernel_1_sm_counts[device.index] * _KERNEL_1_ROW_BLOCKS_PER_SM
 
 
 def _kernel_1_wide_single_pass(block_size: int, n_rows: int, has_bias: bool, max_block_size: int) -> bool:
