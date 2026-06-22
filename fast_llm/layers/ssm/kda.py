@@ -343,6 +343,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
         self.dt_bias: ParameterMeta = self._config.dt_bias_weight.get_parameter(
             (self._projection_dim,),
             default_initialization=init_ones_,
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
@@ -351,6 +352,7 @@ class KimiDeltaAttention[ConfigType: KimiDeltaAttentionConfig](BlockWithBias[Con
             default_initialization=LambdaInitializer(
                 lambda _, tensor, generator: tensor.uniform_(1, 16, generator=generator).log_()
             ),
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
