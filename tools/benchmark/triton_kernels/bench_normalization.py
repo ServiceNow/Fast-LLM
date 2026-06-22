@@ -2,6 +2,7 @@
 `grad_buffer` attribute (Fast-LLM convention) instead of autograd's `.grad`."""
 
 import dataclasses
+import typing
 
 import torch
 
@@ -154,7 +155,7 @@ def _layer_norm_triton_fwd_bwd(inputs: Inputs) -> dict:
     }
 
 
-def _layer_norm_triton_backward(inputs: Inputs):
+def _layer_norm_triton_backward(inputs: Inputs) -> typing.Callable[[], None]:
     output = _layer_norm_triton(inputs)
     return lambda: output.backward(inputs["grad_output"])
 
@@ -173,7 +174,7 @@ def _rms_norm_triton_fwd_bwd(inputs: Inputs) -> dict:
     }
 
 
-def _rms_norm_triton_backward(inputs: Inputs):
+def _rms_norm_triton_backward(inputs: Inputs) -> typing.Callable[[], None]:
     output = _rms_norm_triton(inputs)
     return lambda: output.backward(inputs["grad_output"])
 
