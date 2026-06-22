@@ -376,7 +376,7 @@ def _kernel_1_wide_single_pass(block_size: int, n_rows: int, has_bias: bool, max
 
 def _triton_normalization_backward_kernel_1_config(
     n_cols: int, n_rows: int, has_bias: bool
-) -> tuple[int, int, bool, int, int]:
+) -> tuple[int, int, bool, int]:
     block_size = triton.next_power_of_2(n_cols)
     max_block_size = TritonConfig.MAX_BLOCK_SIZE_BYTES // 4
     if block_size <= _KERNEL_1_NARROW_MAX_COLS:
@@ -398,7 +398,7 @@ def _triton_normalization_backward_kernel_1_config(
         block_size_row = _KERNEL_1_WIDE_ROWS
         two_pass = True
         num_warps = 16
-    return block_size_col, block_size_row, two_pass, num_warps, 1
+    return block_size_col, block_size_row, two_pass, num_warps
 
 
 def triton_normalization_backward(grad_output: torch.Tensor, context: list[typing.Any]) -> torch.Tensor:
@@ -424,14 +424,19 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
     block_size_m = 64
     block_size_n = 8
 
-    block_size_col, block_size_row, two_pass, num_warps, num_stages = _triton_normalization_backward_kernel_1_config(
+    block_size_col, block_size_row, two_pass, num_warps = _triton_normalization_backward_kernel_1_config(
         n_cols, n_rows, has_bias
     )
 
     num_tiles = triton.cdiv(n_rows, block_size_row)
     # Single pass grid-strides the rows, so the program count (the partial-buffer height) is bounded
-    # below the tile count; two pass keeps one program per tile.
-    num_blocks_row = num_tiles if two_pass else min(num_tiles, _kernel_1_target_row_blocks(grad_output.device))
+    # below the tile count; two pass keeps one program per tile. The bound is a GPU-occupancy
+    # heuristic, so it is skipped off-GPU (e.g. the Triton interpreter on CPU), where querying the SM
+    # count would fail.
+    if two_pass or grad_output.device.type != "cuda":
+        num_blocks_row = num_tiles
+    else:
+        num_blocks_row = min(num_tiles, _kernel_1_target_row_blocks(grad_output.device))
 
     grad_input = torch.empty_like(grad_output)
 
@@ -472,7 +477,7 @@ def triton_normalization_backward(grad_output: torch.Tensor, context: list[typin
         block_size_row,
         two_pass,
         num_warps=num_warps,
-        num_stages=num_stages,
+        num_stages=1,
     )
     if parameter_grad:
         triton_normalization_backward_kernel_2[(triton.cdiv(n_cols, block_size_n),)](

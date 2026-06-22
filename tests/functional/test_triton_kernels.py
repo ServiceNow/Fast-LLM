@@ -106,13 +106,15 @@ def test_triton_rotary(num_tokens, num_heads, head_size, testing_device):
 
 
 @requires_triton
+# (32, 128) exercises the single-pass backward; (32, 8192) crosses into the two-pass path.
+@pytest.mark.parametrize(("num_rows", "num_cols"), [(32, 128), (32, 8192)])
 @pytest.mark.parametrize("has_bias", [True, False])
 @pytest.mark.parametrize("zero_centered", [True, False])
-def test_triton_normalization(has_bias, zero_centered, testing_device):
-    input_ = torch.randn(32, 128, device=testing_device, requires_grad=True)
+def test_triton_normalization(num_rows, num_cols, has_bias, zero_centered, testing_device):
+    input_ = torch.randn(num_rows, num_cols, device=testing_device, requires_grad=True)
     output_grad = torch.randn_like(input_)
 
-    weight = torch.randn(128, device=testing_device, requires_grad=True)
+    weight = torch.randn(num_cols, device=testing_device, requires_grad=True)
     weight.grad_buffer = torch.empty_like(weight)
     weight.param_grad_is_zero = True
 
