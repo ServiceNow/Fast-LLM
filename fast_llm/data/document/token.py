@@ -118,16 +118,19 @@ class TokenBatch(Batch, TokenDocument):
             global_cumulative_lengths = torch.from_numpy(padded_cumsum(self.lengths)).to(
                 dtype=torch.int32, device=self.device
             )
+            # Exclude the trailing padding "length" from the count.
+            num_documents_in_sequence = len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0)
+            # Padding tokens fall past the last real document, so `searchsorted` would assign them the
+            # phantom (num_documents + 1)-th index — one past the per-segment buffer sized by
+            # `num_documents_in_sequence`. Clamp them onto the last real document; their target is masked
+            # so the contribution is zero, and the 1-based index stays within `num_documents_in_sequence`.
             model_input.global_document_index_q = torch.searchsorted(
                 global_cumulative_lengths,
                 torch.arange(begin, end, device=self.device),
                 side="right",
                 out_int32=True,
-            )
-            # Exclude the padding "length" from the count.
-            model_input.num_documents_in_sequence = len(self.lengths) - (
-                1 if self.unpadded_length < len(self.tokens) else 0
-            )
+            ).clamp_(max=num_documents_in_sequence)
+            model_input.num_documents_in_sequence = num_documents_in_sequence
 
         LengthModelInputPreprocessor(
             lengths=lengths,
