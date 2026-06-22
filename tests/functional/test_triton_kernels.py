@@ -106,13 +106,23 @@ def test_triton_rotary(num_tokens, num_heads, head_size, testing_device):
 
 
 @requires_triton
+# (32, 128) single-pass, (32, 8192) two-pass, (4096, 8192) wide single-pass.
+@pytest.mark.parametrize(("num_rows", "num_cols"), [(32, 128), (32, 8192), (4096, 8192)])
 @pytest.mark.parametrize("has_bias", [True, False])
 @pytest.mark.parametrize("zero_centered", [True, False])
-def test_triton_normalization(has_bias, zero_centered, testing_device):
-    input_ = torch.randn(32, 128, device=testing_device, requires_grad=True)
+def test_triton_normalization(num_rows, num_cols, has_bias, zero_centered, testing_device):
+    if num_rows * num_cols > 1_000_000 and testing_device.type != "cuda":
+        pytest.skip("Shape too large for the Triton interpreter.")
+    input_ = torch.randn(num_rows, num_cols, device=testing_device, requires_grad=True)
     output_grad = torch.randn_like(input_)
 
-    weight = torch.randn(128, device=testing_device, requires_grad=True)
+    # Keep the effective weight (1 + weight when zero-centered, else weight) near 1. Weights near zero
+    # make the backward's (output - bias) / weight recovery ill-conditioned, which at wide n_cols
+    # intermittently diverges from the reference for reasons unrelated to the kernel.
+    weight = torch.randn(num_cols, device=testing_device) * 0.1
+    if not zero_centered:
+        weight += 1
+    weight = weight.requires_grad_()
     weight.grad_buffer = torch.empty_like(weight)
     weight.param_grad_is_zero = True
 
