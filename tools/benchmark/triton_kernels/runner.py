@@ -4,9 +4,9 @@ Core benchmarking infrastructure for Fast-LLM Triton kernels.
 Each benchmark file defines a list of `Case` objects (input shape/dtype
 sweep) and a list of `Variant` objects (implementations to compare — e.g.
 pytorch eager, pytorch compiled, Triton). The runner invokes each variant
-on each case, measures timing (median + mean + percentiles via CUDA events),
-measures peak/final memory, and compares outputs against an fp32 reference
-using RMS error. Results are printed as a table per case.
+on each case, measures GPU kernel time (summed per-kernel device time via the
+profiler), measures peak/final memory, and compares outputs against an fp32
+reference using RMS error. Results are printed as a table per case.
 """
 
 import dataclasses
@@ -47,12 +47,20 @@ VariantFn = typing.Callable[[Inputs], typing.Any]
 @dataclasses.dataclass
 class Variant:
     """A single implementation being compared. Provide `fwd` for forward-only
-    timing. Provide `fwd_bwd` for forward+backward timing; when both are set,
-    backward-only time is reported as `fwd_bwd - fwd`."""
+    timing. Provide `fwd_bwd` for forward+backward timing and the backward
+    correctness check; backward-only time is reported as `fwd_bwd - fwd` unless
+    `backward` is also set, in which case the backward is timed in isolation."""
 
     name: str
     fwd: VariantFn | None = None
     fwd_bwd: VariantFn | None = None
+    # Returns a no-arg thunk that runs only the backward, after performing the
+    # forward (untimed). The runner rebuilds it each rep and flushes L2 before
+    # timing the thunk, so the backward reads a cold cache — matching training,
+    # where tensors saved for backward are long evicted by the time it runs.
+    # Without this, `fwd_bwd - fwd` lets the just-written forward output sit warm
+    # in L2 for the backward, understating memory-bound backward cost.
+    backward: typing.Callable[[Inputs], typing.Callable[[], None]] | None = None
     # The fp32 reference variant. Exactly one per benchmark; its outputs are
     # the ground truth for RMS-error comparison.
     is_reference: bool = False
@@ -127,6 +135,9 @@ class TimingStats:
     max_ms: float
     std_ms: float
     num_reps: int
+    # Median device self-time per distinct CUDA kernel name (None on the CPU path).
+    # Exposes which sub-kernel dominates, e.g. backward kernel_1 vs kernel_2.
+    per_kernel_ms: dict[str, float] | None = None
 
 
 @dataclasses.dataclass
@@ -143,7 +154,8 @@ class MemoryStats:
 class VariantResult:
     variant_name: str
     fwd_timing: TimingStats | None = None
-    fwd_bwd_timing: TimingStats | None = None
+    fwd_bwd_timing: TimingStats | None = None  # forward+backward together (derived-backward path)
+    bwd_timing: TimingStats | None = None  # backward measured in isolation (cold cache)
     memory: MemoryStats | None = None
     rms_errors: dict[str, float] | None = None  # output name → RMS rel error vs reference
     error: str | None = None  # If the variant failed, the error message
@@ -152,31 +164,47 @@ class VariantResult:
 # --------------------------------------------------------------------------- timing
 
 
+# Per-rep samples for the timing distribution. Device kernel time is stable, so a
+# small fixed count gives tight stats without profiling thousands of reps.
+_MAX_PROFILE_REPS = 50
+
+
 def bench_fn(
-    fn: typing.Callable[[], typing.Any],
+    fn: typing.Callable[[], typing.Any] | None,
     reset: typing.Callable[[], None] | None = None,
     warmup_ms: float = 25.0,
     rep_ms: float = 100.0,
     min_reps: int = 5,
-    max_reps: int = 10_000,
+    prepare: typing.Callable[[], typing.Callable[[], None]] | None = None,
 ) -> TimingStats:
-    """Benchmark `fn` — it should be a no-arg callable that invokes the kernel
-    being timed (close over inputs). Returns timing statistics in ms.
+    """Benchmark a GPU callable, returning timing statistics in ms. Either pass
+    `fn` (the no-arg callable to time directly) or `prepare` (called untimed each
+    rep to do setup — e.g. the forward pass — and return the no-arg callable to
+    time). With `prepare`, the L2 flush runs after setup, so the timed callable
+    reads a cold cache; this isolates the backward without the forward leaving
+    its output warm in L2.
 
-    Mirrors `triton.testing.do_bench` logic but returns raw per-rep list so we
-    can compute {median, mean, min, max, std} from one set of runs.
+    Reports GPU kernel time: each rep sums the profiler's per-kernel device
+    self-time, and stats are computed over the per-rep samples. A CUDA-event
+    window around the call instead counts GPU-idle bubbles from per-call
+    allocation and (for autograd variants) Python/engine launch overhead —
+    benchmarking artifacts that don't occur in a real run where the CPU runs
+    ahead and the allocator serves cached buffers, and which vary by variant (the
+    eager C++ engine starves the GPU far less than a Python autograd Function).
+    Summing device self-time isolates the work the GPU actually does.
     """
+    make_timed = prepare if prepare is not None else (lambda: fn)
     if not torch.cuda.is_available():
         # CPU / Triton interpret: single timed run with wall clock. min_reps,
-        # max_reps, warmup_ms, rep_ms are ignored — this path is for smoke
-        # testing kernel correctness, not measurement.
+        # warmup_ms, rep_ms are ignored — this path is for smoke testing kernel
+        # correctness, not measurement.
         if reset is not None:
             reset()
-        fn()  # warmup
+        make_timed()()  # warmup
         if reset is not None:
             reset()
         start = time.perf_counter()
-        fn()
+        make_timed()()
         elapsed_ms = (time.perf_counter() - start) * 1000
         return TimingStats(elapsed_ms, elapsed_ms, elapsed_ms, elapsed_ms, 0.0, 1)
 
@@ -184,60 +212,67 @@ def bench_fn(
     # cached values (avoids over-optimistic timings).
     flush_buffer = torch.empty(64 * 1024 * 1024, dtype=torch.int32, device="cuda")
 
-    # Warmup to JIT-compile, autotune, etc.
-    torch.cuda.synchronize()
-    warmup_start = torch.cuda.Event(enable_timing=True)
-    warmup_end = torch.cuda.Event(enable_timing=True)
-    if reset is not None:
-        reset()
-    warmup_start.record()
-    fn()
-    warmup_end.record()
-    torch.cuda.synchronize()
-    one_rep_ms = warmup_start.elapsed_time(warmup_end)
+    def time_once() -> float:
+        # Untimed setup (the forward, for the isolated-backward path), then a
+        # CUDA-event window around the callable to estimate one rep.
+        if reset is not None:
+            reset()
+        timed = make_timed()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()
+        start.record()
+        timed()
+        end.record()
+        torch.cuda.synchronize()
+        return start.elapsed_time(end)
 
-    # Additional warmup to stabilize (covers autotune misses on first call)
-    num_warmup = max(1, int(warmup_ms / max(one_rep_ms, 0.01)))
+    # Warmup to JIT-compile, autotune, etc., then re-estimate (autotune usually
+    # settles to a faster config after the first call).
+    one_rep_ms = max(time_once(), 0.001)
+    num_warmup = max(1, int(warmup_ms / one_rep_ms))
     for _ in range(num_warmup):
         if reset is not None:
             reset()
-        fn()
+        make_timed()()
     torch.cuda.synchronize()
+    one_rep_ms = max(time_once(), 0.001)
 
-    # Re-estimate after warmup (autotune usually settles to a faster config).
-    post_start = torch.cuda.Event(enable_timing=True)
-    post_end = torch.cuda.Event(enable_timing=True)
-    if reset is not None:
-        reset()
-    post_start.record()
-    fn()
-    post_end.record()
-    torch.cuda.synchronize()
-    one_rep_ms = max(post_start.elapsed_time(post_end), 0.001)
+    num_reps = max(min_reps, min(_MAX_PROFILE_REPS, int(rep_ms / one_rep_ms)))
 
-    num_reps = max(min_reps, min(max_reps, int(rep_ms / one_rep_ms)))
-
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_reps)]
-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_reps)]
-    for i in range(num_reps):
+    # Profile each rep separately and sum its kernels' device self-time, building a
+    # per-rep sample distribution. The L2 flush stays outside the profiled region and
+    # is synced before the profiler opens, so its fill kernel can't land in the capture
+    # window while each kernel still reads cold. CUDA-only profiling records no CPU op
+    # nodes (which would otherwise carry their children's device time and double-count);
+    # the device_type == CUDA filter drops the zero-device-time runtime/launch entries.
+    samples_ms: list[float] = []
+    per_kernel_samples: dict[str, list[float]] = {}
+    for _ in range(num_reps):
         if reset is not None:
             reset()
-        # The L2 flush is enqueued before start_events[i] on the same stream, so
-        # the timed window starts after the zero completes — only fn() is timed.
+        timed = make_timed()
         flush_buffer.zero_()
-        start_events[i].record()
-        fn()
-        end_events[i].record()
-    torch.cuda.synchronize()
+        torch.cuda.synchronize()
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
+            timed()
+            torch.cuda.synchronize()
+        rep_by_kernel: dict[str, float] = {}
+        for k in prof.key_averages():
+            if k.device_type == torch.autograd.DeviceType.CUDA:
+                rep_by_kernel[k.key] = rep_by_kernel.get(k.key, 0.0) + k.self_device_time_total
+        samples_ms.append(sum(rep_by_kernel.values()) / 1000)
+        for name, kernel_us in rep_by_kernel.items():
+            per_kernel_samples.setdefault(name, []).append(kernel_us / 1000)
 
-    times = [start_events[i].elapsed_time(end_events[i]) for i in range(num_reps)]
     return TimingStats(
-        median_ms=statistics.median(times),
-        mean_ms=statistics.fmean(times),
-        min_ms=min(times),
-        max_ms=max(times),
-        std_ms=statistics.pstdev(times) if len(times) > 1 else 0.0,
+        median_ms=statistics.median(samples_ms),
+        mean_ms=statistics.fmean(samples_ms),
+        min_ms=min(samples_ms),
+        max_ms=max(samples_ms),
+        std_ms=statistics.pstdev(samples_ms) if len(samples_ms) > 1 else 0.0,
         num_reps=num_reps,
+        per_kernel_ms={name: statistics.median(samples) for name, samples in per_kernel_samples.items()},
     )
 
 
@@ -330,6 +365,47 @@ def _measure_mode(
     return timing, rms_errors
 
 
+def _measure_backward(
+    variant: Variant,
+    case: Case,
+    reference_outputs: dict[str, torch.Tensor] | None,
+    warmup_ms: float,
+    rep_ms: float,
+    min_reps: int,
+) -> tuple[TimingStats, dict[str, float]]:
+    """Check backward-gradient correctness from a single `fwd_bwd` run, then time
+    the backward in isolation: each rep redoes the forward (untimed) and flushes
+    L2 before timing the backward, so it reads a cold cache."""
+    inputs = _seeded_inputs(case)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    output = variant.fwd_bwd(inputs)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    rms_errors: dict[str, float] = {}
+    if reference_outputs is not None and not variant.is_reference:
+        cand = _as_output_dict(output)
+        if variant.output_postprocess is not None:
+            cand = variant.output_postprocess(cand, inputs)
+        rms_errors = {
+            f"bwd.{name}": rms_relative_error(cand[name], reference_outputs[name])
+            for name in reference_outputs
+            if name in cand
+        }
+    del output
+
+    reset = (lambda: variant.reset_inputs(inputs)) if variant.reset_inputs else None
+
+    def prepare() -> typing.Callable[[], None]:
+        if _cudagraph_mark_step_begin is not None:
+            _cudagraph_mark_step_begin()
+        return variant.backward(inputs)
+
+    timing = bench_fn(None, reset=reset, prepare=prepare, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
+    return timing, rms_errors
+
+
 def _run_one_variant(
     variant: Variant,
     case: Case,
@@ -350,9 +426,12 @@ def _run_one_variant(
 
         if variant.fwd_bwd is not None:
             ref_fb = reference_outputs.get("fwd_bwd") if reference_outputs is not None else None
-            result.fwd_bwd_timing, bwd_rms = _measure_mode(
-                variant, case, variant.fwd_bwd, "bwd", ref_fb, warmup_ms, rep_ms, min_reps
-            )
+            if variant.backward is not None:
+                result.bwd_timing, bwd_rms = _measure_backward(variant, case, ref_fb, warmup_ms, rep_ms, min_reps)
+            else:
+                result.fwd_bwd_timing, bwd_rms = _measure_mode(
+                    variant, case, variant.fwd_bwd, "bwd", ref_fb, warmup_ms, rep_ms, min_reps
+                )
             if bwd_rms:
                 result.rms_errors = (result.rms_errors or {}) | bwd_rms
 
@@ -495,7 +574,7 @@ def _render_table(
     results: list[VariantResult],
     gpu_spec: GpuSpec | None,
     has_fwd: bool,
-    has_fwd_bwd: bool,
+    has_bwd: bool,
     rms_keys: list[str],
     verbose: bool,
 ) -> str:
@@ -521,24 +600,27 @@ def _render_table(
                 *_unit_column("fwd max", [r.fwd_timing.max_ms if r.fwd_timing else None for r in results], _TIME_UNITS)
             )
 
-    if has_fwd_bwd:
-        # Backward-only derived: fwd+bwd − fwd.
-        bwd_values: list[float | None] = []
-        total_values: list[float | None] = []
-        for r in results:
-            if r.fwd_bwd_timing is None:
-                bwd_values.append(None)
-                total_values.append(None)
-                continue
+    # Backward is timed in isolation when `bwd_timing` is set (total = fwd + bwd);
+    # otherwise it's derived from the combined run (bwd = fwd_bwd − fwd).
+    def _bwd_and_total(r: VariantResult) -> tuple[float | None, float | None]:
+        if r.bwd_timing is not None:
+            bwd = r.bwd_timing.median_ms
+            total = (r.fwd_timing.median_ms + bwd) if r.fwd_timing else None
+            return bwd, total
+        if r.fwd_bwd_timing is not None:
             total = r.fwd_bwd_timing.median_ms
-            bwd_values.append(total - r.fwd_timing.median_ms if r.fwd_timing else None)
-            total_values.append(total)
-        _add(*_unit_column("bwd", bwd_values, _TIME_UNITS))
-        _add(*_unit_column("total", total_values, _TIME_UNITS))
+            return (total - r.fwd_timing.median_ms if r.fwd_timing else None), total
+        return None, None
+
+    if has_bwd:
+        bwd_total = [_bwd_and_total(r) for r in results]
+        _add(*_unit_column("bwd", [bt[0] for bt in bwd_total], _TIME_UNITS))
+        _add(*_unit_column("total", [bt[1] for bt in bwd_total], _TIME_UNITS))
 
     def _time_for_throughput(r: VariantResult) -> float | None:
-        if r.fwd_bwd_timing is not None:
-            return r.fwd_bwd_timing.median_ms
+        total = _bwd_and_total(r)[1]
+        if total is not None:
+            return total
         if r.fwd_timing is not None:
             return r.fwd_timing.median_ms
         return None
@@ -598,6 +680,29 @@ def _render_table(
     return "\n".join([variable_line, unit_line, divider, *body_lines])
 
 
+def _render_per_kernel_breakdown(results: list[VariantResult]) -> str:
+    """Per-variant median device time of each distinct CUDA kernel, largest first.
+    Splits a variant's aggregate time into its individual kernels — e.g. the
+    backward's kernel_1 vs kernel_2. When the backward is timed in isolation, the
+    forward and backward breakdowns are merged; otherwise the combined fwd_bwd
+    breakdown is used (falling back to fwd)."""
+    lines = ["per-kernel device time (median):"]
+    for result in results:
+        if result.bwd_timing is not None:
+            per_kernel = dict(result.fwd_timing.per_kernel_ms or {}) if result.fwd_timing else {}
+            for name, ms in (result.bwd_timing.per_kernel_ms or {}).items():
+                per_kernel[name] = per_kernel.get(name, 0.0) + ms
+        else:
+            timing = result.fwd_bwd_timing or result.fwd_timing
+            per_kernel = dict(timing.per_kernel_ms) if timing and timing.per_kernel_ms else {}
+        if not per_kernel:
+            continue
+        lines.append(f"  {result.variant_name}:")
+        for name, ms in sorted(per_kernel.items(), key=lambda item: -item[1]):
+            lines.append(f"    {ms * 1000:9.1f} μs  {name}")
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- orchestration
 
 
@@ -637,13 +742,13 @@ def run_benchmark(
 
         results = []
         has_fwd = False
-        has_fwd_bwd = False
+        has_bwd = False
         rms_keys_seen: list[str] = []
         for variant in variants:
             r = _run_one_variant(variant, case, ref_outputs, warmup_ms=warmup_ms, rep_ms=rep_ms, min_reps=min_reps)
             results.append(r)
             has_fwd = has_fwd or r.fwd_timing is not None
-            has_fwd_bwd = has_fwd_bwd or r.fwd_bwd_timing is not None
+            has_bwd = has_bwd or r.bwd_timing is not None or r.fwd_bwd_timing is not None
             for k in r.rms_errors or {}:
                 if k not in rms_keys_seen:
                     rms_keys_seen.append(k)
@@ -654,11 +759,14 @@ def run_benchmark(
                 results,
                 gpu_spec=gpu_spec,
                 has_fwd=has_fwd,
-                has_fwd_bwd=has_fwd_bwd,
+                has_bwd=has_bwd,
                 rms_keys=rms_keys_seen,
                 verbose=verbose,
             )
         )
+        if verbose:
+            print_fn("")
+            print_fn(_render_per_kernel_breakdown(results))
         print_fn("")
         all_results.append((case, results))
     return all_results

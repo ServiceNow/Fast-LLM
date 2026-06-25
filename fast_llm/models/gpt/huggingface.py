@@ -47,6 +47,10 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         return_all_prediction_heads: bool = False,
+        # `generate` passes version-dependent plumbing kwargs (`cache_position`, `logits_to_keep`, ...).
+        # They don't apply to the `use_cache=False` path: positions are reconstructed from `attention_mask`,
+        # and the full logits are computed and the last position selected downstream.
+        **kwargs,
     ) -> tuple | transformers.modeling_outputs.CausalLMOutputWithPast:
         return self._inner_forward(
             self._get_batch(input_ids, attention_mask),
@@ -129,16 +133,13 @@ class HuggingfaceGPTModelForCausalLM(HuggingfacePreTrainedModel):
             for name, (meta, tensor) in model_input.hidden_states.items()
         }
 
-        logits = hidden_states.pop(f"{self.fast_llm_base_model.head.module_name}.logits")
-        if return_all_prediction_heads:
-            logits = torch.stack(
-                [logits]
-                + [
-                    hidden_states.pop(f"{head.module_name}.logits")
-                    for head in self.fast_llm_base_model.multi_token_prediction.heads
-                ],
-                dim=-2,
-            )
+        # Every head emits its logits into the hidden-states namespace; pop them all so the prediction
+        # heads' logits don't leak into the returned hidden states.
+        head_logits = [
+            hidden_states.pop(f"{head.module_name}.logits")
+            for head in (self.fast_llm_base_model.head, *self.fast_llm_base_model.multi_token_prediction.heads)
+        ]
+        logits = torch.stack(head_logits, dim=-2) if return_all_prediction_heads else head_logits[0]
 
         output = transformers.modeling_outputs.CausalLMOutputWithPast(
             logits=logits,

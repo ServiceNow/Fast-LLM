@@ -16,7 +16,7 @@ def triton_gspo_loss_backward_kernel(
     sum_exp_logits_ptr,
     probability_ratio_ptr,
     seg_advantage_ptr,
-    token_weight_ptr,
+    loss_weight_ptr,
     grad_logits_ptr,
     n_cols: tl_constexpr,
     logits_stride_0: tl_constexpr,
@@ -31,10 +31,8 @@ def triton_gspo_loss_backward_kernel(
 ):
     block_idx = tl.program_id(0).to(tl.int64)
 
-    # token_weight = mask_t / N_d, where N_d is the labeled-token count for the doc containing t.
-    # Zero for masked tokens (mask=0) and for tokens with N_d=0 after the kernel's clamp.
-    token_weight = tl.load(token_weight_ptr + block_idx).to(tl.float32)
-    if token_weight == 0.0:
+    loss_weight = tl.load(loss_weight_ptr + block_idx).to(tl.float32)
+    if loss_weight == 0.0:
         if not accumulate:
             for col_offset in tl.static_range(0, n_cols, block_size):
                 col_offsets = tl_arange(int(col_offset), int(col_offset + block_size))
@@ -61,7 +59,7 @@ def triton_gspo_loss_backward_kernel(
         )
         * probability_ratio
         * grad_scale
-        * token_weight
+        * loss_weight
     )
 
     logits_ptr = logits_ptr + block_idx * logits_stride_0
@@ -107,7 +105,7 @@ def triton_gspo_loss_forward_backward(
     num_warps: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
     """Triton GSPO loss. Forward fuses softmax + predicted-logit lookup; backward fuses the
-    softmax chain rule with the per-token GSPO gradient factor (R_s * clip * token_weight).
+    softmax chain rule with the per-token GSPO gradient factor (R_s * clip * loss_weight).
     Segment aggregation, loss, and the SDP/SP all-reduce live in PyTorch between the two passes.
 
     See `fused_gspo_loss_forward_backward` in policy_gradient.py for the math derivation;
@@ -163,13 +161,13 @@ def triton_gspo_loss_forward_backward(
     # contribution to the per-segment sum is already normalized, so SDP/SP all-reduce works
     # without a separate token-count tensor.
     flat_num_labels = num_labels_in_seq.reshape(-1).to(new_log_probs.dtype).clamp(min=1)
-    token_weight = loss_mask / flat_num_labels
+    mean_token_weight = loss_mask / flat_num_labels
 
     mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, log_ratio * token_weight
+        0, flat_document_index, log_ratio * mean_token_weight
     )
     mean_advantage_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, flat_advantages * token_weight
+        0, flat_document_index, flat_advantages * mean_token_weight
     )
     for reduce_group in (sdp_group, sp_group):
         if reduce_group is not None:
@@ -185,13 +183,13 @@ def triton_gspo_loss_forward_backward(
 
     probability_ratio = segment_ratio[flat_document_index].contiguous()
     seg_advantage = segment_advantage[flat_document_index].contiguous()
-    token_weight = token_weight.contiguous()
+    loss_weight = loss_mask.contiguous()
 
     losses = -torch.min(
         probability_ratio * seg_advantage,
         torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * seg_advantage,
     )
-    loss = (losses * token_weight).sum() / divisor
+    loss = (losses * loss_weight).sum() / divisor
 
     new_logprobs_mean = (new_log_probs * loss_mask / flat_num_labels).sum()
 
@@ -208,7 +206,7 @@ def triton_gspo_loss_forward_backward(
         sum_exp_logits_ptr=sum_exp_logits,
         probability_ratio_ptr=probability_ratio,
         seg_advantage_ptr=seg_advantage,
-        token_weight_ptr=token_weight,
+        loss_weight_ptr=loss_weight,
         grad_logits_ptr=grad_logits,
         n_cols=n_cols,
         logits_stride_0=logits.stride(-2),

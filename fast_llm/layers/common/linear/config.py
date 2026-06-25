@@ -139,6 +139,7 @@ class AffineLinearConfig(AffineLinearBaseConfig, LinearConfig):
         bias = self.bias.get_parameter(
             (out_dim,),
             default_initialization=default_bias_initialization,
+            weight_decay=False,
             lr_scale=lr_scale,
             default_enabled=default_add_bias,
             peft=None,
@@ -222,6 +223,7 @@ class CausalConv1dConfig(AffineLinearBaseConfig):
         bias = self.bias.get_parameter(
             (in_dim,),
             default_initialization=default_bias_initialization,
+            weight_decay=False,
             lr_scale=lr_scale,
             default_enabled=default_add_bias,
             peft=peft,

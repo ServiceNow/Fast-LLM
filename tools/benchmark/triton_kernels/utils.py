@@ -53,11 +53,14 @@ def pytorch_variant(
     is_reference: bool = False,
     convert_to_fp32: bool = False,
     reset_inputs: typing.Callable[[Inputs], typing.Any] | None = None,
+    isolate_backward: bool = False,
 ) -> Variant:
     """Build a Variant that calls `function(*[inputs[k] for k in input_keys])`.
     Backward is wired up when `grad_input_keys` is non-empty; if `convert_to_fp32`
     is set, all floating-point inputs are upcast to fp32 first (used by the
-    reference variant)."""
+    reference variant). When `isolate_backward` is set, also expose a `backward`
+    setup (forward untimed, returns the backward thunk) so the runner can time
+    the backward alone with a cold cache."""
 
     def _prepare(inputs: Inputs) -> Inputs:
         return _to_fp32(inputs, grad_input_keys) if convert_to_fp32 else inputs
@@ -78,10 +81,19 @@ def pytorch_variant(
             result[f"grad_{key}"] = prepared[key].grad
         return result
 
+    def backward(inputs: Inputs) -> typing.Callable[[], None]:
+        prepared = _prepare(inputs)
+        output = function(*(prepared[k] for k in input_keys))
+        if grad_output_key is None:
+            return output.backward
+        grad_output = prepared[grad_output_key]
+        return lambda: output.backward(grad_output)
+
     return Variant(
         name=name,
         fwd=fwd,
         fwd_bwd=fwd_bwd if grad_input_keys else None,
+        backward=backward if (grad_input_keys and isolate_backward) else None,
         is_reference=is_reference,
         reset_inputs=reset_inputs,
     )
@@ -98,12 +110,14 @@ def standard_pytorch_variants(
     extra_functions: dict[str, typing.Callable] | None = None,
     eager_name: str = "pytorch_eager",
     enable_max_autotune: bool = True,
+    isolate_backward: bool = False,
 ) -> list[Variant]:
     """fp32_reference + <eager_name> + pytorch_compiled + [pytorch_compiled_max]
     + `extra_functions`. When `grad_input_keys` is empty, only fwd is wired up.
     Triton variants are appended by the caller (so each bench file owns its
     triton wiring explicitly). For fwd_bwd cases, `reset_inputs` defaults to
-    clearing `.grad` on `grad_input_keys` between reps."""
+    clearing `.grad` on `grad_input_keys` between reps. `isolate_backward` opts
+    into cold-cache backward-only timing (see `pytorch_variant`)."""
     if grad_input_keys and reset_inputs is None:
         reset_inputs = make_grad_reset(grad_input_keys)
     common = {
@@ -112,6 +126,7 @@ def standard_pytorch_variants(
         "grad_output_key": grad_output_key,
         "output_key": output_key,
         "reset_inputs": reset_inputs,
+        "isolate_backward": isolate_backward,
     }
     variants: list[Variant] = [
         pytorch_variant("fp32_reference", eager_function, is_reference=True, convert_to_fp32=True, **common),

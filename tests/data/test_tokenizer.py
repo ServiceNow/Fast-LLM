@@ -278,6 +278,20 @@ def test_tokenize_chat(common_tokenizer, messages, expected_tokens, expected_los
     Assert.eq(loss_masking_spans, expected_loss_masking_spans)
 
 
+def test_tokenize_chat_train_on_eos(common_tokenizer):
+    common_tokenizer.tokenizer.chat_template = CHAT_TEMPLATE
+    messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}]
+    tokens, spans = common_tokenizer.tokenize_chat(messages)
+    tokens_eos, spans_eos = common_tokenizer.tokenize_chat(messages, train_on_eos=True)
+
+    # `train_on_eos` changes only the loss mask of the appended EOS, not the tokens.
+    Assert.eq(tokens_eos.tolist(), tokens.tolist())
+    Assert.eq(tokens[-1].item(), common_tokenizer.eod_id)
+    # By default the trailing EOS is its own masked span; `train_on_eos` trains on it instead.
+    Assert.eq(spans[-1], (len(tokens) - 1, len(tokens)))
+    Assert.eq(spans_eos, spans[:-1])
+
+
 @pytest.mark.parametrize(
     ("train_mask", "expected_loss_spans"),
     (
