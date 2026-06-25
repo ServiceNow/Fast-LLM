@@ -88,12 +88,14 @@ class MixtureOfExpertMLP[ConfigType: MoEMLPConfig](MLPBase[ConfigType]):
         self.router_scale = self._config.router_scale.get_parameter(
             (self._hidden_dim,),
             default_initialization=init_ones_,
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
         self.router_per_expert_scale = self._config.router_per_expert_scale.get_parameter(
             (TensorDim("experts", self._config.experts),),
             default_initialization=init_ones_,
+            weight_decay=False,
             lr_scale=self._lr_scale,
             peft=self._peft,
         )

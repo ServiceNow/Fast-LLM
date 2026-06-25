@@ -32,6 +32,8 @@ class GPTFimDataset[DocumentType: LanguageModelDocument](SampledDataset[Document
         self._tokenizer = self._config.tokenizer.get_tokenizer()
         if self._tokenizer is None:
             raise ValueError("Fim requires a tokenizer")
+        if self._tokenizer.bod_id is None or self._tokenizer.eod_id is None:
+            raise ValueError("FIM requires the tokenizer to define both BOS and EOS tokens.")
         self._suffix_tok_id, self._prefix_tok_id, self._middle_tok_id, self._pad_tok_id = (
             self._tokenizer.vocab[tok]
             for tok in [config.suffix_token, config.prefix_token, config.middle_token, config.pad_token]

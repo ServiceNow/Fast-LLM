@@ -38,6 +38,7 @@ class LMHeadTestConfig:
     prediction_heads: int = 1
     tied_embedding_weight: bool = False
     num_splits: int = 1
+    gspo_document_lengths: tuple[int, ...] | None = None
 
     @property
     def actual_label_loss(self):
@@ -96,6 +97,15 @@ class LMHeadTestConfig:
                 "distributed": {"compute_dtype": self.compute_dtype, "use_cuda": torch.cuda.is_available()},
             },
         )
+
+    @property
+    def actual_gspo_document_lengths(self) -> tuple[int, ...]:
+        if self.gspo_document_lengths is not None:
+            Assert.eq(sum(self.gspo_document_lengths), NUM_TOKENS)
+            return self.gspo_document_lengths
+        document_length = NUM_TOKENS // GSPO_NUM_DOCUMENTS
+        Assert.eq(document_length * GSPO_NUM_DOCUMENTS, NUM_TOKENS)
+        return (document_length,) * GSPO_NUM_DOCUMENTS
 
     def get_inputs(self) -> tuple[torch.Tensor, dict[str, typing.Any]]:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -159,23 +169,32 @@ class LMHeadTestConfig:
                 for labels_ in kwargs[LanguageModelKwargs.labels]
             ]
             kwargs[LanguageModelKwargs.num_documents_in_batch] = (
-                GSPO_NUM_DOCUMENTS if self.gspo_loss is not False else 1
+                len(self.actual_gspo_document_lengths) if self.gspo_loss is not False else 1
             )
         if self.gspo_loss is not False:
-            document_length = NUM_TOKENS // GSPO_NUM_DOCUMENTS
+            document_lengths = self.actual_gspo_document_lengths
+            document_length_repeats = torch.tensor(document_lengths, dtype=torch.int64, device=device)
             kwargs[BlockKwargs.global_document_index_q] = torch.repeat_interleave(
-                torch.arange(1, GSPO_NUM_DOCUMENTS + 1, dtype=torch.int32, device=device), document_length
+                torch.arange(1, len(document_lengths) + 1, dtype=torch.int32, device=device), document_length_repeats
             )
-            kwargs[BlockKwargs.num_documents_in_sequence] = GSPO_NUM_DOCUMENTS
-            kwargs[BlockKwargs.lengths] = [document_length] * GSPO_NUM_DOCUMENTS
+            kwargs[BlockKwargs.num_documents_in_sequence] = len(document_lengths)
+            kwargs[BlockKwargs.lengths] = list(document_lengths)
             # Override label_counts: per-token broadcast of the containing document's masked-label count
             # (the kernel's per-document `new_logprobs` aggregation depends on this).
             kwargs[LanguageModelLossKwargs.label_counts] = [
-                (labels_ >= 0)
-                .view(GSPO_NUM_DOCUMENTS, document_length)
-                .sum(-1)
-                .to(torch.float32)
-                .repeat_interleave(document_length)
+                torch.cat(
+                    [
+                        torch.full(
+                            (document_length,),
+                            float(document_mask.sum()),
+                            dtype=torch.float32,
+                            device=device,
+                        )
+                        for document_mask, document_length in zip(
+                            torch.split(labels_ >= 0, document_lengths), document_lengths, strict=True
+                        )
+                    ]
+                )
                 for labels_ in kwargs[LanguageModelKwargs.labels]
             ]
         return input_, kwargs
@@ -258,18 +277,21 @@ class LMHeadTestConfig:
             )
             # Average over documents of per-document mean log-prob — matches the kernel's
             # `sum_t logprob_t * mask_t / label_count_t` divided by `num_documents_in_batch`.
-            document_length = NUM_TOKENS // GSPO_NUM_DOCUMENTS
             target_log_probabilities = (
                 torch.nn.functional.log_softmax(logits, -1)
                 .gather(-1, (labels * (labels >= 0)).unsqueeze(-1))
                 .squeeze(-1)
             )
             label_mask = (labels >= 0).to(target_log_probabilities.dtype)
-            logprob_sums_per_document = (
-                (target_log_probabilities * label_mask).view(GSPO_NUM_DOCUMENTS, document_length).sum(-1)
-            )
-            label_counts_per_document = label_mask.view(GSPO_NUM_DOCUMENTS, document_length).sum(-1).clamp(min=1)
-            new_logprobs = (logprob_sums_per_document / label_counts_per_document).mean()
+            document_means = [
+                (document_log_probabilities * document_label_mask).sum() / document_label_mask.sum().clamp(min=1)
+                for document_log_probabilities, document_label_mask in zip(
+                    torch.split(target_log_probabilities, self.actual_gspo_document_lengths),
+                    torch.split(label_mask, self.actual_gspo_document_lengths),
+                    strict=True,
+                )
+            ]
+            new_logprobs = torch.stack(document_means).mean()
             names_losses_weights.append(("gspo_loss", gspo_loss, float(self.gspo_loss)))
             names_losses_weights.append(("gspo_loss_new_logprobs", new_logprobs, 0.0))
 
@@ -327,6 +349,13 @@ for loss_masking in (False, True):
             loss_masking=loss_masking,
         )
     )
+_lm_head_test_configs.append(
+    LMHeadTestConfig(
+        "gspo_loss_uneven_documents",
+        gspo_loss=True,
+        gspo_document_lengths=(17, 31, 58, 94),
+    )
+)
 _add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
 _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)

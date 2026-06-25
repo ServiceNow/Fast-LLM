@@ -48,6 +48,7 @@ class ModelTestingGroup(enum.StrEnum):
     checkpoint = "checkpoint"
     convert = "convert"
     generate = "generate"
+    lm_eval = "lm_eval"
     megatron = "megatron"
     distributed = "distributed"
     streaming = "streaming"
@@ -358,12 +359,13 @@ update_and_add_testing_config(
         "--no-position-embedding",
     ],
     checkpoint_format=None,
-    # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
-        ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        # No HF checkpoint format: the native conversion round-trip is redundant with other models,
+        # and the export-based generate tests can't run.
+        ModelTestingGroup.convert: ModelTestingGroupAction.unimportant,
+        ModelTestingGroup.generate: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.megatron: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
@@ -393,12 +395,11 @@ update_and_add_testing_config(
         "--untie-embeddings-and-output-weights",
     ],
     checkpoint_format=LlamaCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.main,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.main,
         ModelTestingGroup.convert: ModelTestingGroupAction.main,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
         ModelTestingGroup.streaming: ModelTestingGroupAction.normal,
@@ -454,8 +455,12 @@ update_and_add_testing_config(
     # Megatron doesn't support Yarn-style Rotary Embeddings
     megatron_args=None,
     checkpoint_format=DiffusionLlamaCheckpointFormat,
-    # TODO: Conversion is broken.
-    # TODO: Add back generate as `normal` when stable.
+    # Config + weight conversion works (test_conversion passes). The convert group stays `broken`
+    # because test_huggingface_model fails: the custom modeling `from_pretrained` requires a
+    # generation_config.json that Fast-LLM does not export (unlike `dream`, which ships one). Behind
+    # that, the forward likely diverges as for `dream` — DiffusionLlama is a bidirectional
+    # diffusion LM, while Fast-LLM runs it causal — but that is unverified since loading fails first.
+    # Neither is a converter bug. `generate` is broken for the same diffusion-decoding reason.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -482,12 +487,11 @@ update_and_add_testing_config(
     # Megatron doesn't support multi-token prediction.
     megatron_args=None,
     checkpoint_format=MTPLlamaCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
@@ -510,7 +514,9 @@ update_and_add_testing_config(
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=Qwen2CheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
+    # `generate` matches HF in fp32 but diverges in bf16/flash: a near-tie argmax flips on numerical
+    # noise within the compared horizon. Stays `broken` pending a curated case free of near-tie
+    # (low-margin) argmax positions.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
@@ -530,8 +536,11 @@ update_and_add_testing_config(
     # Megatron doesn't support per sub layer biases.
     megatron_args=None,
     checkpoint_format=DiffusionDreamCheckpointFormat,
-    # TODO: Conversion is broken.
-    # TODO: Add back generate as `normal` when stable.
+    # Config + weight conversion works (test_conversion passes). The convert group stays `broken`
+    # because test_huggingface_model fails: Dream is a bidirectional diffusion LM, so the HF forward
+    # diverges from Fast-LLM's causal run (structurally different logits/hidden states, confirmed — not
+    # a tolerance miss). Matching it needs bidirectional-attention modeling, not a converter change.
+    # `generate` is broken for the same diffusion-decoding reason.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.unimportant,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.broken,
@@ -553,12 +562,11 @@ update_and_add_testing_config(
     # Megatron doesn't support sliding windows.
     megatron_args=None,
     checkpoint_format=MistralCheckpointFormat,
-    # TODO: Add back generate as `normal` when stable.
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.not_implemented,
         ModelTestingGroup.distributed: ModelTestingGroupAction.unimportant,
     },
@@ -646,7 +654,7 @@ update_and_add_testing_config(
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.normal,
         ModelTestingGroup.convert: ModelTestingGroupAction.normal,
-        ModelTestingGroup.generate: ModelTestingGroupAction.broken,
+        ModelTestingGroup.generate: ModelTestingGroupAction.normal,
         ModelTestingGroup.megatron: ModelTestingGroupAction.normal,
         ModelTestingGroup.distributed: ModelTestingGroupAction.normal,
     },
