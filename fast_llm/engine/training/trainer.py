@@ -221,6 +221,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         skipped_iters = 0
         nan_iters = 0
         total_losses = {loss_def.name: 0.0 for loss_def in self._loss_definitions}
+        total_documents_seen = 0
 
         # Profiling
         profiler = self._config.profiling.get_profiler(
@@ -259,6 +260,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 #   (Also preprocessing adds overhead)
                 if self._config.schedule.docs_per_step > 0:
                     buffer = self._prefetch_to_doc_target(train_iterator)
+                    # `_prefetch_to_doc_target` broadcasts the step document total onto every microbatch.
+                    step_num_documents = buffer[0][0].num_documents_in_batch
+                    total_documents_seen += step_num_documents
                     step_schedule = self._get_or_build_schedule(len(buffer))
                     reduced_losses, update_successful, train_metrics = self._runner.run_step(
                         iter(buffer),
@@ -267,6 +271,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         return_metrics=is_logging,
                     )
                 else:
+                    step_num_documents = None
                     reduced_losses, update_successful, train_metrics = self._runner.run_step(
                         train_iterator,
                         self._schedule,
@@ -304,6 +309,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         metrics_key = PhaseType.training
                         metrics[metrics_key] = {
                             "batch_size": self._batch_size,
+                            **(
+                                {"num_documents": step_num_documents, "documents_seen": total_documents_seen}
+                                if step_num_documents is not None
+                                else {}
+                            ),
                             **{
                                 name: (value / advanced_iters if advanced_iters > 0 else float("nan"))
                                 for name, value in total_losses.items()
