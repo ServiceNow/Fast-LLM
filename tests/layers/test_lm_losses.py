@@ -587,49 +587,100 @@ def _test_z_loss(
     )
 
 
+def _monolithic_baseline(
+    kind: str, local_logits, target, z_mask, grad_output, group, logits_scale_factor, divisor
+) -> tuple[torch.Tensor, torch.Tensor | None, MonolithicLossSpec]:
+    # Each enabled loss's baseline is its own `fused_*` kernel; the monolithic grad must equal their sum.
+    if kind == "cross_entropy":
+        loss, grad = fused_entropy_loss_forward_backward(
+            logits=local_logits,
+            target=target,
+            loss_mask=None,
+            grad_output=grad_output,
+            group=group,
+            logits_scale_factor=logits_scale_factor,
+            target_format=TargetFormat.labels,
+            entropy_loss_type=EntropyLossType.cross_entropy,
+            divisor=divisor,
+        )
+        spec = MonolithicLossSpec(
+            kind=kind,
+            name=kind,
+            weight=1.0,
+            logits_scale_factor=logits_scale_factor,
+            grad_output=grad_output,
+            divisor=divisor,
+            target=target,
+        )
+    elif kind == "z_loss":
+        loss, grad = fused_z_loss_forward_backward(
+            logits=local_logits,
+            loss_mask=z_mask,
+            grad_output=grad_output,
+            group=group,
+            logits_scale_factor=logits_scale_factor,
+            divisor=divisor,
+        )
+        spec = MonolithicLossSpec(
+            kind=kind,
+            name=kind,
+            weight=1.0,
+            logits_scale_factor=logits_scale_factor,
+            grad_output=grad_output,
+            divisor=divisor,
+            loss_mask=z_mask,
+        )
+    else:
+        raise NotImplementedError(kind)
+    return loss, grad, spec
+
+
 def _test_monolithic_loss(
-    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate, group=None
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate, kinds, group=None
 ):
-    # The monolithic kernel must reproduce the per-loss baseline (here: a single cross-entropy loss).
+    # The monolithic kernel must reproduce the sum of the per-loss baselines over a single shared softmax.
     logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
     local_logits = split_op(logits, group, -1).contiguous()
     # The head feeds the label count as divisor; mirror that instead of the kernel's default (numel).
     divisor = max(int((target >= 0).sum().item()), 1)
-    out_ref, grad_ref = fused_entropy_loss_forward_backward(
-        logits=local_logits,
-        target=target,
-        loss_mask=None,
-        grad_output=grad_output,
-        group=group,
-        logits_scale_factor=logits_scale_factor,
-        target_format=TargetFormat.labels,
-        entropy_loss_type=EntropyLossType.cross_entropy,
-        divisor=divisor,
-    )
-    spec = MonolithicLossSpec(
-        kind="cross_entropy",
-        name="cross_entropy",
-        weight=1.0,
-        logits_scale_factor=logits_scale_factor,
-        grad_output=grad_output,
-        divisor=divisor,
-        target=target,
-    )
+    # z-loss takes an explicit mask (the head's `loss_mask` kwarg); align it with the labeled tokens.
+    z_mask = (target >= 0) if loss_masking else None
+
+    ref_losses, specs, ref_grad = [], [], None
+    for kind in kinds:
+        ref_loss, grad, spec = _monolithic_baseline(
+            kind, local_logits, target, z_mask, grad_output, group, logits_scale_factor, divisor
+        )
+        ref_losses.append(ref_loss)
+        specs.append(spec)
+        if grad is not None:
+            ref_grad = grad if ref_grad is None else ref_grad + grad
+
     if accumulate and grad_output is not None:
         previous_grad = torch.randn_like(local_logits)
-        grad_ref = grad_ref + previous_grad
+        ref_grad = ref_grad + previous_grad
         grad_logits = previous_grad.clone()
     else:
         grad_logits = None
     outputs, grad_mono = monolithic_head_loss_forward_backward(
-        local_logits, [spec], group=group, grad_logits=grad_logits
+        local_logits, specs, group=group, grad_logits=grad_logits
     )
     threshold = 1e-5 if dtype == DataType.float32 else 1e-4
-    Assert.rms_close_relative(outputs[0].loss, out_ref, threshold, 1e-6)
+    for output, ref_loss in zip(outputs, ref_losses, strict=True):
+        Assert.rms_close_relative(output.loss, ref_loss, threshold, 1e-6)
     if grad_output is not None:
-        Assert.rms_close_relative(grad_mono, grad_ref, threshold, 1e-8 if grad_mono.dtype == torch.float32 else 1e-7)
+        # The monolithic kernel sums all grad terms in fp32 and casts once, so it is *more* accurate than the
+        # per-loss baseline (which accumulates in `logits.dtype`); fp16 multi-loss grads differ at the ULP floor.
+        Assert.rms_close_relative(grad_mono, ref_grad, threshold, 1e-8 if grad_mono.dtype == torch.float32 else 1e-6)
     else:
         assert grad_mono is None
+
+
+_MONOLITHIC_KINDS = (
+    ("cross_entropy",),
+    ("z_loss",),
+    ("cross_entropy", "z_loss"),
+)
 
 
 @pytest.mark.slow
@@ -638,10 +689,13 @@ def _test_monolithic_loss(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
     _LOSS_PARAMETERS,
 )
+@pytest.mark.parametrize("kinds", _MONOLITHIC_KINDS)
 def test_monolithic_loss(
-    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    kinds, batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
 ):
-    _test_monolithic_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate)
+    _test_monolithic_loss(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate, kinds
+    )
 
 
 @pytest.mark.slow
@@ -847,6 +901,22 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                             compute_entropy,
                             test_context.group,
                         )
+            # Monolithic kernel
+            for kinds in _MONOLITHIC_KINDS:
+                with test_context.subtest(base_path, f"monolithic-{"_".join(kinds)}-{suffix}", 2) as subtest:
+                    if subtest.do_run:
+                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                        _test_monolithic_loss(
+                            batch_shape,
+                            num_columns,
+                            grad_output,
+                            logits_scale_factor,
+                            loss_masking,
+                            dtype,
+                            accumulate,
+                            kinds,
+                            test_context.group,
+                        )
 
 
 @pytest.mark.slow
@@ -889,6 +959,7 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "grpo",
         "grpo_metrics-False",
         "grpo_metrics-True",
+        *(f"monolithic-{"_".join(kinds)}" for kinds in _MONOLITHIC_KINDS),
     ),
 )
 def test_lm_loss_distributed(

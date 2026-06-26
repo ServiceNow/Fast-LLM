@@ -8,6 +8,7 @@ from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.monolithic import MonolithicLossSpec
 
 
 class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss[ConfigType]):
@@ -31,6 +32,17 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
             logits_scale_factor=self._logits_scale_factor,
             grad_logits=grad_logits,
             divisor=self._get_label_count(kwargs),
+        )
+
+    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+        return MonolithicLossSpec(
+            kind="z_loss",
+            name=self.name,
+            weight=self._weight,
+            logits_scale_factor=self._logits_scale_factor,
+            grad_output=self._get_grad_output(kwargs),
+            divisor=self._get_label_count(kwargs),
+            loss_mask=self._get_loss_mask(kwargs, split_index),
         )
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
