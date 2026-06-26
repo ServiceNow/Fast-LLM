@@ -698,6 +698,112 @@ def test_monolithic_loss(
     )
 
 
+def _test_monolithic_distillation_loss(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    accumulate,
+    target_format,
+    entropy_loss_type,
+    temperature,
+    group=None,
+):
+    # The monolithic from-distribution branch (teacher target) must reproduce `fused_entropy_loss_forward_backward`.
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, target_format, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    local_target = split_op(target, group, -1).contiguous()
+    divisor = local_logits.shape[:-1].numel()
+    out_ref, grad_ref = fused_entropy_loss_forward_backward(
+        logits=local_logits,
+        target=local_target,
+        loss_mask=loss_mask,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        temperature=temperature,
+        target_format=target_format,
+        entropy_loss_type=entropy_loss_type,
+        divisor=divisor,
+    )
+    spec = MonolithicLossSpec(
+        kind="entropy_from_distribution",
+        name="distillation",
+        weight=1.0,
+        logits_scale_factor=logits_scale_factor,
+        grad_output=grad_output,
+        divisor=divisor,
+        target=local_target,
+        loss_mask=loss_mask,
+        target_format=target_format,
+        entropy_loss_type=entropy_loss_type,
+        temperature=temperature,
+    )
+    if accumulate and grad_output is not None:
+        previous_grad = torch.randn_like(local_logits)
+        grad_ref = grad_ref + previous_grad
+        grad_logits = previous_grad.clone()
+    else:
+        grad_logits = None
+    outputs, grad_mono = monolithic_head_loss_forward_backward(
+        local_logits, [spec], group=group, grad_logits=grad_logits
+    )
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(outputs[0].loss, out_ref, threshold, 1e-6)
+    if grad_output is not None:
+        Assert.rms_close_relative(grad_mono, grad_ref, threshold, 1e-8 if grad_mono.dtype == torch.float32 else 1e-6)
+    else:
+        assert grad_mono is None
+
+
+_MONOLITHIC_DISTRIBUTION_CASES = (
+    # (target_format, entropy_loss_type, temperature)
+    (TargetFormat.logits, EntropyLossType.cross_entropy, 1.0),
+    (TargetFormat.logits, EntropyLossType.forward_kl, 1.0),
+    (TargetFormat.logits, EntropyLossType.reverse_kl, 1.0),
+    (TargetFormat.logits, EntropyLossType.cross_entropy, 2.0),  # Temperature
+    (TargetFormat.probabilities, EntropyLossType.cross_entropy, 1.0),
+    (TargetFormat.probabilities, EntropyLossType.forward_kl, 1.0),
+    (TargetFormat.probabilities, EntropyLossType.reverse_kl, 1.0),
+)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+@pytest.mark.parametrize(("target_format", "entropy_loss_type", "temperature"), _MONOLITHIC_DISTRIBUTION_CASES)
+def test_monolithic_distillation_loss(
+    target_format,
+    entropy_loss_type,
+    temperature,
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    block_size,
+    accumulate,
+):
+    _test_monolithic_distillation_loss(
+        batch_shape,
+        num_columns,
+        grad_output,
+        logits_scale_factor,
+        loss_masking,
+        dtype,
+        accumulate,
+        target_format,
+        entropy_loss_type,
+        temperature,
+    )
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
 @pytest.mark.parametrize(
@@ -917,6 +1023,26 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                             kinds,
                             test_context.group,
                         )
+            # Monolithic from-distribution (distillation) losses
+            for target_format, entropy_loss_type, temperature in _MONOLITHIC_DISTRIBUTION_CASES:
+                with test_context.subtest(
+                    base_path, f"monolithic_dist-{entropy_loss_type}-{target_format}-{temperature}-{suffix}", 2
+                ) as subtest:
+                    if subtest.do_run:
+                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                        _test_monolithic_distillation_loss(
+                            batch_shape,
+                            num_columns,
+                            grad_output,
+                            logits_scale_factor,
+                            loss_masking,
+                            dtype,
+                            accumulate,
+                            target_format,
+                            entropy_loss_type,
+                            temperature,
+                            test_context.group,
+                        )
 
 
 @pytest.mark.slow
@@ -960,6 +1086,10 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "grpo_metrics-False",
         "grpo_metrics-True",
         *(f"monolithic-{"_".join(kinds)}" for kinds in _MONOLITHIC_KINDS),
+        *(
+            f"monolithic_dist-{entropy_loss_type}-{target_format}-{temperature}"
+            for target_format, entropy_loss_type, temperature in _MONOLITHIC_DISTRIBUTION_CASES
+        ),
     ),
 )
 def test_lm_loss_distributed(
