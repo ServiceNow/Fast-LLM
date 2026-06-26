@@ -19,7 +19,7 @@ if os.environ.get("FAST_LLM_SKIP_TRITON_AUTOTUNE"):
 _autotune_restore_stack: list = []
 
 
-def _save_for_restore(nargs, reset_only=False):
+def _save_for_restore(nargs: dict, reset_only: bool = False) -> None:
     # Autotune benchmarks each config by re-running the kernel, which corrupts buffers the kernel reads
     # and writes in place: the grad buffer on the accumulation path (a later loss adding into a shared
     # buffer), and `partial_losses` in the tensor-parallel path where it aliases the output. Snapshot
@@ -36,7 +36,7 @@ def _save_for_restore(nargs, reset_only=False):
     _autotune_restore_stack.append(saved)
 
 
-def _restore(nargs, exception):
+def _restore(nargs: dict, exception: Exception | None) -> None:
     for name, value in _autotune_restore_stack.pop().items():
         nargs[name].copy_(value)
 
@@ -768,8 +768,8 @@ def triton_entropy_loss_forward_backward(
         divisor = n_rows
     is_distribution = target_format != TargetFormat.labels
     if block_size is None:
-        # The from-distribution kernels run a softmax on both logits and target, so a smaller tile is
-        # needed to keep occupancy up; their `num_warps` is autotuned per vocab size rather than set here.
+        # Smaller tile for the distribution path to keep occupancy up; its `num_warps` is autotuned
+        # (see `_distribution_autotune_configs`).
         block_size = min(triton.next_power_of_2(n_cols), 16384 if is_distribution else 32768)
     kwargs = {
         "logits_stride_0": logits.stride(-2),
