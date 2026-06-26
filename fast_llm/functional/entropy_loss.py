@@ -92,8 +92,7 @@ def torch_entropy_loss_forward_backward(
     return loss.detach_(), grad
 
 
-@torch.compile
-def fused_softmax_base(
+def _softmax_base(
     logits: torch.Tensor,  # (*batch, vocab)
     logits_scale_factor: float = 1.0,
     group: ProcessGroup | None = None,
@@ -106,6 +105,9 @@ def fused_softmax_base(
     in a numerically stable way and with tensor-parallel support.
     Warning: The returned values are regularized by `logits_max`.
         The regularization typically but not always cancels out in derived quantities.
+
+    This plain (un-compiled) core is shared between the public `fused_softmax_base` wrapper and the
+    monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
     """
     logits = logits.float()
     if logits_scale_factor != 1.0:
@@ -119,6 +121,9 @@ def fused_softmax_base(
     if group is not None:
         all_reduce(sum_exp_logits, op=ReduceOp.SUM, group=group)
     return logits_norm, exp_logits, sum_exp_logits, logits_max
+
+
+fused_softmax_base = torch.compile(_softmax_base)
 
 
 @torch.compile
@@ -207,8 +212,7 @@ def _fused_cross_entropy_base_from_distribution(
     return per_sample_loss, grad
 
 
-@torch.compile
-def fused_predicted_logits_from_labels(
+def _predicted_logits_from_labels(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,)
     loss_mask: torch.Tensor,  # (*batch,), == target>=0
@@ -221,6 +225,9 @@ def fused_predicted_logits_from_labels(
     Normally used in combination with `fused_softmax_base`, may also recover probabilities or log probabilities:
     `predicted_probabilities = predicted_logits.exp() / sum_exp_logits`
     `predicted_log_probabilities = predicted_logits / sum_exp_logits.log()`
+
+    This plain (un-compiled) core is shared between the public `fused_predicted_logits_from_labels` wrapper
+    and the monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
     """
 
     if group is None:
@@ -241,6 +248,9 @@ def fused_predicted_logits_from_labels(
         predicted_logits = target_mask * predicted_logits
         all_reduce(predicted_logits, op=ReduceOp.SUM, group=group)
     return predicted_logits, target_masked, target_mask
+
+
+fused_predicted_logits_from_labels = torch.compile(_predicted_logits_from_labels)
 
 
 @torch.compile

@@ -9,6 +9,7 @@ from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
+from fast_llm.layers.language_model.loss.monolithic import MonolithicLossOutput, MonolithicLossSpec
 from fast_llm.utils import Assert
 
 
@@ -71,6 +72,19 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 
     def get_loss_definitions(self) -> list[LossDef]:
         return [LossDef(name=self.name)] if self._do_register_loss else []
+
+    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> "MonolithicLossSpec | None":
+        """
+        Package this loss's inputs for the monolithic head-loss kernel, or return `None` if it is not
+        supported there (it then runs through its own `forward_backward`, accumulating into the same grad).
+        """
+        return None
+
+    def register_monolithic_outputs(
+        self, output: "MonolithicLossOutput", kwargs: dict[str, typing.Any], losses: dict | None
+    ) -> None:
+        if self._do_register_loss:
+            self._register_loss(self.name, output.loss, losses)
 
     def get_preprocessing_config(
         self,

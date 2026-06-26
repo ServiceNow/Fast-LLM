@@ -10,6 +10,7 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelLabelEntropyLossConfig,
 )
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.monolithic import MonolithicLossSpec
 
 
 class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossConfig](LanguageModelLoss[ConfigType]):
@@ -36,6 +37,18 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
             target_format=TargetFormat.labels,
             entropy_loss_type=self._config.loss_type,
             divisor=self._get_label_count(kwargs),
+        )
+
+    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+        # For labels, forward-KL is identical to cross-entropy (one-hot target entropy is zero).
+        return MonolithicLossSpec(
+            kind="cross_entropy",
+            name=self.name,
+            weight=self._weight,
+            logits_scale_factor=self._logits_scale_factor,
+            grad_output=self._get_grad_output(kwargs),
+            divisor=self._get_label_count(kwargs),
+            target=self._get_labels(kwargs, split_index),
         )
 
 

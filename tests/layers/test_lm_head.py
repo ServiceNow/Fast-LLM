@@ -39,6 +39,7 @@ class LMHeadTestConfig:
     tied_embedding_weight: bool = False
     num_splits: int = 1
     gspo_document_lengths: tuple[int, ...] | None = None
+    loss_implementation: str = "per_loss"
 
     @property
     def actual_label_loss(self):
@@ -59,6 +60,8 @@ class LMHeadTestConfig:
             "cross_entropy_splits": self.num_splits,
             "prediction_heads": self.prediction_heads,
         }
+        if self.loss_implementation != "per_loss":
+            head_config["loss_implementation"] = self.loss_implementation
         if self.final_logit_softcap is not None:
             head_config["final_logit_softcap"] = self.final_logit_softcap
         losses = {}
@@ -359,6 +362,16 @@ _lm_head_test_configs.append(
 _add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
 _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
+
+# Monolithic ("fused") head-loss path. So far only cross-entropy is computed in the monolithic kernel;
+# other losses (e.g. z-loss) fall back to their own implementation and accumulate into the same gradient.
+_add_configs("fused", loss_implementation="fused")
+_add_configs("fused_bfloat16", loss_implementation="fused", compute_dtype=DataType.bfloat16)
+_add_configs("fused_logit_scaling", loss_implementation="fused", logits_scale_factor=5.0)
+_add_configs("fused_final_logit_softcap", loss_implementation="fused", final_logit_softcap=2.0)
+_add_configs("fused_tied_embedding_weight", loss_implementation="fused", tied_embedding_weight=True)
+_add_configs("fused_multi_token_prediction", loss_implementation="fused", prediction_heads=2)
+_add_configs("fused_label_and_z_loss_weighted", loss_implementation="fused", label_loss=True, z_loss=0.5)
 
 
 @pytest.mark.slow

@@ -18,6 +18,7 @@ from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backwa
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
+from fast_llm.layers.language_model.loss.monolithic import MonolithicLossSpec, monolithic_head_loss_forward_backward
 from fast_llm.layers.language_model.loss.policy_gradient import (
     GRPOMetrics,
     compute_grpo_metrics,
@@ -584,6 +585,63 @@ def _test_z_loss(
         threshold=1e-5 if data_type == DataType.float32 else 1e-4,
         group=group,
     )
+
+
+def _test_monolithic_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate, group=None
+):
+    # The monolithic kernel must reproduce the per-loss baseline (here: a single cross-entropy loss).
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    # The head feeds the label count as divisor; mirror that instead of the kernel's default (numel).
+    divisor = max(int((target >= 0).sum().item()), 1)
+    out_ref, grad_ref = fused_entropy_loss_forward_backward(
+        logits=local_logits,
+        target=target,
+        loss_mask=None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        target_format=TargetFormat.labels,
+        entropy_loss_type=EntropyLossType.cross_entropy,
+        divisor=divisor,
+    )
+    spec = MonolithicLossSpec(
+        kind="cross_entropy",
+        name="cross_entropy",
+        weight=1.0,
+        logits_scale_factor=logits_scale_factor,
+        grad_output=grad_output,
+        divisor=divisor,
+        target=target,
+    )
+    if accumulate and grad_output is not None:
+        previous_grad = torch.randn_like(local_logits)
+        grad_ref = grad_ref + previous_grad
+        grad_logits = previous_grad.clone()
+    else:
+        grad_logits = None
+    outputs, grad_mono = monolithic_head_loss_forward_backward(
+        local_logits, [spec], group=group, grad_logits=grad_logits
+    )
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(outputs[0].loss, out_ref, threshold, 1e-6)
+    if grad_output is not None:
+        Assert.rms_close_relative(grad_mono, grad_ref, threshold, 1e-8 if grad_mono.dtype == torch.float32 else 1e-7)
+    else:
+        assert grad_mono is None
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate)
 
 
 @pytest.mark.slow

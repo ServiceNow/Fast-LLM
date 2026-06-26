@@ -19,9 +19,11 @@ from fast_llm.layers.language_model.config import (
     LanguageModelEmbeddingsConfig,
     LanguageModelHeadConfig,
     LanguageModelKwargs,
+    LossImplementation,
 )
 from fast_llm.layers.language_model.loss.config import LanguageModelLabelEntropyLossConfig
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.monolithic import monolithic_head_loss_forward_backward
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, safe_merge_dicts
 
@@ -272,18 +274,21 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         if return_logits:
             return logits, None
 
-        losses_, grad = [], None
-        for loss in self.losses:
-            # losses are returned unscaled but the grads are already scaled
-            loss_value, grad = loss.forward_backward(
-                logits,
-                kwargs,
-                losses,
-                split_index,
-                grad,
-            )
-            if loss_value is not None:
-                losses_.append(loss_value.detach())
+        if self._config.loss_implementation == LossImplementation.per_loss:
+            losses_, grad = [], None
+            for loss in self.losses:
+                # losses are returned unscaled but the grads are already scaled
+                loss_value, grad = loss.forward_backward(
+                    logits,
+                    kwargs,
+                    losses,
+                    split_index,
+                    grad,
+                )
+                if loss_value is not None:
+                    losses_.append(loss_value.detach())
+        else:
+            losses_, grad = self._monolithic_loss_forward_backward(logits, kwargs, losses, split_index)
 
         if grad is not None and self._config.final_logit_softcap is not None:
             grad = _softcap_backward(grad, logits, self._config.final_logit_softcap)
@@ -291,6 +296,40 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         return sum(losses_) if losses_ else None, (
             output_parallel_linear_backward(grad, context) if self.training else None
         )
+
+    def _monolithic_loss_forward_backward(
+        self, logits: torch.Tensor, kwargs: dict, losses: dict | None, split_index: int
+    ) -> tuple[list[torch.Tensor], torch.Tensor | None]:
+        # Losses supported by the monolithic kernel share one softmax pass; the rest (e.g. DPO) run
+        # through their own `forward_backward`, accumulating into the same logits gradient.
+        specs, monolithic_losses, other_losses = [], [], []
+        for loss in self.losses:
+            spec = loss.get_monolithic_spec(kwargs, split_index)
+            if spec is None:
+                other_losses.append(loss)
+            else:
+                specs.append(spec)
+                monolithic_losses.append(loss)
+
+        losses_, grad = [], None
+        if specs:
+            outputs, grad = monolithic_head_loss_forward_backward(
+                logits,
+                specs,
+                group=self._parallel_dim.group if self._vocab_parallel else None,
+                grad_logits=grad,
+            )
+            for loss, output in zip(monolithic_losses, outputs, strict=True):
+                loss.register_monolithic_outputs(output, kwargs, losses)
+                if output.loss is not None:
+                    losses_.append((output.loss if loss.weight == 1 else output.loss * loss.weight).detach())
+
+        for loss in other_losses:
+            loss_value, grad = loss.forward_backward(logits, kwargs, losses, split_index, grad)
+            if loss_value is not None:
+                losses_.append(loss_value.detach())
+
+        return losses_, grad
 
     def get_loss_definitions(self) -> list[LossDef]:
         return [
