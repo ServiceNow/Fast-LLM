@@ -27,6 +27,7 @@ class LMHeadTestConfig:
     name: str
     label_loss: bool | float = False
     distillation_loss: bool | float = False
+    distillation_temperature: float = 1.0
     z_loss: bool | float = False
     grpo_loss: bool | float = False
     gspo_loss: bool | float = False
@@ -71,6 +72,8 @@ class LMHeadTestConfig:
                 losses["label"]["weight"] = self.label_loss
         if self.distillation_loss is not False:
             losses["distillation"] = {"type": "distillation", "reference_model": "distillation"}
+            if self.distillation_temperature != 1.0:
+                losses["distillation"]["temperature"] = self.distillation_temperature
             if isinstance(self.distillation_loss, float):
                 losses["distillation"]["weight"] = self.distillation_loss
         if self.z_loss is not False:
@@ -242,9 +245,12 @@ class LMHeadTestConfig:
             names_losses_weights.append(("label", label_loss, float(self.actual_label_loss)))
 
         if self.distillation_loss is not False:
+            # Teacher logits are scaled by `logits_scale_factor / temperature` before the softmax, matching the kernel.
+            teacher_logits = kwargs[f"reference_distillation_hidden_states"]["head.logits"].float()
+            teacher_logits = teacher_logits * (self.logits_scale_factor / self.distillation_temperature)
             distillation_loss = torch.nn.functional.cross_entropy(
                 logits,
-                torch.softmax(kwargs[f"reference_distillation_hidden_states"]["head.logits"], -1),
+                torch.softmax(teacher_logits, -1),
                 reduction="mean" if loss_mask is None else "none",
             )
             if loss_mask is not None:
@@ -362,9 +368,11 @@ _lm_head_test_configs.append(
 _add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
 _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
+_add_configs("distillation_loss_temperature", distillation_loss=True, distillation_temperature=2.0)
 
-# Monolithic ("fused") head-loss path. So far only cross-entropy is computed in the monolithic kernel;
-# other losses (e.g. z-loss) fall back to their own implementation and accumulate into the same gradient.
+# Monolithic ("fused") head-loss path. Cross-entropy, z-loss, and the from-distribution (distillation) losses
+# run in the monolithic kernel; unsupported losses fall back to their own implementation and accumulate into
+# the same gradient.
 _add_configs("fused", loss_implementation="fused")
 _add_configs("fused_bfloat16", loss_implementation="fused", compute_dtype=DataType.bfloat16)
 _add_configs("fused_logit_scaling", loss_implementation="fused", logits_scale_factor=5.0)
@@ -372,6 +380,14 @@ _add_configs("fused_final_logit_softcap", loss_implementation="fused", final_log
 _add_configs("fused_tied_embedding_weight", loss_implementation="fused", tied_embedding_weight=True)
 _add_configs("fused_multi_token_prediction", loss_implementation="fused", prediction_heads=2)
 _add_configs("fused_label_and_z_loss_weighted", loss_implementation="fused", label_loss=True, z_loss=0.5)
+_add_configs("fused_distillation_loss", loss_implementation="fused", distillation_loss=True)
+_add_configs("fused_label_and_distillation_loss", loss_implementation="fused", label_loss=True, distillation_loss=True)
+_add_configs(
+    "fused_distillation_loss_temperature",
+    loss_implementation="fused",
+    distillation_loss=True,
+    distillation_temperature=2.0,
+)
 
 
 @pytest.mark.slow

@@ -73,9 +73,25 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
             grad_logits=grad_logits,
             group=self._parallel_dim.group if self._vocab_parallel else None,
             logits_scale_factor=self._logits_scale_factor,
+            temperature=self._config.temperature,
             target_format=TargetFormat.logits,
             entropy_loss_type=self._config.loss_type,
             divisor=self._get_label_count(kwargs),
+        )
+
+    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+        return MonolithicLossSpec(
+            kind="entropy_from_distribution",
+            name=self.name,
+            weight=self._weight,
+            logits_scale_factor=self._logits_scale_factor,
+            grad_output=self._get_grad_output(kwargs),
+            divisor=self._get_label_count(kwargs),
+            target=self._get_reference_model_logits(self._config.reference_model, kwargs, split_index),
+            loss_mask=self._get_loss_mask(kwargs, split_index),
+            target_format=TargetFormat.logits,
+            entropy_loss_type=self._config.loss_type,
+            temperature=self._config.temperature,
         )
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
