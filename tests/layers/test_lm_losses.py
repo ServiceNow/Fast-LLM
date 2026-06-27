@@ -758,6 +758,58 @@ def _test_monolithic_distillation_loss(
         assert grad_mono is None
 
 
+def _test_monolithic_grpo_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate, group=None
+):
+    # The monolithic GRPO branch must reproduce `fused_grpo_loss_forward_backward` (loss, grad, new_logprobs).
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    local_logits = split_op(logits, group, -1).contiguous()
+    num_labels = int((target >= 0).sum().item())
+    num_labels_in_seq = torch.where(
+        target >= 0,
+        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
+        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    )
+    divisor = max(num_labels, 1)
+    previous_grad = torch.randn_like(local_logits) if accumulate and grad_output is not None else None
+    out_ref, grad_ref, new_logprobs_ref = fused_grpo_loss_forward_backward(
+        local_logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        grad_logits=None if previous_grad is None else previous_grad.clone(),
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        num_labels_in_seq=num_labels_in_seq,
+        divisor=divisor,
+    )
+    spec = MonolithicLossSpec(
+        kind="grpo",
+        name="grpo",
+        weight=1.0,
+        logits_scale_factor=logits_scale_factor,
+        grad_output=grad_output,
+        divisor=divisor,
+        target=target,
+        advantages=advantages,
+        old_log_probabilities=old_log_probabilities,
+        num_labels_in_seq=num_labels_in_seq,
+    )
+    outputs, grad_mono = monolithic_head_loss_forward_backward(
+        local_logits, [spec], group=group, grad_logits=None if previous_grad is None else previous_grad.clone()
+    )
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(outputs[0].loss, out_ref, threshold, 1e-6)
+    Assert.rms_close_relative(outputs[0].new_logprobs_mean, new_logprobs_ref, threshold, 1e-6)
+    if grad_output is not None:
+        Assert.rms_close_relative(grad_mono, grad_ref, threshold, 1e-8 if grad_mono.dtype == torch.float32 else 1e-6)
+    else:
+        assert grad_mono is None
+
+
 _MONOLITHIC_DISTRIBUTION_CASES = (
     # (target_format, entropy_loss_type, temperature)
     (TargetFormat.logits, EntropyLossType.cross_entropy, 1.0),
@@ -801,6 +853,20 @@ def test_monolithic_distillation_loss(
         target_format,
         entropy_loss_type,
         temperature,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_grpo_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_grpo_loss(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate
     )
 
 
@@ -1023,6 +1089,20 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                             kinds,
                             test_context.group,
                         )
+            # Monolithic GRPO objective
+            with test_context.subtest(base_path, f"monolithic_grpo-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_grpo_loss(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        accumulate,
+                        test_context.group,
+                    )
             # Monolithic from-distribution (distillation) losses
             for target_format, entropy_loss_type, temperature in _MONOLITHIC_DISTRIBUTION_CASES:
                 with test_context.subtest(
@@ -1085,6 +1165,7 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "grpo",
         "grpo_metrics-False",
         "grpo_metrics-True",
+        "monolithic_grpo",
         *(f"monolithic-{"_".join(kinds)}" for kinds in _MONOLITHIC_KINDS),
         *(
             f"monolithic_dist-{entropy_loss_type}-{target_format}-{temperature}"

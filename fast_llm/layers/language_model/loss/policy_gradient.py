@@ -19,6 +19,7 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelPolicyGradientLossConfig,
 )
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.monolithic import MonolithicLossOutput, MonolithicLossSpec
 from fast_llm.utils import Assert
 
 
@@ -141,6 +142,33 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._register_extra_metrics(logits, kwargs, losses, split_index)
 
         return loss, grad
+
+    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+        if self._config.metrics != GRPOMetricsLevel.none:
+            # The metric family isn't emitted by the monolithic kernel yet; run through the per-loss path.
+            return None
+        return MonolithicLossSpec(
+            kind="grpo",
+            name=self.name,
+            weight=self._weight,
+            logits_scale_factor=self._logits_scale_factor,
+            grad_output=self._get_grad_output(kwargs),
+            divisor=self._get_label_count(kwargs),
+            target=self._get_labels(kwargs, split_index),
+            advantages=self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            old_log_probabilities=self._prepare_target(
+                kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index
+            ),
+            epsilon_low=self._config.epsilon_low,
+            epsilon_high=self._config.epsilon_high,
+            num_labels_in_seq=self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
+        )
+
+    def register_monolithic_outputs(
+        self, output: MonolithicLossOutput, kwargs: dict[str, typing.Any], losses: dict | None
+    ) -> None:
+        super().register_monolithic_outputs(output, kwargs, losses)
+        self._register_new_logprobs(output.new_logprobs_mean, kwargs, losses)
 
     def _register_extra_metrics(
         self,

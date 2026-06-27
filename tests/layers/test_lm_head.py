@@ -388,6 +388,7 @@ _add_configs(
     distillation_loss=True,
     distillation_temperature=2.0,
 )
+_add_configs("fused_grpo_loss", loss_implementation="fused", grpo_loss=True)
 
 
 @pytest.mark.slow

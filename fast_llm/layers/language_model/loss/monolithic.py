@@ -26,18 +26,27 @@ class MonolithicLossSpec(typing.NamedTuple):
     logits_scale_factor: float
     grad_output: float | None
     divisor: float
-    target: torch.Tensor | None = None  # Cross-entropy labels, or a teacher distribution (logits/probabilities).
-    loss_mask: torch.Tensor | None = None  # z-loss / distribution-loss mask (cross-entropy derives its own).
+    target: torch.Tensor | None = (
+        None  # Cross-entropy / GRPO labels, or a teacher distribution (logits/probabilities).
+    )
+    loss_mask: torch.Tensor | None = None  # z-loss / distribution-loss mask (cross-entropy / GRPO derive their own).
     # Distribution losses (cross-entropy / forward-KL / reverse-KL from a teacher distribution) only.
     target_format: TargetFormat = TargetFormat.logits
     entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy
     temperature: float = 1.0
+    # Policy-gradient (GRPO) only.
+    advantages: torch.Tensor | None = None
+    old_log_probabilities: torch.Tensor | None = None
+    epsilon_low: float = 0.2
+    epsilon_high: float = 0.2
+    num_labels_in_seq: torch.Tensor | None = None  # Per-sequence label count; enables the `new_logprobs_mean` metric.
 
 
 class MonolithicLossOutput(typing.NamedTuple):
     """Per-loss outputs returned by the monolithic kernel, registered via `register_monolithic_outputs`."""
 
     loss: torch.Tensor | None = None
+    new_logprobs_mean: torch.Tensor | None = None  # GRPO only.
 
 
 @torch.compile
@@ -60,7 +69,22 @@ def _monolithic_core(
     distribution_target_format: TargetFormat,
     distribution_entropy_loss_type: EntropyLossType,
     distribution_temperature: float,
-) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+    grpo_target: torch.Tensor | None,
+    grpo_advantages: torch.Tensor | None,
+    grpo_old_log_probabilities: torch.Tensor | None,
+    grpo_grad_output: float | None,
+    grpo_divisor: float,
+    grpo_epsilon_low: float,
+    grpo_epsilon_high: float,
+    grpo_num_labels_in_seq: torch.Tensor | None,
+) -> tuple[
+    torch.Tensor | None,
+    torch.Tensor | None,
+    torch.Tensor | None,
+    torch.Tensor | None,
+    torch.Tensor | None,
+    torch.Tensor | None,
+]:
     """
     The monolithic head-loss kernel: one shared softmax over the logits, then every enabled loss's scalar
     and gradient contribution. Losses with a required tensor input are toggled off by passing it as `None`
@@ -151,6 +175,45 @@ def _monolithic_core(
                 distribution_grad = distribution_grad * distribution_loss_mask.unsqueeze(-1)
             grad = distribution_grad if grad is None else grad + distribution_grad
 
+    grpo_loss = None
+    grpo_new_logprobs_mean = None
+    if grpo_target is not None:
+        grpo_loss_mask = grpo_target >= 0
+        grpo_predicted_logits, grpo_target_masked, grpo_target_mask = _predicted_logits_from_labels(
+            logits_norm, grpo_target, grpo_loss_mask, group
+        )
+        new_log_probs = grpo_predicted_logits - sum_exp_logits.log()
+        probability_ratio = (new_log_probs - grpo_old_log_probabilities).exp()
+        grpo_losses = -torch.min(
+            probability_ratio * grpo_advantages,
+            torch.clamp(probability_ratio, 1 - grpo_epsilon_low, 1 + grpo_epsilon_high) * grpo_advantages,
+        )
+        grpo_loss = (grpo_losses * grpo_loss_mask).sum() / grpo_divisor
+        if grpo_num_labels_in_seq is not None:
+            # Sum of per-sequence mean log-probs; clamp avoids 0/0 at fully-masked documents (also loss-masked).
+            grpo_new_logprobs_mean = (new_log_probs * grpo_loss_mask / grpo_num_labels_in_seq.clamp(min=1)).sum()
+        if grpo_grad_output is not None:
+            grad_output = grpo_grad_output / grpo_divisor * logits_scale_factor
+            # grad[a>=0] = -a * (ratio <= 1 + epsilon_high); grad[a<=0] = a * (ratio >= 1 - epsilon_low).
+            probability_ratio_grad = (
+                grad_output
+                * (
+                    torch.clamp_min(grpo_advantages, 0) * (probability_ratio <= 1 + grpo_epsilon_high)
+                    + torch.clamp_max(grpo_advantages, 0) * (probability_ratio >= 1 - grpo_epsilon_low)
+                )
+                * grpo_loss_mask
+            )
+            # d(probability_ratio)/d(logits) = -probability_ratio * (predicted_probabilities - target_probabilities).
+            predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze(-1)
+            grpo_grad = (probability_ratio_grad * probability_ratio).unsqueeze(
+                -1
+            ) * predicted_probabilities.scatter_add(
+                -1,
+                grpo_target_masked.unsqueeze(-1),
+                -(grpo_loss_mask if grpo_target_mask is None else grpo_target_mask).unsqueeze(-1).to(torch.float32),
+            )
+            grad = grpo_grad if grad is None else grad + grpo_grad
+
     if grad is not None:
         grad = grad.to(logits.dtype)
         if grad_logits is None:
@@ -158,7 +221,7 @@ def _monolithic_core(
         else:
             grad_logits.add_(grad)
 
-    return cross_entropy_loss, z_loss, distribution_loss, grad_logits
+    return cross_entropy_loss, z_loss, distribution_loss, grpo_loss, grpo_new_logprobs_mean, grad_logits
 
 
 def monolithic_head_loss_forward_backward(
@@ -178,7 +241,7 @@ def monolithic_head_loss_forward_backward(
     specs_by_kind: dict[str, MonolithicLossSpec] = {}
     for spec in specs:
         Assert.eq(spec.logits_scale_factor, logits_scale_factor)
-        if spec.kind not in ("cross_entropy", "z_loss", "entropy_from_distribution"):
+        if spec.kind not in ("cross_entropy", "z_loss", "entropy_from_distribution", "grpo"):
             raise NotImplementedError(spec.kind)
         assert spec.kind not in specs_by_kind, spec.kind
         specs_by_kind[spec.kind] = spec
@@ -186,8 +249,9 @@ def monolithic_head_loss_forward_backward(
     cross_entropy_spec = specs_by_kind.get("cross_entropy")
     z_loss_spec = specs_by_kind.get("z_loss")
     distribution_spec = specs_by_kind.get("entropy_from_distribution")
+    grpo_spec = specs_by_kind.get("grpo")
 
-    cross_entropy_loss, z_loss, distribution_loss, grad_logits = _monolithic_core(
+    cross_entropy_loss, z_loss, distribution_loss, grpo_loss, grpo_new_logprobs_mean, grad_logits = _monolithic_core(
         logits,
         group,
         logits_scale_factor,
@@ -210,11 +274,26 @@ def monolithic_head_loss_forward_backward(
             EntropyLossType.cross_entropy if distribution_spec is None else distribution_spec.entropy_loss_type
         ),
         distribution_temperature=1.0 if distribution_spec is None else distribution_spec.temperature,
+        grpo_target=None if grpo_spec is None else grpo_spec.target,
+        grpo_advantages=None if grpo_spec is None else grpo_spec.advantages,
+        grpo_old_log_probabilities=None if grpo_spec is None else grpo_spec.old_log_probabilities,
+        grpo_grad_output=None if grpo_spec is None else grpo_spec.grad_output,
+        grpo_divisor=1.0 if grpo_spec is None else grpo_spec.divisor,
+        grpo_epsilon_low=0.2 if grpo_spec is None else grpo_spec.epsilon_low,
+        grpo_epsilon_high=0.2 if grpo_spec is None else grpo_spec.epsilon_high,
+        grpo_num_labels_in_seq=None if grpo_spec is None else grpo_spec.num_labels_in_seq,
     )
 
     loss_by_kind = {
         "cross_entropy": cross_entropy_loss,
         "z_loss": z_loss,
         "entropy_from_distribution": distribution_loss,
+        "grpo": grpo_loss,
     }
-    return [MonolithicLossOutput(loss=loss_by_kind[spec.kind]) for spec in specs], grad_logits
+    return [
+        MonolithicLossOutput(
+            loss=loss_by_kind[spec.kind],
+            new_logprobs_mean=grpo_new_logprobs_mean if spec.kind == "grpo" else None,
+        )
+        for spec in specs
+    ], grad_logits
