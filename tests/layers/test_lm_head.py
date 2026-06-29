@@ -415,6 +415,15 @@ _add_configs(
     distillation_temperature=2.0,
 )
 _add_configs("fused_grpo_loss", loss_implementation="fused", grpo_loss=True)
+# Multi-loss combos sharing one softmax pass: a three-way distillation combo and an RL + regularizer combo.
+_add_configs(
+    "fused_label_distillation_z_loss",
+    loss_implementation="fused",
+    label_loss=True,
+    distillation_loss=True,
+    z_loss=0.5,
+)
+_add_configs("fused_grpo_and_z_loss", loss_implementation="fused", grpo_loss=True, z_loss=0.5)
 # GSPO runs through its own three-phase path (compiled forward → eager segment seam → compiled backward),
 # accumulating into the monolithic kernel's shared gradient. No splits (per-segment aggregation can't
 # recombine across cross_entropy_splits chunks).
@@ -443,6 +452,18 @@ for _loss_implementation in ("per_loss", "fused"):
                     loss_implementation=_loss_implementation,
                 )
             )
+# The metric family co-resides with z-loss in the shared softmax pass. Single-split (metrics can't be split).
+for _loss_masking in (False, True):
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_grpo_and_z_loss_metrics{'_masked' if _loss_masking else ''}",
+            grpo_loss=True,
+            z_loss=0.5,
+            grpo_metrics="basic",
+            loss_masking=_loss_masking,
+            loss_implementation="fused",
+        )
+    )
 
 
 @pytest.mark.slow

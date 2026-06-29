@@ -588,7 +588,19 @@ def _test_z_loss(
 
 
 def _monolithic_baseline(
-    kind: str, local_logits, target, z_mask, grad_output, group, logits_scale_factor, divisor
+    kind: str,
+    local_logits,
+    target,
+    z_mask,
+    grad_output,
+    group,
+    logits_scale_factor,
+    divisor,
+    *,
+    teacher_target=None,
+    advantages=None,
+    old_log_probabilities=None,
+    num_labels_in_seq=None,
 ) -> tuple[torch.Tensor, torch.Tensor | None, MonolithicLossSpec]:
     # Each enabled loss's baseline is its own `fused_*` kernel; the monolithic grad must equal their sum.
     if kind == "cross_entropy":
@@ -630,6 +642,55 @@ def _monolithic_baseline(
             divisor=divisor,
             loss_mask=z_mask,
         )
+    elif kind == "entropy_from_distribution":
+        loss, grad = fused_entropy_loss_forward_backward(
+            logits=local_logits,
+            target=teacher_target,
+            loss_mask=z_mask,
+            grad_output=grad_output,
+            group=group,
+            logits_scale_factor=logits_scale_factor,
+            target_format=TargetFormat.logits,
+            entropy_loss_type=EntropyLossType.cross_entropy,
+            divisor=divisor,
+        )
+        spec = MonolithicLossSpec(
+            kind=kind,
+            name=kind,
+            weight=1.0,
+            logits_scale_factor=logits_scale_factor,
+            grad_output=grad_output,
+            divisor=divisor,
+            target=teacher_target,
+            loss_mask=z_mask,
+            target_format=TargetFormat.logits,
+            entropy_loss_type=EntropyLossType.cross_entropy,
+        )
+    elif kind == "grpo":
+        loss, grad, _ = fused_grpo_loss_forward_backward(
+            local_logits,
+            target,
+            advantages,
+            old_log_probabilities,
+            grad_logits=None,
+            grad_output=grad_output,
+            group=group,
+            logits_scale_factor=logits_scale_factor,
+            num_labels_in_seq=num_labels_in_seq,
+            divisor=divisor,
+        )
+        spec = MonolithicLossSpec(
+            kind=kind,
+            name=kind,
+            weight=1.0,
+            logits_scale_factor=logits_scale_factor,
+            grad_output=grad_output,
+            divisor=divisor,
+            target=target,
+            advantages=advantages,
+            old_log_probabilities=old_log_probabilities,
+            num_labels_in_seq=num_labels_in_seq,
+        )
     else:
         raise NotImplementedError(kind)
     return loss, grad, spec
@@ -646,10 +707,42 @@ def _test_monolithic_loss(
     # z-loss takes an explicit mask (the head's `loss_mask` kwarg); align it with the labeled tokens.
     z_mask = (target >= 0) if loss_masking else None
 
+    # The teacher distribution is over the full vocab, so it splits along the vocab axis like the logits.
+    teacher_target = (
+        split_op(torch.randn_like(logits), group, -1).contiguous() if "entropy_from_distribution" in kinds else None
+    )
+    if "grpo" in kinds:
+        advantages = torch.randn_like(target, dtype=torch.float32)
+        # Correlate the old log-probs with the policy so the clipping branches are exercised.
+        old_log_probabilities = (
+            torch.nn.functional.log_softmax(logits, dim=-1)
+            .gather(-1, (target * (target >= 0)).unsqueeze(-1))
+            .squeeze(-1)
+            + torch.randn_like(target, dtype=torch.float32) / 2
+        )
+        num_labels_in_seq = torch.where(
+            target >= 0,
+            torch.full(batch_shape, divisor, dtype=torch.int32, device=target.device),
+            torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+        )
+    else:
+        advantages = old_log_probabilities = num_labels_in_seq = None
+
     ref_losses, specs, ref_grad = [], [], None
     for kind in kinds:
         ref_loss, grad, spec = _monolithic_baseline(
-            kind, local_logits, target, z_mask, grad_output, group, logits_scale_factor, divisor
+            kind,
+            local_logits,
+            target,
+            z_mask,
+            grad_output,
+            group,
+            logits_scale_factor,
+            divisor,
+            teacher_target=teacher_target,
+            advantages=advantages,
+            old_log_probabilities=old_log_probabilities,
+            num_labels_in_seq=num_labels_in_seq,
         )
         ref_losses.append(ref_loss)
         specs.append(spec)
@@ -680,6 +773,8 @@ _MONOLITHIC_KINDS = (
     ("cross_entropy",),
     ("z_loss",),
     ("cross_entropy", "z_loss"),
+    ("cross_entropy", "z_loss", "entropy_from_distribution"),
+    ("grpo", "z_loss"),
 )
 
 
