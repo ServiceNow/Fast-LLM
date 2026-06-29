@@ -10,6 +10,7 @@ from fast_llm.functional.entropy_loss import (
     _reverse_kl_from_distribution_core,
     _softmax_base,
 )
+from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, _grpo_metrics_core
 from fast_llm.utils import Assert
 
 
@@ -40,6 +41,8 @@ class MonolithicLossSpec(typing.NamedTuple):
     epsilon_low: float = 0.2
     epsilon_high: float = 0.2
     num_labels_in_seq: torch.Tensor | None = None  # Per-sequence label count; enables the `new_logprobs_mean` metric.
+    compute_metrics: bool = False  # Emit the GRPO metric family from the shared softmax.
+    compute_entropy: bool = False  # Also emit per-token entropy (the only metric needing the vocab axis).
 
 
 class MonolithicLossOutput(typing.NamedTuple):
@@ -47,6 +50,7 @@ class MonolithicLossOutput(typing.NamedTuple):
 
     loss: torch.Tensor | None = None
     new_logprobs_mean: torch.Tensor | None = None  # GRPO only.
+    metrics: GRPOMetrics | None = None  # GRPO only.
 
 
 @torch.compile
@@ -77,12 +81,15 @@ def _monolithic_core(
     grpo_epsilon_low: float,
     grpo_epsilon_high: float,
     grpo_num_labels_in_seq: torch.Tensor | None,
+    grpo_compute_metrics: bool,
+    grpo_compute_entropy: bool,
 ) -> tuple[
     torch.Tensor | None,
     torch.Tensor | None,
     torch.Tensor | None,
     torch.Tensor | None,
     torch.Tensor | None,
+    "GRPOMetrics | None",
     torch.Tensor | None,
 ]:
     """
@@ -177,6 +184,7 @@ def _monolithic_core(
 
     grpo_loss = None
     grpo_new_logprobs_mean = None
+    grpo_metrics = None
     if grpo_target is not None:
         grpo_loss_mask = grpo_target >= 0
         grpo_predicted_logits, grpo_target_masked, grpo_target_mask = _predicted_logits_from_labels(
@@ -192,6 +200,22 @@ def _monolithic_core(
         if grpo_num_labels_in_seq is not None:
             # Sum of per-sequence mean log-probs; clamp avoids 0/0 at fully-masked documents (also loss-masked).
             grpo_new_logprobs_mean = (new_log_probs * grpo_loss_mask / grpo_num_labels_in_seq.clamp(min=1)).sum()
+        if grpo_compute_metrics:
+            # The metric family reuses this branch's softmax + new_log_probs — no second softmax pass.
+            grpo_metrics = _grpo_metrics_core(
+                logits_norm,
+                exp_logits,
+                sum_exp_logits,
+                new_log_probs,
+                grpo_advantages,
+                grpo_old_log_probabilities,
+                grpo_loss_mask,
+                grpo_num_labels_in_seq,
+                grpo_epsilon_low,
+                grpo_epsilon_high,
+                group,
+                grpo_compute_entropy,
+            )
         if grpo_grad_output is not None:
             grad_output = grpo_grad_output / grpo_divisor * logits_scale_factor
             # grad[a>=0] = -a * (ratio <= 1 + epsilon_high); grad[a<=0] = a * (ratio >= 1 - epsilon_low).
@@ -221,7 +245,7 @@ def _monolithic_core(
         else:
             grad_logits.add_(grad)
 
-    return cross_entropy_loss, z_loss, distribution_loss, grpo_loss, grpo_new_logprobs_mean, grad_logits
+    return cross_entropy_loss, z_loss, distribution_loss, grpo_loss, grpo_new_logprobs_mean, grpo_metrics, grad_logits
 
 
 def monolithic_head_loss_forward_backward(
@@ -251,37 +275,41 @@ def monolithic_head_loss_forward_backward(
     distribution_spec = specs_by_kind.get("entropy_from_distribution")
     grpo_spec = specs_by_kind.get("grpo")
 
-    cross_entropy_loss, z_loss, distribution_loss, grpo_loss, grpo_new_logprobs_mean, grad_logits = _monolithic_core(
-        logits,
-        group,
-        logits_scale_factor,
-        grad_logits,
-        ce_target=None if cross_entropy_spec is None else cross_entropy_spec.target,
-        ce_grad_output=None if cross_entropy_spec is None else cross_entropy_spec.grad_output,
-        ce_divisor=1.0 if cross_entropy_spec is None else cross_entropy_spec.divisor,
-        z_loss_enabled=z_loss_spec is not None,
-        z_loss_mask=None if z_loss_spec is None else z_loss_spec.loss_mask,
-        z_loss_grad_output=None if z_loss_spec is None else z_loss_spec.grad_output,
-        z_loss_divisor=1.0 if z_loss_spec is None else z_loss_spec.divisor,
-        distribution_target=None if distribution_spec is None else distribution_spec.target,
-        distribution_grad_output=None if distribution_spec is None else distribution_spec.grad_output,
-        distribution_divisor=1.0 if distribution_spec is None else distribution_spec.divisor,
-        distribution_loss_mask=None if distribution_spec is None else distribution_spec.loss_mask,
-        distribution_target_format=(
-            TargetFormat.logits if distribution_spec is None else distribution_spec.target_format
-        ),
-        distribution_entropy_loss_type=(
-            EntropyLossType.cross_entropy if distribution_spec is None else distribution_spec.entropy_loss_type
-        ),
-        distribution_temperature=1.0 if distribution_spec is None else distribution_spec.temperature,
-        grpo_target=None if grpo_spec is None else grpo_spec.target,
-        grpo_advantages=None if grpo_spec is None else grpo_spec.advantages,
-        grpo_old_log_probabilities=None if grpo_spec is None else grpo_spec.old_log_probabilities,
-        grpo_grad_output=None if grpo_spec is None else grpo_spec.grad_output,
-        grpo_divisor=1.0 if grpo_spec is None else grpo_spec.divisor,
-        grpo_epsilon_low=0.2 if grpo_spec is None else grpo_spec.epsilon_low,
-        grpo_epsilon_high=0.2 if grpo_spec is None else grpo_spec.epsilon_high,
-        grpo_num_labels_in_seq=None if grpo_spec is None else grpo_spec.num_labels_in_seq,
+    cross_entropy_loss, z_loss, distribution_loss, grpo_loss, grpo_new_logprobs_mean, grpo_metrics, grad_logits = (
+        _monolithic_core(
+            logits,
+            group,
+            logits_scale_factor,
+            grad_logits,
+            ce_target=None if cross_entropy_spec is None else cross_entropy_spec.target,
+            ce_grad_output=None if cross_entropy_spec is None else cross_entropy_spec.grad_output,
+            ce_divisor=1.0 if cross_entropy_spec is None else cross_entropy_spec.divisor,
+            z_loss_enabled=z_loss_spec is not None,
+            z_loss_mask=None if z_loss_spec is None else z_loss_spec.loss_mask,
+            z_loss_grad_output=None if z_loss_spec is None else z_loss_spec.grad_output,
+            z_loss_divisor=1.0 if z_loss_spec is None else z_loss_spec.divisor,
+            distribution_target=None if distribution_spec is None else distribution_spec.target,
+            distribution_grad_output=None if distribution_spec is None else distribution_spec.grad_output,
+            distribution_divisor=1.0 if distribution_spec is None else distribution_spec.divisor,
+            distribution_loss_mask=None if distribution_spec is None else distribution_spec.loss_mask,
+            distribution_target_format=(
+                TargetFormat.logits if distribution_spec is None else distribution_spec.target_format
+            ),
+            distribution_entropy_loss_type=(
+                EntropyLossType.cross_entropy if distribution_spec is None else distribution_spec.entropy_loss_type
+            ),
+            distribution_temperature=1.0 if distribution_spec is None else distribution_spec.temperature,
+            grpo_target=None if grpo_spec is None else grpo_spec.target,
+            grpo_advantages=None if grpo_spec is None else grpo_spec.advantages,
+            grpo_old_log_probabilities=None if grpo_spec is None else grpo_spec.old_log_probabilities,
+            grpo_grad_output=None if grpo_spec is None else grpo_spec.grad_output,
+            grpo_divisor=1.0 if grpo_spec is None else grpo_spec.divisor,
+            grpo_epsilon_low=0.2 if grpo_spec is None else grpo_spec.epsilon_low,
+            grpo_epsilon_high=0.2 if grpo_spec is None else grpo_spec.epsilon_high,
+            grpo_num_labels_in_seq=None if grpo_spec is None else grpo_spec.num_labels_in_seq,
+            grpo_compute_metrics=False if grpo_spec is None else grpo_spec.compute_metrics,
+            grpo_compute_entropy=False if grpo_spec is None else grpo_spec.compute_entropy,
+        )
     )
 
     loss_by_kind = {
@@ -294,6 +322,7 @@ def monolithic_head_loss_forward_backward(
         MonolithicLossOutput(
             loss=loss_by_kind[spec.kind],
             new_logprobs_mean=grpo_new_logprobs_mean if spec.kind == "grpo" else None,
+            metrics=grpo_metrics if spec.kind == "grpo" else None,
         )
         for spec in specs
     ], grad_logits

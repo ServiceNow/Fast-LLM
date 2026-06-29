@@ -13,7 +13,7 @@ from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
-from tests.layers.test_lm_losses import reference_grpo_loss, reference_gspo_loss
+from tests.layers.test_lm_losses import reference_grpo_loss, reference_grpo_metrics, reference_gspo_loss
 from tests.utils.utils import get_base_model, get_stage
 
 NUM_TOKENS = 200
@@ -41,6 +41,7 @@ class LMHeadTestConfig:
     num_splits: int = 1
     gspo_document_lengths: tuple[int, ...] | None = None
     loss_implementation: str = "per_loss"
+    grpo_metrics: str | None = None
 
     @property
     def actual_label_loss(self):
@@ -84,6 +85,8 @@ class LMHeadTestConfig:
             losses["grpo_loss"] = {"type": "grpo"}
             if isinstance(self.grpo_loss, float):
                 losses["grpo_loss"]["weight"] = self.grpo_loss
+            if self.grpo_metrics is not None:
+                losses["grpo_loss"]["metrics"] = self.grpo_metrics
         if self.gspo_loss is not False:
             losses["gspo_loss"] = {"type": "gspo"}
             if isinstance(self.gspo_loss, float):
@@ -274,6 +277,29 @@ class LMHeadTestConfig:
             names_losses_weights.append(("grpo_loss", grpo_loss, float(self.grpo_loss)))
             names_losses_weights.append(("grpo_loss_new_logprobs", new_logprobs, 0.0))
 
+            if self.grpo_metrics is not None:
+                # `logits` is already scaled above, so pass logits_scale_factor=1.0.
+                metrics = reference_grpo_metrics(
+                    logits,
+                    labels,
+                    kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    epsilon_low=0.2,
+                    epsilon_high=0.2,
+                    logits_scale_factor=1.0,
+                    compute_entropy=self.grpo_metrics == "with_entropy",
+                )
+                num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
+                for attr in ("old_logprobs", "ratio_new_old", "kl_new_old", "clipped_ratio_fraction", "advantage"):
+                    names_losses_weights.append((f"grpo_loss_{attr}", getattr(metrics, attr) / num_documents, 0.0))
+                for attr in ("ratio_new_old_sum", "ratio_new_old_squared_sum", "num_tokens"):
+                    names_losses_weights.append((f"grpo_loss_{attr}", getattr(metrics, attr), 0.0))
+                names_losses_weights.append(("grpo_loss_max_advantage", metrics.max_advantage, 0.0))
+                names_losses_weights.append(("grpo_loss_min_advantage", metrics.min_advantage, 0.0))
+                if metrics.entropy is not None:
+                    names_losses_weights.append(("grpo_loss_entropy", metrics.entropy / num_documents, 0.0))
+
         if self.gspo_loss is not False:
             gspo_loss, _ = reference_gspo_loss(
                 logits,
@@ -389,6 +415,22 @@ _add_configs(
     distillation_temperature=2.0,
 )
 _add_configs("fused_grpo_loss", loss_implementation="fused", grpo_loss=True)
+# GRPO metric family. Single-split only: per-split metric partials reduce across splits, which the
+# whole-sequence reference doesn't model.
+for _loss_implementation in ("per_loss", "fused"):
+    _prefix = "" if _loss_implementation == "per_loss" else "fused_"
+    for _metrics in ("basic", "with_entropy"):
+        _suffix = "metrics" if _metrics == "basic" else "entropy"
+        for _loss_masking in (False, True):
+            _lm_head_test_configs.append(
+                LMHeadTestConfig(
+                    f"{_prefix}grpo_loss_{_suffix}{'_masked' if _loss_masking else ''}",
+                    grpo_loss=True,
+                    grpo_metrics=_metrics,
+                    loss_masking=_loss_masking,
+                    loss_implementation=_loss_implementation,
+                )
+            )
 
 
 @pytest.mark.slow

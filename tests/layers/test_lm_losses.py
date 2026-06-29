@@ -810,6 +810,50 @@ def _test_monolithic_grpo_loss(
         assert grad_mono is None
 
 
+def _test_monolithic_grpo_metrics(
+    batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, group=None
+):
+    # The monolithic GRPO metric family (emitted from the shared softmax) must match the loop reference.
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    # Different denominators per position so the per-token-mean broadcasting is exercised.
+    label_counts = (torch.arange(target.numel(), device=target.device).reshape(target.shape) % 5 + 1).to(
+        torch.int32
+    ) * (target >= 0)
+    num_labels = max(int((target >= 0).sum().item()), 1)
+
+    ref = reference_grpo_metrics(
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        label_counts,
+        epsilon_low=0.2,
+        epsilon_high=0.2,
+        logits_scale_factor=logits_scale_factor,
+        compute_entropy=compute_entropy,
+    )
+    spec = MonolithicLossSpec(
+        kind="grpo",
+        name="grpo",
+        weight=1.0,
+        logits_scale_factor=logits_scale_factor,
+        grad_output=None,
+        divisor=num_labels,
+        target=target,
+        advantages=advantages,
+        old_log_probabilities=old_log_probabilities,
+        num_labels_in_seq=label_counts,
+        compute_metrics=True,
+        compute_entropy=compute_entropy,
+    )
+    outputs, _ = monolithic_head_loss_forward_backward(
+        split_op(logits, group, -1).contiguous(), [spec], group=group, grad_logits=None
+    )
+    _check_grpo_metrics(ref, outputs[0].metrics, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
+
+
 _MONOLITHIC_DISTRIBUTION_CASES = (
     # (target_format, entropy_loss_type, temperature)
     (TargetFormat.logits, EntropyLossType.cross_entropy, 1.0),
@@ -868,6 +912,27 @@ def test_monolithic_grpo_loss(
     _test_monolithic_grpo_loss(
         batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate
     )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+@pytest.mark.parametrize("compute_entropy", (False, True))
+def test_monolithic_grpo_metrics(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    block_size,
+    accumulate,
+    compute_entropy,
+):
+    _test_monolithic_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy)
 
 
 @pytest.mark.slow
@@ -1103,6 +1168,22 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         accumulate,
                         test_context.group,
                     )
+            # Monolithic GRPO metrics
+            for compute_entropy in (False, True):
+                with test_context.subtest(
+                    base_path, f"monolithic_grpo_metrics-{compute_entropy}-{suffix}", 2
+                ) as subtest:
+                    if subtest.do_run:
+                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                        _test_monolithic_grpo_metrics(
+                            batch_shape,
+                            num_columns,
+                            logits_scale_factor,
+                            loss_masking,
+                            dtype,
+                            compute_entropy,
+                            test_context.group,
+                        )
             # Monolithic from-distribution (distillation) losses
             for target_format, entropy_loss_type, temperature in _MONOLITHIC_DISTRIBUTION_CASES:
                 with test_context.subtest(
@@ -1166,6 +1247,8 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "grpo_metrics-False",
         "grpo_metrics-True",
         "monolithic_grpo",
+        "monolithic_grpo_metrics-False",
+        "monolithic_grpo_metrics-True",
         *(f"monolithic-{"_".join(kinds)}" for kinds in _MONOLITHIC_KINDS),
         *(
             f"monolithic_dist-{entropy_loss_type}-{target_format}-{temperature}"
