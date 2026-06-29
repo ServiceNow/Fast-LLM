@@ -415,6 +415,18 @@ _add_configs(
     distillation_temperature=2.0,
 )
 _add_configs("fused_grpo_loss", loss_implementation="fused", grpo_loss=True)
+# GSPO runs through its own three-phase path (compiled forward → eager segment seam → compiled backward),
+# accumulating into the monolithic kernel's shared gradient. No splits (per-segment aggregation can't
+# recombine across cross_entropy_splits chunks).
+for loss_masking in (False, True):
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_gspo_loss{'_masked' if loss_masking else ''}",
+            gspo_loss=True,
+            loss_masking=loss_masking,
+            loss_implementation="fused",
+        )
+    )
 # GRPO metric family. Single-split only: per-split metric partials reduce across splits, which the
 # whole-sequence reference doesn't model.
 for _loss_implementation in ("per_loss", "fused"):

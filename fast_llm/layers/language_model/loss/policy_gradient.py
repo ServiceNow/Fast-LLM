@@ -6,7 +6,12 @@ import torch
 from fast_llm.engine.base_model.config import LossDef, ReductionType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.entropy_loss import fused_predicted_logits_from_labels, fused_softmax_base
+from fast_llm.functional.entropy_loss import (
+    _predicted_logits_from_labels,
+    _softmax_base,
+    fused_predicted_logits_from_labels,
+    fused_softmax_base,
+)
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
@@ -430,58 +435,43 @@ def fused_grpo_loss_forward_backward(
     return loss, grad_logits, new_logprobs_mean
 
 
-# Not @torch.compile: dynamo lifts the Python-int `divisor` and `num_segments` args to symbolic
-# ints with no concrete hint, then trips on `grad_output / divisor` during trace evaluation
-# (`ZeroDivisionError` with hint=0). The Triton kernel is the actual GPU perf path; the eager
-# PyTorch fallback doesn't need to be compiled.
-def fused_gspo_loss_forward_backward(
+@torch.compile
+def _gspo_forward_core(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,)
+    loss_mask: torch.Tensor,  # (*batch,), == target >= 0
+    logits_scale_factor: float,
+    group: torch.distributed.ProcessGroup | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """GSPO compiled forward: one softmax + predicted-logit lookup, producing per-token new log-probs.
+    The softmax tensors are handed to the eager segment seam and the compiled backward."""
+    logits_norm, exp_logits, sum_exp_logits, _ = _softmax_base(logits, logits_scale_factor, group)
+    predicted_logits, target_masked, target_mask = _predicted_logits_from_labels(logits_norm, target, loss_mask, group)
+    new_log_probs = predicted_logits - sum_exp_logits.log()
+    return new_log_probs, exp_logits, sum_exp_logits, target_masked, target_mask
+
+
+def _gspo_segment_seam(
+    new_log_probs: torch.Tensor,  # (*batch,)
+    loss_mask: torch.Tensor,  # (*batch,) bool
     advantages: torch.Tensor,  # (*batch,)
     old_log_probabilities: torch.Tensor,  # (*batch,)
-    document_index_zero_based: torch.Tensor,  # (*batch,) int — segment ID per token, 0-based
-    num_segments: int,  # buffer size, ≥ document_index.max() + 1
+    document_index_zero_based: torch.Tensor,  # (*batch,) int
+    num_segments: int,
+    num_labels_in_seq: torch.Tensor,  # (*batch,)
     divisor: float,
-    num_labels_in_seq: torch.Tensor,  # (*batch,) — per-document labeled-token count broadcast per token
-    grad_logits: torch.Tensor | None = None,
-    grad_output: float | None = None,
-    group: torch.distributed.ProcessGroup | None = None,  # TP vocab group
-    sdp_group: torch.distributed.ProcessGroup | None = None,  # SDP group for cross-rank segment aggregation
-    sp_group: torch.distributed.ProcessGroup | None = None,  # TP group when SP is sharding the sequence
-    epsilon_low: float = 0.2,
-    epsilon_high: float = 0.2,
-    logits_scale_factor: float = 1.0,
-) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-    """GSPO loss: sequence-level geometric-mean IS-ratio clipping.
-
-    Per-segment ratio R_s = exp(mean_t(log p_new_t / p_old_t)), clipped per segment.
-    Per-segment loss = -min(R_s * A_s, clip(R_s) * A_s), multiplied by the segment
-    token count, summed over segments, and divided by `divisor`.
-    Computed as an equivalent per-token sum so the gradient chain mirrors GRPO.
-
-    `num_labels_in_seq[t]` is the labeled-token count for the document containing token `t`
-    (broadcast per token by the data preprocessor); it is the geometric-mean denominator.
-    Using it directly — rather than aggregating token counts inside the kernel — is what
-    makes the loss correct when a document spans SDP/SP ranks (numerator
-    `log_ratio_sum` is all-reduced; denominator is constant and available locally).
-
-    Constraint: each document must be visible to a single kernel call (modulo SDP/SP, where
-    the kernel all-reduces). Splitting a document across separate kernel calls (e.g.
-    `schedule.micro_batch_splits > 1`) produces partial per-fragment geometric means that
-    cannot be combined linearly into the whole-document `exp(mean)`.
-
-    With `sdp_group` and/or `sp_group`, segment sums are all-reduced over those groups so each rank
-    computes the same global R_s/A_s. Token-level contributions remain per-rank, so summing the
-    kernel loss across SDP/SP via SUM reduction matches the canonical single-rank result.
-    """
-    grad_output_scaled = None if grad_output is None else grad_output / divisor * logits_scale_factor
-    loss_mask = target >= 0
-
-    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
-    predicted_logits, target_masked, target_mask = fused_predicted_logits_from_labels(
-        logits_norm, target, loss_mask, group
-    )
-    new_log_probs = predicted_logits - sum_exp_logits.log()
+    grad_output: float | None,
+    sdp_group: torch.distributed.ProcessGroup | None,
+    sp_group: torch.distributed.ProcessGroup | None,
+    epsilon_low: float,
+    epsilon_high: float,
+    logits_scale_factor: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Eager segment seam between the compiled forward and backward. The `index_add_` segment
+    aggregation and the symbolic `num_segments` live here so they never enter a compiled boundary
+    (no per-`num_segments` recompiles). Returns the loss, the `new_logprobs` metric, and the per-token
+    backward coefficient `effective_grad = grad_output_scaled · clip_factor · loss_weight · R_s`
+    (None when no gradient is requested)."""
     log_ratio = new_log_probs - old_log_probabilities
 
     flat_document_index = document_index_zero_based.reshape(-1).long()
@@ -525,25 +515,120 @@ def fused_gspo_loss_forward_backward(
 
     new_logprobs_mean = (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
 
-    if grad_output_scaled is not None:
-        probability_ratio_grad = (
-            grad_output_scaled
-            * (
-                torch.clamp_min(advantage_per_token, 0) * (probability_ratio <= 1 + epsilon_high)
-                + torch.clamp_max(advantage_per_token, 0) * (probability_ratio >= 1 - epsilon_low)
-            )
-            * loss_weight
-        )
-        predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze_(-1)
-        grad = (probability_ratio_grad * probability_ratio).unsqueeze(-1) * predicted_probabilities.scatter_add(
-            -1,
-            target_masked.unsqueeze(-1),
-            -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
-        )
-        grad = grad.to(logits.dtype)
-        if grad_logits is None:
-            grad_logits = grad
-        else:
-            grad_logits.add_(grad)
+    if grad_output is None:
+        return loss, new_logprobs_mean, None
 
+    grad_output_scaled = grad_output / divisor * logits_scale_factor
+    probability_ratio_grad = (
+        grad_output_scaled
+        * (
+            torch.clamp_min(advantage_per_token, 0) * (probability_ratio <= 1 + epsilon_high)
+            + torch.clamp_max(advantage_per_token, 0) * (probability_ratio >= 1 - epsilon_low)
+        )
+        * loss_weight
+    )
+    effective_grad = probability_ratio_grad * probability_ratio
+    return loss, new_logprobs_mean, effective_grad
+
+
+@torch.compile
+def _gspo_backward_core(
+    exp_logits: torch.Tensor,  # (*batch, vocab)
+    sum_exp_logits: torch.Tensor,  # (*batch,)
+    target_masked: torch.Tensor,  # (*batch,)
+    target_mask: torch.Tensor | None,  # (*batch,) or None (no TP)
+    loss_mask: torch.Tensor,  # (*batch,) bool
+    effective_grad: torch.Tensor,  # (*batch,) — per-token backward coefficient from the seam
+    logits_dtype: torch.dtype,
+    grad_logits: torch.Tensor | None,
+) -> torch.Tensor:
+    """GSPO compiled backward: the per-token coefficient times the softmax chain rule, fused into
+    one kernel. `sum_exp_logits.unsqueeze` is out-of-place (the eager kernel mutates it in place)."""
+    predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze(-1)
+    grad = effective_grad.unsqueeze(-1) * predicted_probabilities.scatter_add(
+        -1,
+        target_masked.unsqueeze(-1),
+        -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
+    )
+    grad = grad.to(logits_dtype)
+    if grad_logits is None:
+        grad_logits = grad
+    else:
+        grad_logits.add_(grad)
+    return grad_logits
+
+
+# Orchestrator only: the eager `index_add_` segment seam (with the Python-int `num_segments`) sits
+# between the compiled forward and backward cores, so it stays out of every compiled boundary.
+def fused_gspo_loss_forward_backward(
+    logits: torch.Tensor,  # (*batch, vocab)
+    target: torch.Tensor,  # (*batch,)
+    advantages: torch.Tensor,  # (*batch,)
+    old_log_probabilities: torch.Tensor,  # (*batch,)
+    document_index_zero_based: torch.Tensor,  # (*batch,) int — segment ID per token, 0-based
+    num_segments: int,  # buffer size, ≥ document_index.max() + 1
+    divisor: float,
+    num_labels_in_seq: torch.Tensor,  # (*batch,) — per-document labeled-token count broadcast per token
+    grad_logits: torch.Tensor | None = None,
+    grad_output: float | None = None,
+    group: torch.distributed.ProcessGroup | None = None,  # TP vocab group
+    sdp_group: torch.distributed.ProcessGroup | None = None,  # SDP group for cross-rank segment aggregation
+    sp_group: torch.distributed.ProcessGroup | None = None,  # TP group when SP is sharding the sequence
+    epsilon_low: float = 0.2,
+    epsilon_high: float = 0.2,
+    logits_scale_factor: float = 1.0,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """GSPO loss: sequence-level geometric-mean IS-ratio clipping.
+
+    Per-segment ratio R_s = exp(mean_t(log p_new_t / p_old_t)), clipped per segment.
+    Per-segment loss = -min(R_s * A_s, clip(R_s) * A_s), multiplied by the segment
+    token count, summed over segments, and divided by `divisor`.
+    Computed as an equivalent per-token sum so the gradient chain mirrors GRPO.
+
+    `num_labels_in_seq[t]` is the labeled-token count for the document containing token `t`
+    (broadcast per token by the data preprocessor); it is the geometric-mean denominator.
+    Using it directly — rather than aggregating token counts inside the kernel — is what
+    makes the loss correct when a document spans SDP/SP ranks (numerator
+    `log_ratio_sum` is all-reduced; denominator is constant and available locally).
+
+    Constraint: each document must be visible to a single kernel call (modulo SDP/SP, where
+    the kernel all-reduces). Splitting a document across separate kernel calls (e.g.
+    `schedule.micro_batch_splits > 1`) produces partial per-fragment geometric means that
+    cannot be combined linearly into the whole-document `exp(mean)`.
+
+    With `sdp_group` and/or `sp_group`, segment sums are all-reduced over those groups so each rank
+    computes the same global R_s/A_s. Token-level contributions remain per-rank, so summing the
+    kernel loss across SDP/SP via SUM reduction matches the canonical single-rank result.
+    """
+    loss_mask = target >= 0
+    new_log_probs, exp_logits, sum_exp_logits, target_masked, target_mask = _gspo_forward_core(
+        logits, target, loss_mask, logits_scale_factor, group
+    )
+    loss, new_logprobs_mean, effective_grad = _gspo_segment_seam(
+        new_log_probs,
+        loss_mask,
+        advantages,
+        old_log_probabilities,
+        document_index_zero_based,
+        num_segments,
+        num_labels_in_seq,
+        divisor,
+        grad_output,
+        sdp_group,
+        sp_group,
+        epsilon_low,
+        epsilon_high,
+        logits_scale_factor,
+    )
+    if effective_grad is not None:
+        grad_logits = _gspo_backward_core(
+            exp_logits,
+            sum_exp_logits,
+            target_masked,
+            target_mask,
+            loss_mask,
+            effective_grad,
+            logits.dtype,
+            grad_logits,
+        )
     return loss, grad_logits, new_logprobs_mean

@@ -1124,6 +1124,21 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         accumulate,
                         test_context.group,
                     )
+            # GSPO (tensor-parallel vocab path; segment seam runs eagerly per rank)
+            with test_context.subtest(base_path, f"gspo-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_gspo_loss(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        4,  # num_segments
+                        accumulate,
+                        test_context.group,
+                    )
             # GRPO metrics
             for compute_entropy in (False, True):
                 with test_context.subtest(base_path, f"grpo_metrics-{compute_entropy}-{suffix}", 2) as subtest:
@@ -1244,6 +1259,7 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         ),
         "z_loss",
         "grpo",
+        "gspo",
         "grpo_metrics-False",
         "grpo_metrics-True",
         "monolithic_grpo",
