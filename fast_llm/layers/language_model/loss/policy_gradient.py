@@ -24,7 +24,12 @@ from fast_llm.layers.language_model.loss.config import (
 )
 from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, _grpo_metrics_core
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
-from fast_llm.layers.language_model.loss.monolithic import MonolithicLossOutput, MonolithicLossSpec
+from fast_llm.layers.language_model.loss.monolithic import (
+    MonolithicLossOutput,
+    MonolithicLossSpec,
+    _gspo_backward_core,
+    _gspo_segment_seam,
+)
 from fast_llm.utils import Assert
 
 
@@ -325,6 +330,37 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return super().get_preprocessing_config() | {"return_document_index": True}
 
+    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+        return MonolithicLossSpec(
+            kind="gspo",
+            name=self.name,
+            weight=self._weight,
+            logits_scale_factor=self._logits_scale_factor,
+            grad_output=self._get_grad_output(kwargs),
+            divisor=kwargs[LanguageModelKwargs.num_documents_in_batch],
+            target=self._get_labels(kwargs, split_index),
+            advantages=self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            old_log_probabilities=self._prepare_target(
+                kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index
+            ),
+            epsilon_low=self._config.epsilon_low,
+            epsilon_high=self._config.epsilon_high,
+            num_labels_in_seq=self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
+            document_index=self._prepare_target(
+                kwargs[BlockKwargs.global_document_index_q], split_index, split_by_distance=False
+            ).long()
+            - 1,
+            num_segments=kwargs[BlockKwargs.num_documents_in_sequence],
+            sdp_group=self._sequence_data_dim.group if self._sequence_data_active else None,
+            sp_group=self._parallel_dim.group if self._sequence_parallel else None,
+        )
+
+    def register_monolithic_outputs(
+        self, output: MonolithicLossOutput, kwargs: dict[str, typing.Any], losses: dict | None
+    ) -> None:
+        super().register_monolithic_outputs(output, kwargs, losses)
+        self._register_new_logprobs(output.new_logprobs_mean, kwargs, losses)
+
 
 @torch.compile
 def compute_grpo_metrics(
@@ -449,113 +485,6 @@ def _gspo_forward_core(
     predicted_logits, target_masked, target_mask = _predicted_logits_from_labels(logits_norm, target, loss_mask, group)
     new_log_probs = predicted_logits - sum_exp_logits.log()
     return new_log_probs, exp_logits, sum_exp_logits, target_masked, target_mask
-
-
-def _gspo_segment_seam(
-    new_log_probs: torch.Tensor,  # (*batch,)
-    loss_mask: torch.Tensor,  # (*batch,) bool
-    advantages: torch.Tensor,  # (*batch,)
-    old_log_probabilities: torch.Tensor,  # (*batch,)
-    document_index_zero_based: torch.Tensor,  # (*batch,) int
-    num_segments: int,
-    num_labels_in_seq: torch.Tensor,  # (*batch,)
-    divisor: float,
-    grad_output: float | None,
-    sdp_group: torch.distributed.ProcessGroup | None,
-    sp_group: torch.distributed.ProcessGroup | None,
-    epsilon_low: float,
-    epsilon_high: float,
-    logits_scale_factor: float,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-    """Eager segment seam between the compiled forward and backward. The `index_add_` segment
-    aggregation and the symbolic `num_segments` live here so they never enter a compiled boundary
-    (no per-`num_segments` recompiles). Returns the loss, the `new_logprobs` metric, and the per-token
-    backward coefficient `effective_grad = grad_output_scaled · clip_factor · loss_weight · R_s`
-    (None when no gradient is requested)."""
-    log_ratio = new_log_probs - old_log_probabilities
-
-    flat_document_index = document_index_zero_based.reshape(-1).long()
-    flat_mask = loss_mask.reshape(-1).to(log_ratio.dtype)
-    # Per-token weight: mask / per-document label count, from the preprocessor.
-    # Each labeled token contributes `1 / N_d` so all of doc d's tokens sum to 1 (across
-    # SDP/SP ranks too), regardless of how the doc is sharded.
-    mean_token_weight = flat_mask / num_labels_in_seq.reshape(-1).to(log_ratio.dtype).clamp(min=1)
-    # Pre-divide the per-token contributions by the per-doc label count, then sum per segment.
-    # All tokens in a segment share the same N_d, so this is mathematically equivalent to
-    # `log_ratio_sum / N_d` but avoids any per-segment denominator extraction.
-    mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, log_ratio.reshape(-1) * mean_token_weight
-    )
-    # Accumulate in `log_ratio.dtype` (fp32). Casting the product back to `advantages.dtype`
-    # before summing would round each token's contribution to a possibly-low input dtype.
-    mean_advantage_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, advantages.reshape(-1).to(log_ratio.dtype) * mean_token_weight
-    )
-    for reduce_group in (sdp_group, sp_group):
-        if reduce_group is not None:
-            torch.distributed.all_reduce(
-                mean_log_ratio_per_segment, op=torch.distributed.ReduceOp.SUM, group=reduce_group
-            )
-            torch.distributed.all_reduce(
-                mean_advantage_per_segment, op=torch.distributed.ReduceOp.SUM, group=reduce_group
-            )
-
-    segment_ratio = mean_log_ratio_per_segment.exp()  # (num_segments,) — geometric-mean IS ratio
-    segment_advantage = mean_advantage_per_segment.detach()  # (num_segments,) — no grad through A
-
-    probability_ratio = segment_ratio[flat_document_index].reshape(log_ratio.shape)
-    advantage_per_token = segment_advantage[flat_document_index].reshape(log_ratio.shape)
-    loss_weight = loss_mask.to(log_ratio.dtype)
-
-    losses = -torch.min(
-        probability_ratio * advantage_per_token,
-        torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantage_per_token,
-    )
-    loss = (losses * loss_weight).sum() / divisor
-
-    new_logprobs_mean = (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
-
-    if grad_output is None:
-        return loss, new_logprobs_mean, None
-
-    grad_output_scaled = grad_output / divisor * logits_scale_factor
-    probability_ratio_grad = (
-        grad_output_scaled
-        * (
-            torch.clamp_min(advantage_per_token, 0) * (probability_ratio <= 1 + epsilon_high)
-            + torch.clamp_max(advantage_per_token, 0) * (probability_ratio >= 1 - epsilon_low)
-        )
-        * loss_weight
-    )
-    effective_grad = probability_ratio_grad * probability_ratio
-    return loss, new_logprobs_mean, effective_grad
-
-
-@torch.compile
-def _gspo_backward_core(
-    exp_logits: torch.Tensor,  # (*batch, vocab)
-    sum_exp_logits: torch.Tensor,  # (*batch,)
-    target_masked: torch.Tensor,  # (*batch,)
-    target_mask: torch.Tensor | None,  # (*batch,) or None (no TP)
-    loss_mask: torch.Tensor,  # (*batch,) bool
-    effective_grad: torch.Tensor,  # (*batch,) — per-token backward coefficient from the seam
-    logits_dtype: torch.dtype,
-    grad_logits: torch.Tensor | None,
-) -> torch.Tensor:
-    """GSPO compiled backward: the per-token coefficient times the softmax chain rule, fused into
-    one kernel. `sum_exp_logits.unsqueeze` is out-of-place (the eager kernel mutates it in place)."""
-    predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze(-1)
-    grad = effective_grad.unsqueeze(-1) * predicted_probabilities.scatter_add(
-        -1,
-        target_masked.unsqueeze(-1),
-        -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
-    )
-    grad = grad.to(logits_dtype)
-    if grad_logits is None:
-        grad_logits = grad
-    else:
-        grad_logits.add_(grad)
-    return grad_logits
 
 
 # Orchestrator only: the eager `index_add_` segment seam (with the Python-int `num_segments`) sits

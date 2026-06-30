@@ -424,14 +424,23 @@ _add_configs(
     z_loss=0.5,
 )
 _add_configs("fused_grpo_and_z_loss", loss_implementation="fused", grpo_loss=True, z_loss=0.5)
-# GSPO runs through its own three-phase path (compiled forward → eager segment seam → compiled backward),
-# accumulating into the monolithic kernel's shared gradient. No splits (per-segment aggregation can't
-# recombine across cross_entropy_splits chunks).
+# GSPO is a monolithic-kernel kind: the shared softmax forward feeds an eager segment seam (compiled
+# forward → eager seam → compiled backward), so GSPO can share the softmax with a co-resident loss
+# (e.g. z-loss). No splits (per-segment aggregation can't recombine across cross_entropy_splits chunks).
 for loss_masking in (False, True):
     _lm_head_test_configs.append(
         LMHeadTestConfig(
             f"fused_gspo_loss{'_masked' if loss_masking else ''}",
             gspo_loss=True,
+            loss_masking=loss_masking,
+            loss_implementation="fused",
+        )
+    )
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_gspo_and_z_loss{'_masked' if loss_masking else ''}",
+            gspo_loss=True,
+            z_loss=0.5,
             loss_masking=loss_masking,
             loss_implementation="fused",
         )

@@ -949,6 +949,77 @@ def _test_monolithic_grpo_metrics(
     _check_grpo_metrics(ref, outputs[0].metrics, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
+def _test_monolithic_gspo_loss(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    num_segments,
+    accumulate,
+    group=None,
+):
+    # The monolithic GSPO branch (three-phase: shared softmax forward -> eager seam -> compiled backward)
+    # must reproduce the standalone `fused_gspo_loss_forward_backward` (loss, grad, new_logprobs).
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    local_logits = split_op(logits, group, -1).contiguous()
+    seq_len = batch_shape[-1] if len(batch_shape) > 1 else batch_shape[0]
+    span = max(seq_len // num_segments, 1)
+    base = torch.arange(seq_len, device=target.device) // span
+    document_index = base.clamp(max=num_segments - 1).expand(batch_shape).contiguous()
+    flat_doc = document_index.reshape(-1).long()
+    labels_per_document = torch.zeros(num_segments, dtype=torch.int32, device=target.device).scatter_add(
+        0, flat_doc, (target.reshape(-1) >= 0).to(torch.int32)
+    )
+    num_labels_in_seq = labels_per_document[flat_doc].reshape(target.shape)
+    previous_grad = torch.randn_like(local_logits) if accumulate and grad_output is not None else None
+    out_ref, grad_ref, new_logprobs_ref = fused_gspo_loss_forward_backward(
+        local_logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        divisor=num_segments,
+        num_labels_in_seq=num_labels_in_seq,
+        grad_logits=None if previous_grad is None else previous_grad.clone(),
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+    )
+    spec = MonolithicLossSpec(
+        kind="gspo",
+        name="gspo",
+        weight=1.0,
+        logits_scale_factor=logits_scale_factor,
+        grad_output=grad_output,
+        divisor=num_segments,
+        target=target,
+        advantages=advantages,
+        old_log_probabilities=old_log_probabilities,
+        num_labels_in_seq=num_labels_in_seq,
+        document_index=document_index,
+        num_segments=num_segments,
+    )
+    outputs, grad_mono = monolithic_head_loss_forward_backward(
+        local_logits, [spec], group=group, grad_logits=None if previous_grad is None else previous_grad.clone()
+    )
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    # The monolithic GSPO forward is a distinct compiled graph from the standalone, so fp32 softmax
+    # reduction-order differences surface in the geometric-mean ratio — amplified in the loss scalar at
+    # higher logit scales. The gradient (the real correctness signal) stays tight.
+    loss_threshold = 5e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(outputs[0].loss, out_ref, loss_threshold, 1e-6)
+    Assert.rms_close_relative(outputs[0].new_logprobs_mean, new_logprobs_ref, loss_threshold, 1e-6)
+    if grad_output is not None:
+        Assert.rms_close_relative(grad_mono, grad_ref, threshold, 1e-8 if grad_mono.dtype == torch.float32 else 1e-6)
+    else:
+        assert grad_mono is None
+
+
 _MONOLITHIC_DISTRIBUTION_CASES = (
     # (target_format, entropy_loss_type, temperature)
     (TargetFormat.logits, EntropyLossType.cross_entropy, 1.0),
@@ -1124,6 +1195,20 @@ def test_gspo_loss(
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
 @pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "num_segments", "accumulate"),
+    _GSPO_PARAMETERS,
+)
+def test_monolithic_gspo_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, num_segments, accumulate
+):
+    _test_monolithic_gspo_loss(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, num_segments, accumulate
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
     _LOSS_PARAMETERS,
 )
@@ -1224,6 +1309,21 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                 if subtest.do_run:
                     torch.manual_seed((seed + hash(subtest.name)) % 2**32)
                     _test_gspo_loss(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        4,  # num_segments
+                        accumulate,
+                        test_context.group,
+                    )
+            # GSPO through the monolithic kernel (shared softmax forward + eager seam + compiled backward)
+            with test_context.subtest(base_path, f"monolithic_gspo-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_gspo_loss(
                         batch_shape,
                         num_columns,
                         grad_output,
@@ -1358,6 +1458,7 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "grpo_metrics-False",
         "grpo_metrics-True",
         "monolithic_grpo",
+        "monolithic_gspo",
         "monolithic_grpo_metrics-False",
         "monolithic_grpo_metrics-True",
         *(f"monolithic-{"_".join(kinds)}" for kinds in _MONOLITHIC_KINDS),
