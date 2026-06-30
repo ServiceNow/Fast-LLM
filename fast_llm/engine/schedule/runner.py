@@ -183,8 +183,6 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._record_event(context, EventType.pipe_wait_compute, None, self._pipeline_stream)
 
         # Reset gradients
-        # TODO: This is incorrect with shared buffers.
-        #   (still works because only the embedding layer doesn't share buffer)
         for stage in self._stages_on_device:
             if context.is_training:
                 stage.reset_gradients()
