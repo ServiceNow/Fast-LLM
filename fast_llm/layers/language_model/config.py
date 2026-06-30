@@ -39,8 +39,6 @@ class LossImplementation(enum.StrEnum):
     per_loss = "per_loss"
     # A single monolithic torch.compile kernel running the softmax once for all combinable losses.
     fused = "fused"
-    # A single monolithic triton kernel.
-    triton = "triton"
 
 
 @config_class()
@@ -156,8 +154,8 @@ class LanguageModelHeadConfig(BlockConfig):
     loss_implementation: LossImplementation = Field(
         default=LossImplementation.per_loss,
         desc="Select the head-loss implementation. `per_loss` runs each loss separately (the default);"
-        " `fused`/`triton` run a single monolithic kernel that shares one softmax pass across combinable"
-        " losses. Losses not yet supported by the monolithic kernel fall back to their own implementation.",
+        " `fused` runs a single monolithic kernel that shares one softmax pass across combinable losses."
+        " Losses not supported by the monolithic kernel fall back to their own implementation.",
         hint=FieldHint.expert,
     )
 

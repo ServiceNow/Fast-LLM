@@ -139,7 +139,12 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
 
         return loss, grad
 
-    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+    def get_monolithic_spec(
+        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
+    ) -> MonolithicLossSpec | None:
+        # When nothing is logged this step, skip the metric-only outputs (`new_logprobs_mean` and the
+        # GRPO metric family), mirroring the per-loss path's gating in `_forward_backward`.
+        register_metrics = losses is not None
         return MonolithicLossSpec(
             kind="grpo",
             name=self.name,
@@ -154,9 +159,13 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             ),
             epsilon_low=self._config.epsilon_low,
             epsilon_high=self._config.epsilon_high,
-            num_labels_in_seq=self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
-            compute_metrics=self._config.metrics != GRPOMetricsLevel.none,
-            compute_entropy=self._config.metrics == GRPOMetricsLevel.with_entropy,
+            num_labels_in_seq=(
+                self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+                if register_metrics
+                else None
+            ),
+            compute_metrics=register_metrics and self._config.metrics != GRPOMetricsLevel.none,
+            compute_entropy=register_metrics and self._config.metrics == GRPOMetricsLevel.with_entropy,
         )
 
     def register_monolithic_outputs(
@@ -330,7 +339,9 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return super().get_preprocessing_config() | {"return_document_index": True}
 
-    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+    def get_monolithic_spec(
+        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
+    ) -> MonolithicLossSpec | None:
         return MonolithicLossSpec(
             kind="gspo",
             name=self.name,

@@ -73,10 +73,13 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     def get_loss_definitions(self) -> list[LossDef]:
         return [LossDef(name=self.name)] if self._do_register_loss else []
 
-    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> "MonolithicLossSpec | None":
+    def get_monolithic_spec(
+        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
+    ) -> "MonolithicLossSpec | None":
         """
         Package this loss's inputs for the monolithic head-loss kernel, or return `None` if it is not
         supported there (it then runs through its own `forward_backward`, accumulating into the same grad).
+        `losses is None` signals a step that logs nothing, so a loss may switch off metric-only outputs.
         """
         return None
 

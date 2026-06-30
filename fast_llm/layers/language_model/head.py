@@ -304,7 +304,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
         # through their own `forward_backward`, accumulating into the same logits gradient.
         specs, monolithic_losses, other_losses = [], [], []
         for loss in self.losses:
-            spec = loss.get_monolithic_spec(kwargs, split_index)
+            spec = loss.get_monolithic_spec(kwargs, split_index, losses)
             if spec is None:
                 other_losses.append(loss)
             else:

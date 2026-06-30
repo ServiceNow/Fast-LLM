@@ -6,9 +6,11 @@ from fast_llm.core.distributed import ProcessGroup
 from fast_llm.functional.config import EntropyLossType, TargetFormat
 from fast_llm.functional.entropy_loss import (
     cross_entropy_from_distribution_core,
+    cross_entropy_from_labels_core,
     predicted_logits_from_labels,
     reverse_kl_from_distribution_core,
     softmax_base,
+    z_loss_core,
 )
 from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, grpo_metrics_core
 from fast_llm.utils import Assert
@@ -110,38 +112,27 @@ def _apply_combinable_losses(
     cross_entropy_loss = None
     if ce_target is not None:
         loss_mask = ce_target >= 0
-        predicted_logits, target_masked, target_mask = predicted_logits_from_labels(
-            logits_norm, ce_target, loss_mask, group
+        ce_grad_output_scaled = None if ce_grad_output is None else ce_grad_output / ce_divisor * logits_scale_factor
+        per_sample_loss, cross_entropy_grad = cross_entropy_from_labels_core(
+            logits_norm, exp_logits, sum_exp_logits, ce_target, loss_mask, ce_grad_output_scaled, group
         )
-        cross_entropy_loss = ((sum_exp_logits.log() - predicted_logits) * loss_mask).sum() / ce_divisor
-        if ce_grad_output is not None:
-            grad_output = ce_grad_output / ce_divisor * logits_scale_factor
-            cross_entropy_grad = exp_logits.scatter_add(
-                -1,
-                target_masked.unsqueeze(-1),
-                (
-                    -sum_exp_logits.unsqueeze(-1)
-                    if target_mask is None
-                    else -(target_mask * sum_exp_logits).unsqueeze(-1)
-                ),
-            ) * (grad_output / sum_exp_logits.unsqueeze(-1))
+        cross_entropy_loss = (per_sample_loss * loss_mask).sum() / ce_divisor
+        if cross_entropy_grad is not None:
             cross_entropy_grad = cross_entropy_grad * loss_mask.unsqueeze(-1)
             grad = cross_entropy_grad if grad is None else grad + cross_entropy_grad
 
     z_loss = None
     if z_loss_enabled:
-        # z-loss needs the un-regularized log-sum-exp, so it adds back `logits_max` (cross-entropy cancels it).
-        log_sum_exp_logits = sum_exp_logits.log() + logits_max
-        z_loss_term = log_sum_exp_logits**2
+        z_loss_grad_output_scaled = (
+            None if z_loss_grad_output is None else z_loss_grad_output / z_loss_divisor * logits_scale_factor
+        )
+        z_loss_term, z_loss_grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, z_loss_grad_output_scaled)
         if z_loss_mask is not None:
             z_loss_term = z_loss_term * z_loss_mask
         z_loss = z_loss_term.sum() / z_loss_divisor
-        if z_loss_grad_output is not None:
-            grad_output = z_loss_grad_output / z_loss_divisor * logits_scale_factor
-            z_loss_grad_base = 2 * grad_output * (log_sum_exp_logits / sum_exp_logits)
+        if z_loss_grad is not None:
             if z_loss_mask is not None:
-                z_loss_grad_base = z_loss_grad_base * z_loss_mask
-            z_loss_grad = z_loss_grad_base.unsqueeze(-1) * exp_logits
+                z_loss_grad = z_loss_grad * z_loss_mask.unsqueeze(-1)
             grad = z_loss_grad if grad is None else grad + z_loss_grad
 
     distribution_loss = None

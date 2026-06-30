@@ -315,19 +315,23 @@ def predicted_logits_from_labels(
 fused_predicted_logits_from_labels = torch.compile(predicted_logits_from_labels)
 
 
-@torch.compile
-def _fused_cross_entropy_base_from_labels(
-    logits: torch.Tensor,  # (*batch, vocab)
+def cross_entropy_from_labels_core(
+    logits_norm: torch.Tensor,  # (*batch, vocab), == logits - max
+    exp_logits: torch.Tensor,  # (*batch, vocab)
+    sum_exp_logits: torch.Tensor,  # (*batch,)
     target: torch.Tensor,  # (*batch,)
-    loss_mask: torch.Tensor,  # (*batch,)
-    grad_output: float | None,
-    logits_scale_factor: float,
+    loss_mask: torch.Tensor,  # (*batch,), == target>=0
+    grad_output: float | None,  # already normalized: raw_grad_output / divisor * logits_scale_factor
     group: ProcessGroup | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
-    predicted_logits, target_masked, target_mask = fused_predicted_logits_from_labels(
-        logits_norm, target, loss_mask, group
-    )
+) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,) unmasked, (*batch, vocab) unmasked
+    """
+    Cross-entropy from labels, taking the already-computed shared softmax tensors. Returns the unmasked
+    per-sample loss and (when `grad_output` is given) the unmasked gradient; the caller applies the loss
+    mask, reduction, and dtype cast. This plain (un-compiled) core is shared between the public
+    `_fused_cross_entropy_base_from_labels` wrapper and the monolithic head-loss kernel, which inlines it
+    inside its own `@torch.compile` boundary.
+    """
+    predicted_logits, target_masked, target_mask = predicted_logits_from_labels(logits_norm, target, loss_mask, group)
 
     # CE loss = mean(log(sum_exp_logits) - sum(probabilities * logits))
     # KL loss is the same because P * log(P) == 0.
@@ -344,6 +348,43 @@ def _fused_cross_entropy_base_from_labels(
         ) * (grad_output / sum_exp_logits.unsqueeze(-1))
 
     return per_sample_loss, grad
+
+
+def z_loss_core(
+    exp_logits: torch.Tensor,  # (*batch, vocab)
+    sum_exp_logits: torch.Tensor,  # (*batch,)
+    logits_max: torch.Tensor,  # (*batch,)
+    grad_output: float | None,  # already normalized: raw_grad_output / divisor * logits_scale_factor
+) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,) unmasked, (*batch, vocab) unmasked
+    """
+    Z-loss from the already-computed shared softmax tensors. Returns the unmasked per-sample loss term
+    (`log_sum_exp ** 2`) and (when `grad_output` is given) the unmasked gradient; the caller applies the
+    loss mask, reduction, and dtype cast. z-loss needs the un-regularized log-sum-exp, so it adds back
+    `logits_max` (cross-entropy cancels it). Shared between `fused_z_loss_forward_backward` and the
+    monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
+    """
+    log_sum_exp_logits = sum_exp_logits.log() + logits_max
+    loss_term = log_sum_exp_logits**2
+    if grad_output is None:
+        grad = None
+    else:
+        grad = (2 * grad_output * (log_sum_exp_logits / sum_exp_logits)).unsqueeze(-1) * exp_logits
+    return loss_term, grad
+
+
+@torch.compile
+def _fused_cross_entropy_base_from_labels(
+    logits: torch.Tensor,  # (*batch, vocab)
+    target: torch.Tensor,  # (*batch,)
+    loss_mask: torch.Tensor,  # (*batch,)
+    grad_output: float | None,
+    logits_scale_factor: float,
+    group: ProcessGroup | None = None,
+) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
+    return cross_entropy_from_labels_core(
+        logits_norm, exp_logits, sum_exp_logits, target, loss_mask, grad_output, group
+    )
 
 
 @torch.compile

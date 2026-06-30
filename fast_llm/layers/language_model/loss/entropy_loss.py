@@ -39,7 +39,9 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
             divisor=self._get_label_count(kwargs),
         )
 
-    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+    def get_monolithic_spec(
+        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
+    ) -> MonolithicLossSpec | None:
         # For labels, forward-KL is identical to cross-entropy (one-hot target entropy is zero).
         return MonolithicLossSpec(
             kind="cross_entropy",
@@ -79,7 +81,9 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
             divisor=self._get_label_count(kwargs),
         )
 
-    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+    def get_monolithic_spec(
+        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
+    ) -> MonolithicLossSpec | None:
         return MonolithicLossSpec(
             kind="entropy_from_distribution",
             name=self.name,

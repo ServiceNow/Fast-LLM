@@ -3,7 +3,7 @@ import typing
 import torch
 
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.entropy_loss import fused_softmax_base
+from fast_llm.functional.entropy_loss import fused_softmax_base, z_loss_core
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
@@ -34,7 +34,9 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
             divisor=self._get_label_count(kwargs),
         )
 
-    def get_monolithic_spec(self, kwargs: dict[str, typing.Any], split_index: int = 0) -> MonolithicLossSpec | None:
+    def get_monolithic_spec(
+        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
+    ) -> MonolithicLossSpec | None:
         return MonolithicLossSpec(
             kind="z_loss",
             name=self.name,
@@ -80,16 +82,15 @@ def fused_z_loss_forward_backward(
     if divisor is None:
         divisor = logits.shape[:-1].numel()
     grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
-    logits_norm, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
-    log_sum_exp_logits = sum_exp_logits.log() + logits_max
+    _, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
+    loss_term, grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, grad_output)
 
-    loss = reduce_losses(log_sum_exp_logits**2, divisor, loss_mask)
+    loss = reduce_losses(loss_term, divisor, loss_mask)
 
-    if grad_output is not None:
-        grad_base = 2 * grad_output * (log_sum_exp_logits / sum_exp_logits)
+    if grad is not None:
         if loss_mask is not None:
-            grad_base = grad_base * loss_mask
-        grad = (grad_base.unsqueeze(-1) * exp_logits).to(logits.dtype)
+            grad = grad * loss_mask.unsqueeze(-1)
+        grad = grad.to(logits.dtype)
         if grad_logits is None:
             grad_logits = grad
         else:
