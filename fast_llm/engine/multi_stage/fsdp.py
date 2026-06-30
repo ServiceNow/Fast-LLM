@@ -403,6 +403,8 @@ class FSDP:
                 triton_add(self._grad_shard, out, self._grad_shard)
             elif not full_precision_gradients:
                 triton_copy(self._grad_buffer_local_shard, self._grad_shard)
+        elif accumulate:
+            triton_add(self._grad_shard, self._grad_buffer_local_shard, self._grad_shard)
         else:
             triton_copy(self._grad_buffer_local_shard, self._grad_shard)
 
