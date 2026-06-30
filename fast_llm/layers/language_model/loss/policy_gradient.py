@@ -7,10 +7,10 @@ from fast_llm.engine.base_model.config import LossDef, ReductionType
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.config import TritonConfig
 from fast_llm.functional.entropy_loss import (
-    _predicted_logits_from_labels,
-    _softmax_base,
     fused_predicted_logits_from_labels,
     fused_softmax_base,
+    predicted_logits_from_labels,
+    softmax_base,
 )
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.block.config import BlockKwargs
@@ -22,13 +22,13 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelLossKwargs,
     LanguageModelPolicyGradientLossConfig,
 )
-from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, _grpo_metrics_core
+from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, grpo_metrics_core
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 from fast_llm.layers.language_model.loss.monolithic import (
     MonolithicLossOutput,
     MonolithicLossSpec,
-    _gspo_backward_core,
-    _gspo_segment_seam,
+    gspo_backward_core,
+    gspo_segment_seam,
 )
 from fast_llm.utils import Assert
 
@@ -379,7 +379,7 @@ def compute_grpo_metrics(
     logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
     predicted_logits, _, _ = fused_predicted_logits_from_labels(logits_norm, target, loss_mask, group)
     new_log_probs = predicted_logits - sum_exp_logits.log()
-    return _grpo_metrics_core(
+    return grpo_metrics_core(
         logits_norm,
         exp_logits,
         sum_exp_logits,
@@ -481,8 +481,8 @@ def _gspo_forward_core(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """GSPO compiled forward: one softmax + predicted-logit lookup, producing per-token new log-probs.
     The softmax tensors are handed to the eager segment seam and the compiled backward."""
-    logits_norm, exp_logits, sum_exp_logits, _ = _softmax_base(logits, logits_scale_factor, group)
-    predicted_logits, target_masked, target_mask = _predicted_logits_from_labels(logits_norm, target, loss_mask, group)
+    logits_norm, exp_logits, sum_exp_logits, _ = softmax_base(logits, logits_scale_factor, group)
+    predicted_logits, target_masked, target_mask = predicted_logits_from_labels(logits_norm, target, loss_mask, group)
     new_log_probs = predicted_logits - sum_exp_logits.log()
     return new_log_probs, exp_logits, sum_exp_logits, target_masked, target_mask
 
@@ -533,7 +533,7 @@ def fused_gspo_loss_forward_backward(
     new_log_probs, exp_logits, sum_exp_logits, target_masked, target_mask = _gspo_forward_core(
         logits, target, loss_mask, logits_scale_factor, group
     )
-    loss, new_logprobs_mean, effective_grad = _gspo_segment_seam(
+    loss, new_logprobs_mean, effective_grad = gspo_segment_seam(
         new_log_probs,
         loss_mask,
         advantages,
@@ -550,7 +550,7 @@ def fused_gspo_loss_forward_backward(
         logits_scale_factor,
     )
     if effective_grad is not None:
-        grad_logits = _gspo_backward_core(
+        grad_logits = gspo_backward_core(
             exp_logits,
             sum_exp_logits,
             target_masked,

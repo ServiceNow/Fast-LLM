@@ -92,7 +92,7 @@ def torch_entropy_loss_forward_backward(
     return loss.detach_(), grad
 
 
-def _softmax_base(
+def softmax_base(
     logits: torch.Tensor,  # (*batch, vocab)
     logits_scale_factor: float = 1.0,
     group: ProcessGroup | None = None,
@@ -123,10 +123,10 @@ def _softmax_base(
     return logits_norm, exp_logits, sum_exp_logits, logits_max
 
 
-fused_softmax_base = torch.compile(_softmax_base)
+fused_softmax_base = torch.compile(softmax_base)
 
 
-def _reverse_kl_from_distribution_core(
+def reverse_kl_from_distribution_core(
     logits_norm: torch.Tensor,  # (*batch, vocab)
     exp_logits: torch.Tensor,  # (*batch, vocab)
     sum_exp_logits: torch.Tensor,  # (*batch,)
@@ -148,7 +148,7 @@ def _reverse_kl_from_distribution_core(
     predicted_probability = exp_logits / sum_exp_logits.unsqueeze(-1)
 
     if target_format == TargetFormat.logits:
-        target_logits_norm, _, sum_exp_target_logits, _ = _softmax_base(
+        target_logits_norm, _, sum_exp_target_logits, _ = softmax_base(
             target, logits_scale_factor / temperature, group
         )
         target_log_probability = target_logits_norm - sum_exp_target_logits.log().unsqueeze(-1)
@@ -182,8 +182,8 @@ def _fused_reverse_kl_base_from_distribution(
     group: ProcessGroup | None = None,
     temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits, _ = _softmax_base(logits, logits_scale_factor, group)
-    return _reverse_kl_from_distribution_core(
+    logits_norm, exp_logits, sum_exp_logits, _ = softmax_base(logits, logits_scale_factor, group)
+    return reverse_kl_from_distribution_core(
         logits_norm,
         exp_logits,
         sum_exp_logits,
@@ -196,7 +196,7 @@ def _fused_reverse_kl_base_from_distribution(
     )
 
 
-def _cross_entropy_from_distribution_core(
+def cross_entropy_from_distribution_core(
     logits_norm: torch.Tensor,  # (*batch, vocab)
     exp_logits: torch.Tensor,  # (*batch, vocab)
     sum_exp_logits: torch.Tensor,  # (*batch,)
@@ -216,7 +216,7 @@ def _cross_entropy_from_distribution_core(
     wrapper and the monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
     """
     if target_format == TargetFormat.logits:
-        target_logits_norm, exp_logits_targets, sum_exp_target_logits, _ = _softmax_base(
+        target_logits_norm, exp_logits_targets, sum_exp_target_logits, _ = softmax_base(
             target, logits_scale_factor / temperature, group
         )
         target = exp_logits_targets / sum_exp_target_logits.unsqueeze(-1)
@@ -259,8 +259,8 @@ def _fused_cross_entropy_base_from_distribution(
     temperature: float = 1.0,
     return_kl_loss: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits, _ = _softmax_base(logits, logits_scale_factor, group)
-    return _cross_entropy_from_distribution_core(
+    logits_norm, exp_logits, sum_exp_logits, _ = softmax_base(logits, logits_scale_factor, group)
+    return cross_entropy_from_distribution_core(
         logits_norm,
         exp_logits,
         sum_exp_logits,
@@ -274,7 +274,7 @@ def _fused_cross_entropy_base_from_distribution(
     )
 
 
-def _predicted_logits_from_labels(
+def predicted_logits_from_labels(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,)
     loss_mask: torch.Tensor,  # (*batch,), == target>=0
@@ -312,7 +312,7 @@ def _predicted_logits_from_labels(
     return predicted_logits, target_masked, target_mask
 
 
-fused_predicted_logits_from_labels = torch.compile(_predicted_logits_from_labels)
+fused_predicted_logits_from_labels = torch.compile(predicted_logits_from_labels)
 
 
 @torch.compile

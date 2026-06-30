@@ -5,12 +5,12 @@ import torch
 from fast_llm.core.distributed import ProcessGroup
 from fast_llm.functional.config import EntropyLossType, TargetFormat
 from fast_llm.functional.entropy_loss import (
-    _cross_entropy_from_distribution_core,
-    _predicted_logits_from_labels,
-    _reverse_kl_from_distribution_core,
-    _softmax_base,
+    cross_entropy_from_distribution_core,
+    predicted_logits_from_labels,
+    reverse_kl_from_distribution_core,
+    softmax_base,
 )
-from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, _grpo_metrics_core
+from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, grpo_metrics_core
 from fast_llm.utils import Assert
 
 
@@ -110,7 +110,7 @@ def _apply_combinable_losses(
     cross_entropy_loss = None
     if ce_target is not None:
         loss_mask = ce_target >= 0
-        predicted_logits, target_masked, target_mask = _predicted_logits_from_labels(
+        predicted_logits, target_masked, target_mask = predicted_logits_from_labels(
             logits_norm, ce_target, loss_mask, group
         )
         cross_entropy_loss = ((sum_exp_logits.log() - predicted_logits) * loss_mask).sum() / ce_divisor
@@ -152,7 +152,7 @@ def _apply_combinable_losses(
             else distribution_grad_output / distribution_divisor * logits_scale_factor
         )
         if distribution_entropy_loss_type == EntropyLossType.reverse_kl:
-            per_sample_loss, distribution_grad = _reverse_kl_from_distribution_core(
+            per_sample_loss, distribution_grad = reverse_kl_from_distribution_core(
                 logits_norm,
                 exp_logits,
                 sum_exp_logits,
@@ -164,7 +164,7 @@ def _apply_combinable_losses(
                 distribution_temperature,
             )
         else:
-            per_sample_loss, distribution_grad = _cross_entropy_from_distribution_core(
+            per_sample_loss, distribution_grad = cross_entropy_from_distribution_core(
                 logits_norm,
                 exp_logits,
                 sum_exp_logits,
@@ -189,7 +189,7 @@ def _apply_combinable_losses(
     grpo_metrics = None
     if grpo_target is not None:
         grpo_loss_mask = grpo_target >= 0
-        grpo_predicted_logits, grpo_target_masked, grpo_target_mask = _predicted_logits_from_labels(
+        grpo_predicted_logits, grpo_target_masked, grpo_target_mask = predicted_logits_from_labels(
             logits_norm, grpo_target, grpo_loss_mask, group
         )
         new_log_probs = grpo_predicted_logits - sum_exp_logits.log()
@@ -204,7 +204,7 @@ def _apply_combinable_losses(
             grpo_new_logprobs_mean = (new_log_probs * grpo_loss_mask / grpo_num_labels_in_seq.clamp(min=1)).sum()
         if grpo_compute_metrics:
             # The metric family reuses this branch's softmax + new_log_probs — no second softmax pass.
-            grpo_metrics = _grpo_metrics_core(
+            grpo_metrics = grpo_metrics_core(
                 logits_norm,
                 exp_logits,
                 sum_exp_logits,
@@ -289,7 +289,7 @@ def _monolithic_core(
     Gradients accumulate in fp32 and are cast to `logits.dtype` once at the end. GSPO is *not* handled
     here — its eager segment seam requires the three-phase split (`_monolithic_gspo_forward_core`).
     """
-    logits_norm, exp_logits, sum_exp_logits, logits_max = _softmax_base(logits, logits_scale_factor, group)
+    logits_norm, exp_logits, sum_exp_logits, logits_max = softmax_base(logits, logits_scale_factor, group)
     cross_entropy_loss, z_loss, distribution_loss, grpo_loss, grpo_new_logprobs_mean, grpo_metrics, grad = (
         _apply_combinable_losses(
             logits_norm,
@@ -369,9 +369,9 @@ def _monolithic_gspo_forward_core(
     """
     GSPO-present forward: one shared softmax, every enabled non-GSPO loss's scalar + fp32 gradient
     (uncast), and GSPO's per-token `new_log_probs`. The softmax tensors and the uncast gradient cross the
-    eager segment seam to `_gspo_backward_core` (the `index_add_`/`num_segments` seam can't be compiled).
+    eager segment seam to `gspo_backward_core` (the `index_add_`/`num_segments` seam can't be compiled).
     """
-    logits_norm, exp_logits, sum_exp_logits, logits_max = _softmax_base(logits, logits_scale_factor, group)
+    logits_norm, exp_logits, sum_exp_logits, logits_max = softmax_base(logits, logits_scale_factor, group)
     cross_entropy_loss, z_loss, distribution_loss, _, _, _, grad = _apply_combinable_losses(
         logits_norm,
         exp_logits,
@@ -405,7 +405,7 @@ def _monolithic_gspo_forward_core(
         False,
     )
     gspo_loss_mask = gspo_target >= 0
-    predicted_logits, target_masked, target_mask = _predicted_logits_from_labels(
+    predicted_logits, target_masked, target_mask = predicted_logits_from_labels(
         logits_norm, gspo_target, gspo_loss_mask, group
     )
     new_log_probs = predicted_logits - sum_exp_logits.log()
@@ -422,7 +422,7 @@ def _monolithic_gspo_forward_core(
     )
 
 
-def _gspo_segment_seam(
+def gspo_segment_seam(
     new_log_probs: torch.Tensor,  # (*batch,)
     loss_mask: torch.Tensor,  # (*batch,) bool
     advantages: torch.Tensor,  # (*batch,)
@@ -503,7 +503,7 @@ def _gspo_segment_seam(
 
 
 @torch.compile
-def _gspo_backward_core(
+def gspo_backward_core(
     exp_logits: torch.Tensor,  # (*batch, vocab)
     sum_exp_logits: torch.Tensor,  # (*batch,)
     target_masked: torch.Tensor,  # (*batch,)
@@ -652,7 +652,7 @@ def monolithic_head_loss_forward_backward(
             gspo_spec.target,
         )
         gspo_loss_mask = gspo_spec.target >= 0
-        gspo_loss, gspo_new_logprobs_mean, effective_grad = _gspo_segment_seam(
+        gspo_loss, gspo_new_logprobs_mean, effective_grad = gspo_segment_seam(
             gspo_new_log_probs,
             gspo_loss_mask,
             gspo_spec.advantages,
@@ -669,7 +669,7 @@ def monolithic_head_loss_forward_backward(
             logits_scale_factor,
         )
         if effective_grad is not None:
-            grad_logits = _gspo_backward_core(
+            grad_logits = gspo_backward_core(
                 exp_logits,
                 sum_exp_logits,
                 target_masked,

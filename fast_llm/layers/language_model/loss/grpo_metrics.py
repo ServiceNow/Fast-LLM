@@ -19,7 +19,7 @@ class GRPOMetrics(typing.NamedTuple):
     entropy: torch.Tensor | None
 
 
-def _grpo_metrics_core(
+def grpo_metrics_core(
     logits_norm: torch.Tensor,  # (*batch, vocab)
     exp_logits: torch.Tensor,  # (*batch, vocab)
     sum_exp_logits: torch.Tensor,  # (*batch,)
