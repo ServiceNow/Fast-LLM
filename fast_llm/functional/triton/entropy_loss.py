@@ -1,8 +1,44 @@
+import os
+
 import torch
 
 from fast_llm.functional.config import EntropyLossType, TargetFormat
-from fast_llm.functional.triton import tl, tl_arange, tl_constexpr, triton, triton_jit
+from fast_llm.functional.triton import TritonConfig, tl, tl_arange, tl_constexpr, triton, triton_autotune, triton_jit
 from fast_llm.functional.utils import reduce_losses
+
+# The from-distribution kernels run a softmax on both the logits and the target, doubling register
+# pressure, so the best `num_warps` shifts with the number of column tiles. Autotune it per vocab size.
+_distribution_autotune_configs = (
+    TritonConfig({}, num_warps=8),
+    TritonConfig({}, num_warps=16),
+    TritonConfig({}, num_warps=32),
+)
+if os.environ.get("FAST_LLM_SKIP_TRITON_AUTOTUNE"):
+    _distribution_autotune_configs = (_distribution_autotune_configs[1],)
+
+_autotune_restore_stack: list = []
+
+
+def _save_for_restore(nargs: dict, reset_only: bool = False) -> None:
+    # Autotune benchmarks each config by re-running the kernel, which corrupts buffers the kernel reads
+    # and writes in place: the grad buffer on the accumulation path (a later loss adding into a shared
+    # buffer), and `partial_losses` in the tensor-parallel path where it aliases the output. Snapshot
+    # them so `_restore` can roll them back between trials. Forward-only calls pass neither.
+    if reset_only:
+        return
+    saved = {}
+    grad = nargs.get("grad_logits_ptr")
+    if grad is not None and nargs.get("accumulate"):
+        saved["grad_logits_ptr"] = grad.clone()
+    partial_losses = nargs.get("partial_losses_ptr")
+    if partial_losses is not None:
+        saved["partial_losses_ptr"] = partial_losses.clone()
+    _autotune_restore_stack.append(saved)
+
+
+def _restore(nargs: dict, exception: Exception | None) -> None:
+    for name, value in _autotune_restore_stack.pop().items():
+        nargs[name].copy_(value)
 
 
 @triton_jit()
@@ -253,6 +289,7 @@ def triton_predicted_logits_from_distribution(
     return predicted_logits, exp_logits, sum_exp_logits, max_logits, target_sum_exp_logits, target_max_logits, target
 
 
+@triton_autotune(configs=_distribution_autotune_configs, key=["n_cols"])
 @triton_jit()
 def triton_cross_entropy_from_distribution_forward_parallel_kernel(
     logits_ptr,
@@ -308,6 +345,12 @@ def triton_cross_entropy_from_distribution_forward_parallel_kernel(
         tl.store(target_sum_exp_logits_ptr + block_idx, target_sum_exp_logits)
 
 
+@triton_autotune(
+    configs=_distribution_autotune_configs,
+    key=["n_cols"],
+    pre_hook=_save_for_restore,
+    post_hook=_restore,
+)
 @triton_jit()
 def triton_cross_entropy_from_distribution_forward_backward_kernel(
     logits_ptr,
@@ -479,6 +522,7 @@ def triton_reverse_kl_forward_from_distribution(
     return loss, logits, target, sum_exp_logits, max_logits, target_sum_exp_logits, target_max_logits
 
 
+@triton_autotune(configs=_distribution_autotune_configs, key=["n_cols"])
 @triton_jit()
 def triton_reverse_kl_forward_kernel_from_distribution(
     logits_ptr,
@@ -532,6 +576,12 @@ def triton_reverse_kl_forward_kernel_from_distribution(
         tl.store(target_sum_exp_logits_ptr + block_idx, target_sum_exp_logits)
 
 
+@triton_autotune(
+    configs=_distribution_autotune_configs,
+    key=["n_cols"],
+    pre_hook=_save_for_restore,
+    post_hook=_restore,
+)
 @triton_jit()
 def triton_reverse_kl_forward_backward_kernel_from_distribution(
     logits_ptr,
@@ -716,16 +766,16 @@ def triton_entropy_loss_forward_backward(
     n_cols = logits.size(-1)
     if divisor is None:
         divisor = n_rows
+    is_distribution = target_format != TargetFormat.labels
     if block_size is None:
-        block_size = min(triton.next_power_of_2(n_cols), 32768)
-    if num_warps is None:
-        num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
+        # Smaller tile for the distribution path to keep occupancy up; its `num_warps` is autotuned
+        # (see `_distribution_autotune_configs`).
+        block_size = min(triton.next_power_of_2(n_cols), 16384 if is_distribution else 32768)
     kwargs = {
         "logits_stride_0": logits.stride(-2),
         "n_cols": n_cols,
         "logits_scale_factor": logits_scale_factor,
         "block_size": block_size,
-        "num_warps": num_warps,
     }
     if grad_output is None:
         backward_kwargs = {}
@@ -740,6 +790,9 @@ def triton_entropy_loss_forward_backward(
         }
     if target_format == TargetFormat.labels:
         assert entropy_loss_type != EntropyLossType.reverse_kl
+        if num_warps is None:
+            num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
+        kwargs["num_warps"] = num_warps
         if group is None:
             losses = torch.empty(n_rows, dtype=torch.float, device=logits.device)
             triton_cross_entropy_forward_backward_from_labels_kernel[(n_rows,)](

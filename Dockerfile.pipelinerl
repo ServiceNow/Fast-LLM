@@ -99,6 +99,14 @@ RUN python -c "import torch, transformers, vllm; print('before torch', torch.__v
     && python -c "import fast_llm, pipelinerl, torch, transformers, vllm; print('after torch', torch.__version__); print('after transformers', transformers.__version__); print('after vllm', vllm.__version__)" \
     && pip check
 
+# Pin wandb to 0.27.0. wandb 0.27.1 moved its internal work onto an asyncio event loop running in a background
+# thread (wandb.sdk.lib.asyncio_manager); its run_in_loop deadlocks inside the PipelineRL actor — an asyncio +
+# heavily-multithreaded process — so the actor stops producing rollouts and the run hangs at startup. 0.27.0 is
+# the last good version. Done here (not in setup.cfg's wandb>=0.24.0) so only the PipelineRL image is pinned;
+# the trainer's own wandb is unaffected. Revisit when wandb fixes the regression.
+RUN pip install --no-cache-dir "wandb==0.27.0" \
+    && python -c "import wandb; assert wandb.__version__ == '0.27.0', wandb.__version__; print('wandb', wandb.__version__)"
+
 # Copy the remaining source code (read-only for non-root, see the note on dependency files above).
 COPY ./Megatron-LM Megatron-LM
 COPY ./examples examples
