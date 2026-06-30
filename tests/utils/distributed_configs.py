@@ -193,7 +193,6 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         compare_config=_compare_layer_match,
     ),
     # Gradient accumulation with grad buffers shared across stages.
-    # Shared buffers flush (and re-log) the grad shard once per micro-batch, so gradients appear as duplicates.
     DistributedTestingConfig(
         name="df4_z2",
         compare="df4",
