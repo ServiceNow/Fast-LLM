@@ -360,8 +360,8 @@ def z_loss_core(
     Z-loss from the already-computed shared softmax tensors. Returns the unmasked per-sample loss term
     (`log_sum_exp ** 2`) and (when `grad_output` is given) the unmasked gradient; the caller applies the
     loss mask, reduction, and dtype cast. z-loss needs the un-regularized log-sum-exp, so it adds back
-    `logits_max` (cross-entropy cancels it). Shared between `fused_z_loss_forward_backward` and the
-    monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
+    `logits_max` (cross-entropy cancels it). Inlined by the z-loss `combinable_core` inside its
+    `@torch.compile` boundary (standalone or monolithic).
     """
     log_sum_exp_logits = sum_exp_logits.log() + logits_max
     loss_term = log_sum_exp_logits**2

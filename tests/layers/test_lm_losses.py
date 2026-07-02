@@ -8,7 +8,7 @@ import torch
 from fast_llm.core.ops import split_op
 from fast_llm.engine.config_utils import data_type
 from fast_llm.engine.config_utils.data_type import DataType
-from fast_llm.engine.distributed.config import DistributedBackend
+from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.functional.config import EntropyLossType, TargetFormat
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
@@ -16,15 +16,15 @@ from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
+from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelZLossConfig
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.policy_gradient import (
     GRPOMetrics,
     compute_grpo_metrics,
-    fused_grpo_loss_forward_backward,
     fused_gspo_loss_forward_backward,
 )
-from fast_llm.layers.language_model.loss.z_loss import fused_z_loss_forward_backward, z_loss
+from fast_llm.layers.language_model.loss.z_loss import z_loss
 from fast_llm.utils import Assert
 from tests.utils.dataset import get_random_spans
 from tests.utils.subtest import DistributedTestContext
@@ -363,17 +363,12 @@ def _test_grpo_loss(
         previous_grad = torch.randn_like(grad_ref)
         grad_ref = grad_ref + previous_grad
         local_previous_grad = split_op(previous_grad, group, -1).contiguous()
-    out_fused, grad_fused, new_logprobs_fused = fused_grpo_loss_forward_backward(
+    loss = _combinable_loss(LanguageModelGRPOLossConfig(), "grpo", logits_scale_factor)
+    out_fused, grad_fused, (new_logprobs_fused, _) = loss.combinable_forward_backward(
         split_op(logits, group, -1),
-        target,
-        advantages,
-        old_log_probabilities,
-        grad_logits=local_previous_grad.clone() if accumulate else None,
-        grad_output=grad_output,
-        group=group,
-        logits_scale_factor=logits_scale_factor,
-        num_labels_in_seq=num_labels_in_seq,
-        divisor=divisor,
+        group,
+        local_previous_grad.clone() if accumulate else None,
+        (target, advantages, old_log_probabilities, grad_output, divisor, 0.2, 0.2, num_labels_in_seq, False, False),
     )
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
 
@@ -531,6 +526,15 @@ def _test_grpo_metrics(
     _check_grpo_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
+def _combinable_loss(config, name: str, logits_scale_factor: float):
+    # Build the loss object so its `combinable_forward_backward` method is exercised directly. The tensor-
+    # parallel `group` is passed per call, so a trivial single-rank distributed config suffices even for the
+    # distributed subtests.
+    distributed_config = DistributedConfig()
+    distributed_config.validate()
+    return config.get_layer(distributed_config, name=name, logits_scale_factor=logits_scale_factor)
+
+
 def _test_z_loss(
     batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
 ):
@@ -547,13 +551,12 @@ def _test_z_loss(
         previous_grad = torch.randn_like(grad_ref)
         grad_ref = grad_ref + previous_grad
         local_previous_grad = split_op(previous_grad, group, -1).contiguous()
-    out_fused, grad_fused = fused_z_loss_forward_backward(
-        logits=local_logits,
-        loss_mask=loss_mask,
-        grad_logits=local_previous_grad.clone() if accumulate else None,
-        grad_output=grad_output,
-        group=group,
-        logits_scale_factor=logits_scale_factor,
+    loss = _combinable_loss(LanguageModelZLossConfig(), "z_loss", logits_scale_factor)
+    out_fused, grad_fused, _ = loss.combinable_forward_backward(
+        local_logits,
+        group,
+        local_previous_grad.clone() if accumulate else None,
+        (loss_mask, grad_output, local_logits.shape[:-1].numel()),
     )
     _compare_losses_and_grads(
         out_fused,

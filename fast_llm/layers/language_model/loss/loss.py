@@ -7,6 +7,7 @@ from fast_llm.config import Configurable
 from fast_llm.core.ops import split_op
 from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
+from fast_llm.functional.entropy_loss import softmax_base
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
 from fast_llm.utils import Assert
@@ -143,12 +144,31 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 
 
 class CombinableLoss:
-    """Mixin for losses that consume the vocabulary softmax: each runs standalone through its own fused
-    kernel, or several are fused together by `MonolithicLoss` over a single shared softmax. Subclasses
-    implement `combinable_extract` (eager kwargs -> argument tuple, run outside the compiled boundary) and
-    the `combinable_core` static method (the post-softmax math over the shared softmax tensors, returning
-    `(loss, uncast_grad, extra)`), and override `register_combinable_extras` when they emit outputs beyond
-    the loss scalar. Both the standalone kernel and `MonolithicLoss` call the same `combinable_core`."""
+    """Mixin for losses that consume the vocabulary softmax: each runs standalone through
+    `combinable_forward_backward`, or several are fused together by `MonolithicLoss` over a single shared
+    softmax. Subclasses implement `combinable_extract` (eager kwargs -> argument tuple, run outside the
+    compiled boundary) and the `combinable_core` static method (the post-softmax math over the shared
+    softmax tensors, returning `(loss, uncast_grad, extra)`), and override `register_combinable_extras` when
+    they emit outputs beyond the loss scalar. Both paths call the same `combinable_core`."""
+
+    _logits_scale_factor: float
+
+    @torch.compile
+    def combinable_forward_backward(
+        self,
+        logits: torch.Tensor,
+        group: "torch.distributed.ProcessGroup | None",
+        grad_logits: torch.Tensor | None,
+        arguments: tuple,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, typing.Any]:
+        """Standalone realization of a single combinable loss: run the softmax once, then this loss's
+        `combinable_core`, then cast-and-accumulate the gradient. Equivalent to a one-child `MonolithicLoss`
+        — they share `combinable_core`, so this is not a second copy of the math."""
+        logits_norm, exp_logits, sum_exp_logits, logits_max = softmax_base(logits, self._logits_scale_factor, group)
+        loss, grad, extra = self.combinable_core(
+            logits_norm, exp_logits, sum_exp_logits, logits_max, group, self._logits_scale_factor, arguments
+        )
+        return loss, self._accumulate_grad(grad, logits.dtype, grad_logits), extra
 
     @staticmethod
     def _accumulate_grad(

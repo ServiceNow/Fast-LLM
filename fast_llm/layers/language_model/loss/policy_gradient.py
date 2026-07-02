@@ -102,38 +102,46 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        arguments = self.combinable_extract(kwargs, split_index, losses is not None)
+        group = self._parallel_dim.group if self._vocab_parallel else None
         if TritonConfig.enabled(logits.device, self._config.use_triton):
             from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 
-            fn = triton_grpo_loss_forward_backward
-        else:
-            fn = fused_grpo_loss_forward_backward
-        loss, grad, new_logprobs_mean = fn(
-            logits,
-            self._get_labels(kwargs, split_index),
-            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
-            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
-            grad_logits=grad_logits,
-            grad_output=self._get_grad_output(kwargs),
-            group=self._parallel_dim.group if self._vocab_parallel else None,
-            epsilon_low=self._config.epsilon_low,
-            epsilon_high=self._config.epsilon_high,
-            logits_scale_factor=self._logits_scale_factor,
-            num_labels_in_seq=(
-                None
-                if losses is None
-                else self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
-            ),
-            divisor=self._get_label_count(kwargs),
-        )
+            (
+                target,
+                advantages,
+                old_log_probabilities,
+                grad_output,
+                divisor,
+                epsilon_low,
+                epsilon_high,
+                num_labels_in_seq,
+                compute_metrics,
+                _,
+            ) = arguments
+            loss, grad, new_logprobs_mean = triton_grpo_loss_forward_backward(
+                logits,
+                target,
+                advantages,
+                old_log_probabilities,
+                grad_logits=grad_logits,
+                grad_output=grad_output,
+                group=group,
+                epsilon_low=epsilon_low,
+                epsilon_high=epsilon_high,
+                logits_scale_factor=self._logits_scale_factor,
+                num_labels_in_seq=num_labels_in_seq,
+                divisor=divisor,
+            )
+            self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
+            # Triton produces only loss/grad/new_logprobs; the metric family needs its own pass here.
+            if compute_metrics:
+                self._register_extra_metrics(logits, kwargs, losses, split_index)
+            return loss, grad
 
-        self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
-
-        # Skip the extra softmax pass when there is nothing to register.
-        if losses is not None and self._config.metrics != GRPOMetricsLevel.none:
-            self._register_extra_metrics(logits, kwargs, losses, split_index)
-
-        return loss, grad
+        loss, grad_logits, extra = self.combinable_forward_backward(logits, group, grad_logits, arguments)
+        self.register_combinable_extras(extra, kwargs, losses)
+        return loss, grad_logits
 
     def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
         # When nothing is logged this step, drop the metric-only outputs (`new_logprobs_mean` and the
@@ -161,10 +169,10 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         logits_scale_factor: float,
         arguments: tuple,
     ) -> tuple[torch.Tensor, torch.Tensor | None, tuple]:
-        """Post-softmax GRPO over the shared softmax, called by both `fused_grpo_loss_forward_backward`
-        (after its softmax) and the monolithic head loss. Returns the loss scalar, the uncast masked gradient
-        (the caller casts), and the `(new_logprobs_mean, metrics)` extras (each `None` when not requested) —
-        all from one softmax and one predicted-logit lookup."""
+        """Post-softmax GRPO over the shared softmax, called by both the standalone
+        `combinable_forward_backward` and the monolithic head loss. Returns the loss scalar, the uncast masked
+        gradient (the caller casts), and the `(new_logprobs_mean, metrics)` extras (each `None` when not
+        requested) — all from one softmax and one predicted-logit lookup."""
         (
             target,
             advantages,
@@ -447,49 +455,6 @@ def compute_grpo_metrics(
         group,
         compute_entropy,
     )
-
-
-@torch.compile
-def fused_grpo_loss_forward_backward(
-    logits: torch.Tensor,  # (*batch, vocab)
-    target: torch.Tensor,  # (*batch,)
-    advantages: torch.Tensor,  # (*batch,)
-    old_log_probabilities: torch.Tensor,  # (*batch,)
-    grad_logits: torch.Tensor | None = None,
-    grad_output: float | None = None,
-    group: torch.distributed.ProcessGroup | None = None,
-    epsilon_low: float = 0.2,
-    epsilon_high: float = 0.2,
-    logits_scale_factor: float = 1.0,
-    num_labels_in_seq: (
-        torch.Tensor | None
-    ) = None,  # (*batch,) — response-span length broadcast per token, 0 for non-response
-    divisor: float | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
-    if divisor is None:
-        divisor = logits.shape[:-1].numel()
-    logits_norm, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
-    loss, grad, (new_logprobs_mean, _) = LanguageModelGRPOLoss.combinable_core(
-        logits_norm,
-        exp_logits,
-        sum_exp_logits,
-        logits_max,
-        group,
-        logits_scale_factor,
-        (
-            target,
-            advantages,
-            old_log_probabilities,
-            grad_output,
-            divisor,
-            epsilon_low,
-            epsilon_high,
-            num_labels_in_seq,
-            False,
-            False,
-        ),
-    )
-    return loss, CombinableLoss._accumulate_grad(grad, logits.dtype, grad_logits), new_logprobs_mean
 
 
 @torch.compile
