@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from fast_llm.core.ops import split_op
-from fast_llm.engine.config_utils import data_type
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.functional.config import EntropyLossType, TargetFormat
@@ -315,7 +314,7 @@ def _test_entropy_loss(
         grad_output is not None,
         grad_fused,
         grad_ref,
-        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
 
@@ -339,7 +338,7 @@ def _test_entropy_loss(
         grad_output is not None,
         grad_triton,
         grad_ref,
-        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
 
@@ -571,7 +570,7 @@ def _test_z_loss(
         grad_output is not None,
         grad_fused,
         grad_ref,
-        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
     if not triton_available:
@@ -591,7 +590,7 @@ def _test_z_loss(
         grad_output is not None,
         grad_triton,
         grad_ref,
-        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
 
