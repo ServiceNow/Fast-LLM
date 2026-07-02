@@ -130,8 +130,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 class SingleLoss[ConfigType: LanguageModelLossConfig](LanguageModelLoss[ConfigType]):
     """A loss emitting a single registered, weighted scalar. Subclasses implement `_forward_backward` (the
     loss math and its gradient); this template skips the disabled case, registers the scalar, and applies the
-    per-loss weight. `MonolithicLoss` composes several of these over one shared softmax, so it satisfies
-    `forward_backward` directly rather than through this single-loss template."""
+    per-loss weight. Composite losses satisfy `forward_backward` directly rather than through this template."""
 
     def forward_backward(
         self,
@@ -162,12 +161,11 @@ class SingleLoss[ConfigType: LanguageModelLossConfig](LanguageModelLoss[ConfigTy
 
 
 class CombinableLoss:
-    """Mixin for losses that consume the vocabulary softmax: each runs standalone through
-    `combinable_forward_backward`, or several are fused together by `MonolithicLoss` over a single shared
-    softmax. Subclasses implement `get_inputs` (eager kwargs -> argument tuple, run outside the
-    compiled boundary) and the `fused_core` static method (the post-softmax math over the shared
-    softmax tensors, returning `(loss, uncast_grad, extra)`), and override `register_combinable_extras` when
-    they emit outputs beyond the loss scalar. Both paths call the same `fused_core`."""
+    """Mixin for losses that consume the vocabulary softmax, either standalone through
+    `combinable_forward_backward` or several sharing one softmax when fused together. Subclasses implement
+    `get_inputs` (eager kwargs -> argument tuple, built outside the compiled boundary) and the `fused_core`
+    static method (post-softmax math returning `(loss, uncast_grad, extra)`), and override
+    `register_combinable_extras` when they emit outputs beyond the loss scalar."""
 
     _logits_scale_factor: float
 
@@ -179,9 +177,9 @@ class CombinableLoss:
         grad_logits: torch.Tensor | None,
         arguments: tuple,
     ) -> tuple[torch.Tensor, torch.Tensor | None, typing.Any]:
-        """Standalone realization of a single combinable loss: run the softmax once, then this loss's
-        `fused_core`, then cast-and-accumulate the gradient. Equivalent to a one-child `MonolithicLoss`
-        — they share `fused_core`, so this is not a second copy of the math."""
+        """Standalone realization of a single combinable loss: softmax once, this loss's `fused_core`, then
+        cast-and-accumulate the gradient. Shares `fused_core` with the fused path, so it is not a second copy
+        of the math."""
         logits_norm, exp_logits, sum_exp_logits, logits_max = softmax_base(logits, self._logits_scale_factor, group)
         loss, grad, extra = self.fused_core(
             logits_norm, exp_logits, sum_exp_logits, logits_max, group, self._logits_scale_factor, arguments
@@ -193,8 +191,7 @@ class CombinableLoss:
         grad: torch.Tensor | None, logits_dtype: torch.dtype, grad_logits: torch.Tensor | None
     ) -> torch.Tensor | None:
         """Cast a computed logits gradient to the logits dtype and accumulate it into `grad_logits` (in place
-        when a buffer exists, otherwise adopting it). The standalone kernels cast their single gradient here;
-        the monolithic kernel casts the fp32 sum of its children's gradients once."""
+        when a buffer exists, otherwise adopting it)."""
         if grad is None:
             return grad_logits
         grad = grad.to(logits_dtype)
@@ -206,8 +203,7 @@ class CombinableLoss:
     def register_combinable_extras(
         self, extra: typing.Any, kwargs: dict[str, typing.Any], losses: dict | None
     ) -> None:
-        """Register per-loss outputs beyond the scalar (e.g. GRPO's `new_logprobs` / metric family) produced
-        by `fused_core`. No-op by default."""
+        """Register per-loss outputs beyond the loss scalar (produced by `fused_core`). No-op by default."""
 
 
 def loss_forward_backward(

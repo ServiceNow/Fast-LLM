@@ -38,9 +38,8 @@ def grpo_metrics_core(
     term needing the full vocab axis (a sum over the local slice plus a tensor-parallel all-reduce); every
     other term is per-token.
 
-    This plain (un-compiled) core is shared between the public `compute_grpo_metrics` wrapper and the
-    monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary — so the metrics
-    reuse the loss kernel's softmax instead of recomputing it.
+    Un-compiled core, inlined into a `@torch.compile` boundary so the metrics reuse the loss kernel's softmax
+    instead of recomputing it.
     """
     mask = loss_mask.float()
     masked = mask / label_counts.float().clamp(min=1)

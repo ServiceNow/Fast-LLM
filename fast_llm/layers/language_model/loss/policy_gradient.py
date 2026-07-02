@@ -167,10 +167,9 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         logits_scale_factor: float,
         arguments: tuple,
     ) -> tuple[torch.Tensor, torch.Tensor | None, tuple]:
-        """Post-softmax GRPO over the shared softmax, called by both the standalone
-        `combinable_forward_backward` and the monolithic head loss. Returns the loss scalar, the uncast masked
-        gradient (the caller casts), and the `(new_logprobs_mean, metrics)` extras (each `None` when not
-        requested) — all from one softmax and one predicted-logit lookup."""
+        """Post-softmax GRPO over the shared softmax. Returns the loss scalar, the uncast masked gradient (the
+        caller casts), and the `(new_logprobs_mean, metrics)` extras (each `None` when not requested) — all
+        from one softmax and one predicted-logit lookup."""
         (
             target,
             advantages,
@@ -241,8 +240,8 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
                 * loss_mask
             )
             # d(probability_ratio)/d(logits) = - probability_ratio * (predicted_probabilities - target_probabilities)
-            # (Sign absorbed in probability_ratio_grad). Out-of-place `unsqueeze` since the shared softmax tensors
-            # may be reused by sibling losses in the monolithic path.
+            # (Sign absorbed in probability_ratio_grad). Out-of-place `unsqueeze` so the shared softmax tensors
+            # are not mutated in place, since other losses may reuse them over the same softmax.
             predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze(-1)
             grad = (probability_ratio_grad * probability_ratio).unsqueeze(-1) * predicted_probabilities.scatter_add(
                 -1,

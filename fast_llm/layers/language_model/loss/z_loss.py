@@ -48,9 +48,8 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](CombinableLoss, S
         logits_scale_factor: float,
         arguments: tuple,
     ) -> tuple[torch.Tensor, torch.Tensor | None, None]:
-        """Post-softmax z-loss over the shared softmax, called by both the standalone
-        `combinable_forward_backward` and the monolithic head loss. Returns the loss scalar and the uncast,
-        masked gradient contribution (the caller casts); z-loss emits no extra outputs."""
+        """Post-softmax z-loss over the shared softmax. Returns the loss scalar and the uncast, masked
+        gradient contribution (the caller casts); z-loss emits no extra outputs."""
         loss_mask, grad_output, divisor = arguments
         grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
         loss_term, grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, grad_output)

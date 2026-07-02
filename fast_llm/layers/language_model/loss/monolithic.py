@@ -41,11 +41,10 @@ def _monolithic_core(
 
 class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigType]):
     """
-    A composite loss that runs the vocabulary softmax once and shares it across its combinable child
-    losses (cross-entropy, z-loss, distillation, GRPO), emitting each child's scalar / metrics and the
-    combined logits gradient in a single `@torch.compile` boundary. It is an ordinary head loss: the head
-    loops over it like any other and threads the same gradient buffer, so non-combinable losses (e.g. DPO)
-    are plain siblings in the head's loss list.
+    A composite loss that runs the vocabulary softmax once and shares it across its combinable child losses,
+    emitting each child's scalar / metrics and the combined logits gradient in a single `@torch.compile`
+    boundary. It is an ordinary head loss: the head loops over it like any other and threads the same gradient
+    buffer, so non-combinable losses remain plain siblings in the head's loss list.
     """
 
     def __init__(

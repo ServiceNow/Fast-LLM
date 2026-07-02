@@ -105,8 +105,8 @@ def softmax_base(
     Warning: The returned values are regularized by `logits_max`.
         The regularization typically but not always cancels out in derived quantities.
 
-    This plain (un-compiled) core is shared between the public `fused_softmax_base` wrapper and the
-    monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
+    Un-compiled so it can be inlined into a `@torch.compile` boundary that fuses several losses over a
+    single softmax; `fused_softmax_base` is the compiled standalone wrapper.
     """
     logits = logits.float()
     if logits_scale_factor != 1.0:
@@ -136,12 +136,8 @@ def reverse_kl_from_distribution_core(
     group: ProcessGroup | None = None,
     temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    """
-    Reverse-KL math from a precomputed student softmax (adding a teacher softmax when the target is logits).
-
-    Used by the distillation `fused_core`, inlined inside its `@torch.compile` boundary (standalone
-    or monolithic).
-    """
+    """Reverse-KL from a precomputed student softmax (adding a teacher softmax when the target is logits).
+    Un-compiled core, inlined into a `@torch.compile` boundary."""
     assert target_format in (TargetFormat.logits, TargetFormat.probabilities)
     predicted_log_probability = logits_norm - sum_exp_logits.log().unsqueeze(-1)
     predicted_probability = exp_logits / sum_exp_logits.unsqueeze(-1)
@@ -183,13 +179,8 @@ def cross_entropy_from_distribution_core(
     temperature: float = 1.0,
     return_kl_loss: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    """
-    Cross-entropy / forward-KL math from a precomputed student softmax (adding a teacher softmax when the
-    target is logits).
-
-    Used by the distillation `fused_core`, inlined inside its `@torch.compile` boundary (standalone
-    or monolithic).
-    """
+    """Cross-entropy / forward-KL from a precomputed student softmax (adding a teacher softmax when the
+    target is logits). Un-compiled core, inlined into a `@torch.compile` boundary."""
     if target_format == TargetFormat.logits:
         target_logits_norm, exp_logits_targets, sum_exp_target_logits, _ = softmax_base(
             target, logits_scale_factor / temperature, group
@@ -233,12 +224,12 @@ def predicted_logits_from_labels(
     Recover the value of the logits at the target index, with support for masking (target < 0) and tensor parallelism.
     In the simple case, equivalent to `logits.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)`
 
-    Normally used in combination with `fused_softmax_base`, may also recover probabilities or log probabilities:
+    May also recover probabilities or log probabilities:
     `predicted_probabilities = predicted_logits.exp() / sum_exp_logits`
     `predicted_log_probabilities = predicted_logits / sum_exp_logits.log()`
 
-    This plain (un-compiled) core is shared between the public `fused_predicted_logits_from_labels` wrapper
-    and the monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
+    Un-compiled core, inlined into a `@torch.compile` boundary; `fused_predicted_logits_from_labels` is the
+    compiled standalone wrapper.
     """
 
     if group is None:
@@ -276,8 +267,7 @@ def cross_entropy_from_labels_core(
     """
     Cross-entropy from labels, taking the already-computed shared softmax tensors. Returns the unmasked
     per-sample loss and (when `grad_output` is given) the unmasked gradient; the caller applies the loss
-    mask, reduction, and dtype cast. Used by the label / GRPO `fused_core`, inlined inside its
-    `@torch.compile` boundary (standalone or monolithic).
+    mask, reduction, and dtype cast. Un-compiled core, inlined into a `@torch.compile` boundary.
     """
     predicted_logits, target_masked, target_mask = predicted_logits_from_labels(logits_norm, target, loss_mask, group)
 
@@ -308,8 +298,7 @@ def z_loss_core(
     Z-loss from the already-computed shared softmax tensors. Returns the unmasked per-sample loss term
     (`log_sum_exp ** 2`) and (when `grad_output` is given) the unmasked gradient; the caller applies the
     loss mask, reduction, and dtype cast. z-loss needs the un-regularized log-sum-exp, so it adds back
-    `logits_max` (cross-entropy cancels it). Inlined by the z-loss `fused_core` inside its
-    `@torch.compile` boundary (standalone or monolithic).
+    `logits_max` (cross-entropy cancels it). Un-compiled core, inlined into a `@torch.compile` boundary.
     """
     log_sum_exp_logits = sum_exp_logits.log() + logits_max
     loss_term = log_sum_exp_logits**2
