@@ -7,10 +7,10 @@ from fast_llm.functional.entropy_loss import fused_softmax_base, z_loss_core
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
-from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.loss import CombinableLoss, LanguageModelLoss
 
 
-class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss[ConfigType]):
+class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](CombinableLoss, LanguageModelLoss[ConfigType]):
     def _forward_backward(
         self,
         logits: "torch.Tensor",
@@ -36,8 +36,8 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
     def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
         return self._get_loss_mask(kwargs, split_index), self._get_grad_output(kwargs), self._get_label_count(kwargs)
 
+    @staticmethod
     def combinable_core(
-        self,
         logits_norm: torch.Tensor,
         exp_logits: torch.Tensor,
         sum_exp_logits: torch.Tensor,
@@ -46,10 +46,15 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
         logits_scale_factor: float,
         arguments: tuple,
     ) -> tuple[torch.Tensor, torch.Tensor | None, None]:
+        """Post-softmax z-loss over the shared softmax, called by both `fused_z_loss_forward_backward`
+        (after its softmax) and the monolithic head loss. Returns the loss scalar and the uncast, masked
+        gradient contribution (the caller casts); z-loss emits no extra outputs."""
         loss_mask, grad_output, divisor = arguments
-        loss, grad = z_loss_combinable(
-            exp_logits, sum_exp_logits, logits_max, loss_mask, grad_output, divisor, logits_scale_factor
-        )
+        grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
+        loss_term, grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, grad_output)
+        loss = reduce_losses(loss_term, divisor, loss_mask)
+        if grad is not None and loss_mask is not None:
+            grad = grad * loss_mask.unsqueeze(-1)
         return loss, grad, None
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
@@ -70,28 +75,6 @@ def z_loss(
     return torch.mean(out)
 
 
-def z_loss_combinable(
-    exp_logits: torch.Tensor,  # (*batch, vocab)
-    sum_exp_logits: torch.Tensor,  # (*batch,)
-    logits_max: torch.Tensor,  # (*batch,)
-    loss_mask: torch.Tensor | None,  # (*batch,)
-    grad_output: float | None,
-    divisor: float,
-    logits_scale_factor: float,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """
-    The post-softmax z-loss block shared by `fused_z_loss_forward_backward` (after its softmax) and the
-    monolithic head loss (over the shared softmax). Returns the loss scalar and the uncast, masked gradient
-    contribution; the caller casts to the logits dtype (the monolithic path defers that to one final cast).
-    """
-    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
-    loss_term, grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, grad_output)
-    loss = reduce_losses(loss_term, divisor, loss_mask)
-    if grad is not None and loss_mask is not None:
-        grad = grad * loss_mask.unsqueeze(-1)
-    return loss, grad
-
-
 @torch.compile
 def fused_z_loss_forward_backward(
     logits: torch.Tensor,
@@ -108,15 +91,14 @@ def fused_z_loss_forward_backward(
     """
     if divisor is None:
         divisor = logits.shape[:-1].numel()
-    _, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
-    loss, grad = z_loss_combinable(
-        exp_logits, sum_exp_logits, logits_max, loss_mask, grad_output, divisor, logits_scale_factor
+    logits_norm, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
+    loss, grad, _ = LanguageModelZLoss.combinable_core(
+        logits_norm,
+        exp_logits,
+        sum_exp_logits,
+        logits_max,
+        group,
+        logits_scale_factor,
+        (loss_mask, grad_output, divisor),
     )
-    if grad is not None:
-        grad = grad.to(logits.dtype)
-        if grad_logits is None:
-            grad_logits = grad
-        else:
-            grad_logits.add_(grad)
-
-    return loss, grad_logits
+    return loss, CombinableLoss._accumulate_grad(grad, logits.dtype, grad_logits)

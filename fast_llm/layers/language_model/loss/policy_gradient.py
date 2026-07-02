@@ -23,7 +23,7 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelPolicyGradientLossConfig,
 )
 from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, grpo_metrics_core
-from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.loss import CombinableLoss, LanguageModelLoss
 from fast_llm.utils import Assert
 
 
@@ -57,7 +57,9 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
         return f"{self._name}_new_logprobs"
 
 
-class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelPolicyGradientLoss[ConfigType]):
+class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
+    CombinableLoss, LanguageModelPolicyGradientLoss[ConfigType]
+):
     """GRPO: per-token IS-ratio clipping."""
 
     def __init__(
@@ -149,8 +151,8 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             register and self._config.metrics == GRPOMetricsLevel.with_entropy,
         )
 
+    @staticmethod
     def combinable_core(
-        self,
         logits_norm: torch.Tensor,
         exp_logits: torch.Tensor,
         sum_exp_logits: torch.Tensor,
@@ -159,6 +161,10 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         logits_scale_factor: float,
         arguments: tuple,
     ) -> tuple[torch.Tensor, torch.Tensor | None, tuple]:
+        """Post-softmax GRPO over the shared softmax, called by both `fused_grpo_loss_forward_backward`
+        (after its softmax) and the monolithic head loss. Returns the loss scalar, the uncast masked gradient
+        (the caller casts), and the `(new_logprobs_mean, metrics)` extras (each `None` when not requested) —
+        all from one softmax and one predicted-logit lookup."""
         (
             target,
             advantages,
@@ -171,23 +177,73 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             compute_metrics,
             compute_entropy,
         ) = arguments
-        loss, grad, new_logprobs_mean, metrics = grpo_combinable(
-            logits_norm,
-            exp_logits,
-            sum_exp_logits,
-            group,
-            target,
-            advantages,
-            old_log_probabilities,
-            grad_output,
-            divisor,
-            epsilon_low,
-            epsilon_high,
-            logits_scale_factor,
-            num_labels_in_seq,
-            compute_metrics,
-            compute_entropy,
+        loss_mask = target >= 0
+        predicted_logits, target_masked, target_mask = predicted_logits_from_labels(
+            logits_norm, target, loss_mask, group
         )
+        new_log_probs = predicted_logits - sum_exp_logits.log()
+        probability_ratio = (new_log_probs - old_log_probabilities).exp()
+
+        losses = -torch.min(
+            probability_ratio * advantages,
+            torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantages,
+        )
+        loss = reduce_losses(losses, divisor, loss_mask)
+
+        # Sum of per-sequence mean log-probs, matching pipelinerl's new_logprobs metric:
+        #   sum_sum(new_logprobs / num_labels_in_seq, masks_shifted, segments)
+        # Dividing by num_labels_in_seq (span length broadcast per token) and summing over masked
+        # tokens gives mean logprob per sequence; summing those across sequences matches the deepspeed
+        # convention exactly (segments are redundant once num_labels_in_seq is correct).
+        # Clamp to avoid 0/0=nan when num_labels_in_seq=0 (padded tokens or fully masked documents)
+        # — those positions also have loss_mask=0 so they correctly contribute 0 to the sum.
+        new_logprobs_mean = (
+            None if num_labels_in_seq is None else (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
+        )
+
+        metrics = (
+            grpo_metrics_core(
+                logits_norm,
+                exp_logits,
+                sum_exp_logits,
+                new_log_probs,
+                advantages,
+                old_log_probabilities,
+                loss_mask,
+                num_labels_in_seq,
+                epsilon_low,
+                epsilon_high,
+                group,
+                compute_entropy,
+            )
+            if compute_metrics
+            else None
+        )
+
+        if grad_output is None:
+            grad = None
+        else:
+            grad_output = grad_output / divisor * logits_scale_factor
+            # loss[a>=0] = -a * min(x, 1 + epsilon_high)  =>  grad[a>=0] = -a * (x <= 1 + epsilon_high)
+            # loss[a<=0] = a * max(x, 1 - epsilon_low)  =>  grad[a<=0] = a * (x >= 1 - epsilon_low)
+            probability_ratio_grad = (
+                grad_output
+                * (
+                    torch.clamp_min(advantages, 0) * (probability_ratio <= 1 + epsilon_high)
+                    + torch.clamp_max(advantages, 0) * (probability_ratio >= 1 - epsilon_low)
+                )
+                * loss_mask
+            )
+            # d(probability_ratio)/d(logits) = - probability_ratio * (predicted_probabilities - target_probabilities)
+            # (Sign absorbed in probability_ratio_grad). Out-of-place `unsqueeze` since the shared softmax tensors
+            # may be reused by sibling losses in the monolithic path.
+            predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze(-1)
+            grad = (probability_ratio_grad * probability_ratio).unsqueeze(-1) * predicted_probabilities.scatter_add(
+                -1,
+                target_masked.unsqueeze(-1),
+                -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
+            )
+
         return loss, grad, (new_logprobs_mean, metrics)
 
     def register_combinable_extras(self, extra: tuple, kwargs: dict[str, typing.Any], losses: dict | None) -> None:
@@ -393,97 +449,6 @@ def compute_grpo_metrics(
     )
 
 
-def grpo_combinable(
-    logits_norm: torch.Tensor,  # (*batch, vocab)
-    exp_logits: torch.Tensor,  # (*batch, vocab)
-    sum_exp_logits: torch.Tensor,  # (*batch,)
-    group: torch.distributed.ProcessGroup | None,
-    target: torch.Tensor,  # (*batch,)
-    advantages: torch.Tensor,  # (*batch,)
-    old_log_probabilities: torch.Tensor,  # (*batch,)
-    grad_output: float | None,
-    divisor: float,
-    epsilon_low: float,
-    epsilon_high: float,
-    logits_scale_factor: float,
-    num_labels_in_seq: torch.Tensor | None,  # enables `new_logprobs_mean` when not None
-    compute_metrics: bool,
-    compute_entropy: bool,
-) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, "GRPOMetrics | None"]:
-    """
-    The post-softmax GRPO block shared by `fused_grpo_loss_forward_backward` (after its softmax) and the
-    monolithic head loss (over the shared softmax). Returns the loss scalar, the uncast masked gradient,
-    the optional `new_logprobs_mean`, and the optional GRPO metric family — all from one softmax and one
-    predicted-logit lookup. The caller casts the gradient to the logits dtype.
-    """
-    loss_mask = target >= 0
-    predicted_logits, target_masked, target_mask = predicted_logits_from_labels(logits_norm, target, loss_mask, group)
-    new_log_probs = predicted_logits - sum_exp_logits.log()
-    probability_ratio = (new_log_probs - old_log_probabilities).exp()
-
-    losses = -torch.min(
-        probability_ratio * advantages,
-        torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantages,
-    )
-    loss = reduce_losses(losses, divisor, loss_mask)
-
-    # Sum of per-sequence mean log-probs, matching pipelinerl's new_logprobs metric:
-    #   sum_sum(new_logprobs / num_labels_in_seq, masks_shifted, segments)
-    # Dividing by num_labels_in_seq (span length broadcast per token) and summing over masked
-    # tokens gives mean logprob per sequence; summing those across sequences matches the deepspeed
-    # convention exactly (segments are redundant once num_labels_in_seq is correct).
-    # Clamp to avoid 0/0=nan when num_labels_in_seq=0 (padded tokens or fully masked documents)
-    # — those positions also have loss_mask=0 so they correctly contribute 0 to the sum.
-    new_logprobs_mean = (
-        None if num_labels_in_seq is None else (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
-    )
-
-    metrics = (
-        grpo_metrics_core(
-            logits_norm,
-            exp_logits,
-            sum_exp_logits,
-            new_log_probs,
-            advantages,
-            old_log_probabilities,
-            loss_mask,
-            num_labels_in_seq,
-            epsilon_low,
-            epsilon_high,
-            group,
-            compute_entropy,
-        )
-        if compute_metrics
-        else None
-    )
-
-    if grad_output is None:
-        grad = None
-    else:
-        grad_output = grad_output / divisor * logits_scale_factor
-        # loss[a>=0] = -a * min(x, 1 + epsilon_high)  =>  grad[a>=0] = -a * (x <= 1 + epsilon_high)
-        # loss[a<=0] = a * max(x, 1 - epsilon_low)  =>  grad[a<=0] = a * (x >= 1 - epsilon_low)
-        probability_ratio_grad = (
-            grad_output
-            * (
-                torch.clamp_min(advantages, 0) * (probability_ratio <= 1 + epsilon_high)
-                + torch.clamp_max(advantages, 0) * (probability_ratio >= 1 - epsilon_low)
-            )
-            * loss_mask
-        )
-        # d(probability_ratio)/d(logits) = - probability_ratio * (predicted_probabilities - target_probabilities)
-        # (Sign absorbed in probability_ratio_grad). Out-of-place `unsqueeze` since the shared softmax tensors
-        # may be reused by sibling losses in the monolithic path.
-        predicted_probabilities = exp_logits / sum_exp_logits.unsqueeze(-1)
-        grad = (probability_ratio_grad * probability_ratio).unsqueeze(-1) * predicted_probabilities.scatter_add(
-            -1,
-            target_masked.unsqueeze(-1),
-            -(loss_mask if target_mask is None else target_mask).unsqueeze(-1).to(torch.float32),
-        )
-
-    return loss, grad, new_logprobs_mean, metrics
-
-
 @torch.compile
 def fused_grpo_loss_forward_backward(
     logits: torch.Tensor,  # (*batch, vocab)
@@ -503,32 +468,28 @@ def fused_grpo_loss_forward_backward(
 ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
     if divisor is None:
         divisor = logits.shape[:-1].numel()
-    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
-    loss, grad, new_logprobs_mean, _ = grpo_combinable(
+    logits_norm, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
+    loss, grad, (new_logprobs_mean, _) = LanguageModelGRPOLoss.combinable_core(
         logits_norm,
         exp_logits,
         sum_exp_logits,
+        logits_max,
         group,
-        target,
-        advantages,
-        old_log_probabilities,
-        grad_output,
-        divisor,
-        epsilon_low,
-        epsilon_high,
         logits_scale_factor,
-        num_labels_in_seq,
-        False,
-        False,
+        (
+            target,
+            advantages,
+            old_log_probabilities,
+            grad_output,
+            divisor,
+            epsilon_low,
+            epsilon_high,
+            num_labels_in_seq,
+            False,
+            False,
+        ),
     )
-    if grad is not None:
-        grad = grad.to(logits.dtype)
-        if grad_logits is None:
-            grad_logits = grad
-        else:
-            grad_logits.add_(grad)
-
-    return loss, grad_logits, new_logprobs_mean
+    return loss, CombinableLoss._accumulate_grad(grad, logits.dtype, grad_logits), new_logprobs_mean
 
 
 @torch.compile

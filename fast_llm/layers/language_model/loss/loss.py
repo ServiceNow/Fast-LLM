@@ -72,12 +72,6 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     def get_loss_definitions(self) -> list[LossDef]:
         return [LossDef(name=self.name)] if self._do_register_loss else []
 
-    def register_combinable_extras(
-        self, extra: typing.Any, kwargs: dict[str, typing.Any], losses: dict | None
-    ) -> None:
-        """Register any per-loss outputs beyond the scalar (e.g. GRPO's `new_logprobs` / metric family)
-        produced by `combinable_core` when this loss runs inside `MonolithicLoss`. No-op by default."""
-
     def get_preprocessing_config(
         self,
     ) -> dict[str, typing.Any]:
@@ -146,6 +140,36 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return self._prepare_target(
             reference_hidden_states[logits_name], split_index, sequence_parallel=False, split_by_distance=False
         )
+
+
+class CombinableLoss:
+    """Mixin for losses that consume the vocabulary softmax: each runs standalone through its own fused
+    kernel, or several are fused together by `MonolithicLoss` over a single shared softmax. Subclasses
+    implement `combinable_extract` (eager kwargs -> argument tuple, run outside the compiled boundary) and
+    the `combinable_core` static method (the post-softmax math over the shared softmax tensors, returning
+    `(loss, uncast_grad, extra)`), and override `register_combinable_extras` when they emit outputs beyond
+    the loss scalar. Both the standalone kernel and `MonolithicLoss` call the same `combinable_core`."""
+
+    @staticmethod
+    def _accumulate_grad(
+        grad: torch.Tensor | None, logits_dtype: torch.dtype, grad_logits: torch.Tensor | None
+    ) -> torch.Tensor | None:
+        """Cast a computed logits gradient to the logits dtype and accumulate it into `grad_logits` (in place
+        when a buffer exists, otherwise adopting it). The standalone kernels cast their single gradient here;
+        the monolithic kernel casts the fp32 sum of its children's gradients once."""
+        if grad is None:
+            return grad_logits
+        grad = grad.to(logits_dtype)
+        if grad_logits is None:
+            return grad
+        grad_logits.add_(grad)
+        return grad_logits
+
+    def register_combinable_extras(
+        self, extra: typing.Any, kwargs: dict[str, typing.Any], losses: dict | None
+    ) -> None:
+        """Register per-loss outputs beyond the scalar (e.g. GRPO's `new_logprobs` / metric family) produced
+        by `combinable_core`. No-op by default."""
 
 
 def loss_forward_backward(

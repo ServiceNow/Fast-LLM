@@ -7,7 +7,7 @@ from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.functional.entropy_loss import softmax_base
 from fast_llm.layers.language_model.loss.config import MonolithicLossConfig
-from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.loss import CombinableLoss, LanguageModelLoss
 from fast_llm.utils import safe_merge_dicts
 
 
@@ -36,13 +36,7 @@ def _monolithic_core(
         results.append((loss, extra))
         if child_grad is not None:
             grad = child_grad if grad is None else grad + child_grad
-    if grad is not None:
-        grad = grad.to(logits.dtype)
-        if grad_logits is None:
-            grad_logits = grad
-        else:
-            grad_logits.add_(grad)
-    return results, grad_logits
+    return results, CombinableLoss._accumulate_grad(grad, logits.dtype, grad_logits)
 
 
 class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigType]):
