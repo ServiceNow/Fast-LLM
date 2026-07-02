@@ -43,6 +43,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         self._sequence_data_dim = distributed_config.get_distributed_dim(DistributedDimNames.sequence_data)
         self._sequence_data_active = self._sequence_data_dim.size > 1
 
+    @abc.abstractmethod
     def forward_backward(
         self,
         logits: "torch.Tensor",
@@ -51,23 +52,6 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor | None, torch.Tensor | None]":
-        if losses is None and self._weight is None:
-            # Loss computation is not needed, skip.
-            return None, None
-        loss, grad = self._forward_backward(logits, kwargs, losses, split_index, grad_logits)
-        if self._do_register_loss:
-            self._register_loss(self.name, loss, losses)
-        return loss if self._weight == 1 else loss * self._weight, grad
-
-    @abc.abstractmethod
-    def _forward_backward(
-        self,
-        logits: "torch.Tensor",
-        kwargs: dict[str, typing.Any],
-        losses: dict | None = None,
-        split_index: int = 0,
-        grad_logits: torch.Tensor | None = None,
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
         pass
 
     def get_loss_definitions(self) -> list[LossDef]:
@@ -141,6 +125,40 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return self._prepare_target(
             reference_hidden_states[logits_name], split_index, sequence_parallel=False, split_by_distance=False
         )
+
+
+class SingleLoss[ConfigType: LanguageModelLossConfig](LanguageModelLoss[ConfigType]):
+    """A loss emitting a single registered, weighted scalar. Subclasses implement `_forward_backward` (the
+    loss math and its gradient); this template skips the disabled case, registers the scalar, and applies the
+    per-loss weight. `MonolithicLoss` composes several of these over one shared softmax, so it satisfies
+    `forward_backward` directly rather than through this single-loss template."""
+
+    def forward_backward(
+        self,
+        logits: "torch.Tensor",
+        kwargs: dict[str, typing.Any],
+        losses: dict | None = None,
+        split_index: int = 0,
+        grad_logits: torch.Tensor | None = None,
+    ) -> "tuple[torch.Tensor | None, torch.Tensor | None]":
+        if losses is None and self._weight is None:
+            # Loss computation is not needed, skip.
+            return None, None
+        loss, grad = self._forward_backward(logits, kwargs, losses, split_index, grad_logits)
+        if self._do_register_loss:
+            self._register_loss(self.name, loss, losses)
+        return loss if self._weight == 1 else loss * self._weight, grad
+
+    @abc.abstractmethod
+    def _forward_backward(
+        self,
+        logits: "torch.Tensor",
+        kwargs: dict[str, typing.Any],
+        losses: dict | None = None,
+        split_index: int = 0,
+        grad_logits: torch.Tensor | None = None,
+    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        pass
 
 
 class CombinableLoss:

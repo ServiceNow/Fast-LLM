@@ -14,11 +14,11 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelDistillationLossConfig,
     LanguageModelLabelEntropyLossConfig,
 )
-from fast_llm.layers.language_model.loss.loss import CombinableLoss, LanguageModelLoss
+from fast_llm.layers.language_model.loss.loss import CombinableLoss, SingleLoss
 
 
 class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossConfig](
-    CombinableLoss, LanguageModelLoss[ConfigType]
+    CombinableLoss, SingleLoss[ConfigType]
 ):
     def _forward_backward(
         self,
@@ -76,7 +76,7 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
 
 
 class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossConfig](
-    CombinableLoss, LanguageModelLoss[ConfigType]
+    CombinableLoss, SingleLoss[ConfigType]
 ):
     def _forward_backward(
         self,

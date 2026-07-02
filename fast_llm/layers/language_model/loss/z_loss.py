@@ -7,10 +7,10 @@ from fast_llm.functional.entropy_loss import z_loss_core
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
-from fast_llm.layers.language_model.loss.loss import CombinableLoss, LanguageModelLoss
+from fast_llm.layers.language_model.loss.loss import CombinableLoss, SingleLoss
 
 
-class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](CombinableLoss, LanguageModelLoss[ConfigType]):
+class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](CombinableLoss, SingleLoss[ConfigType]):
     def _forward_backward(
         self,
         logits: "torch.Tensor",

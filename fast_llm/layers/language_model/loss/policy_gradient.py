@@ -23,13 +23,11 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelPolicyGradientLossConfig,
 )
 from fast_llm.layers.language_model.loss.grpo_metrics import GRPOMetrics, grpo_metrics_core
-from fast_llm.layers.language_model.loss.loss import CombinableLoss, LanguageModelLoss
+from fast_llm.layers.language_model.loss.loss import CombinableLoss, SingleLoss
 from fast_llm.utils import Assert
 
 
-class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLossConfig](
-    LanguageModelLoss[ConfigType]
-):
+class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLossConfig](SingleLoss[ConfigType]):
     """Shared scaffolding for policy-gradient losses (GRPO, GSPO)."""
 
     def _register_new_logprobs(

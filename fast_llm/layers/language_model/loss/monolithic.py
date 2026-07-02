@@ -119,18 +119,6 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             total_loss = weighted if total_loss is None else total_loss + weighted
         return total_loss, grad_logits
 
-    def _forward_backward(
-        self,
-        logits: "torch.Tensor",
-        kwargs: dict[str, typing.Any],
-        losses: dict | None = None,
-        split_index: int = 0,
-        grad_logits: torch.Tensor | None = None,
-    ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        # `MonolithicLoss` overrides the public `forward_backward` directly (it composes weighted child
-        # losses and registers each child), so this per-loss hook is never the entry point.
-        raise NotImplementedError
-
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return safe_merge_dicts(*(child.get_preprocessing_config() for child in self._children))
 
