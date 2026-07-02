@@ -9,7 +9,6 @@ from fast_llm.engine.base_model.config import LossDef
 from fast_llm.engine.distributed.config import DistributedConfig, DistributedDimNames
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
-from fast_llm.layers.language_model.loss.monolithic import MonolithicLossOutput, MonolithicLossSpec
 from fast_llm.utils import Assert
 
 
@@ -73,21 +72,11 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
     def get_loss_definitions(self) -> list[LossDef]:
         return [LossDef(name=self.name)] if self._do_register_loss else []
 
-    def get_monolithic_spec(
-        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
-    ) -> "MonolithicLossSpec | None":
-        """
-        Package this loss's inputs for the monolithic head-loss kernel, or return `None` if it is not
-        supported there (it then runs through its own `forward_backward`, accumulating into the same grad).
-        `losses is None` signals a step that logs nothing, so a loss may switch off metric-only outputs.
-        """
-        return None
-
-    def register_monolithic_outputs(
-        self, output: "MonolithicLossOutput", kwargs: dict[str, typing.Any], losses: dict | None
+    def register_combinable_extras(
+        self, extra: typing.Any, kwargs: dict[str, typing.Any], losses: dict | None
     ) -> None:
-        if self._do_register_loss:
-            self._register_loss(self.name, output.loss, losses)
+        """Register any per-loss outputs beyond the scalar (e.g. GRPO's `new_logprobs` / metric family)
+        produced by `combinable_core` when this loss runs inside `MonolithicLoss`. No-op by default."""
 
     def get_preprocessing_config(
         self,
@@ -147,8 +136,10 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         return None if loss_mask is None else self._prepare_target(loss_mask, split_index)
 
     def _get_reference_model_logits(self, reference_model: str, kwargs: dict[str, typing.Any], split_index: int = 0):
+        # The head owns the `.logits`; split on `.losses.` so the name resolves whether this loss sits
+        # directly under the head or nested inside a composite loss (e.g. `MonolithicLoss`).
         Assert.incl(
-            logits_name := self.module_name.rsplit(".", 2)[0] + f".logits",
+            logits_name := self.module_name.split(".losses.")[0] + f".logits",
             reference_hidden_states := kwargs[f"reference_{reference_model}_hidden_states"],
         )
         # The logits are already sequence-parallel if needed, we don't want to split again.

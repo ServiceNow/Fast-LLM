@@ -36,6 +36,8 @@ class LanguageModelLossKwargs(BlockKwargs):
 @config_class(registry=True)
 class LanguageModelLossConfig(Config):
     _abstract: typing.ClassVar[bool] = True
+    # Whether this loss can be a `MonolithicLossConfig` entry (shares one softmax via `combinable_core`).
+    combinable: typing.ClassVar[bool] = False
 
     weight: float = Field(
         default=1.0,
@@ -89,6 +91,7 @@ class LanguageModelLossConfig(Config):
 @config_class(dynamic_type={LanguageModelLossConfig: "label"})
 class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
     _abstract: typing.ClassVar[bool] = False
+    combinable: typing.ClassVar[bool] = True
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
@@ -118,6 +121,7 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
 @config_class(dynamic_type={LanguageModelLossConfig: "distillation"})
 class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
     _abstract: typing.ClassVar[bool] = False
+    combinable: typing.ClassVar[bool] = True
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
@@ -191,6 +195,7 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
     """Z-loss regularization to prevent overconfidence."""
 
     _abstract: typing.ClassVar[bool] = False
+    combinable: typing.ClassVar[bool] = True
 
     use_triton: bool | None = Field(
         default=None,
@@ -230,6 +235,7 @@ class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig):
     """Group-Relative Policy Optimization: per-token IS-ratio clipping."""
 
     _abstract: typing.ClassVar[bool] = False
+    combinable: typing.ClassVar[bool] = True
 
     use_triton: bool | None = Field(
         default=None,
@@ -271,3 +277,36 @@ class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig):
         from fast_llm.layers.language_model.loss.policy_gradient import LanguageModelGSPOLoss
 
         return LanguageModelGSPOLoss
+
+
+@config_class(dynamic_type={LanguageModelLossConfig: "monolithic"})
+class MonolithicLossConfig(LanguageModelLossConfig):
+    """A composite loss that runs one vocabulary softmax and shares it across its combinable child losses."""
+
+    _abstract: typing.ClassVar[bool] = False
+
+    losses: dict[str, LanguageModelLossConfig] = Field(
+        default_factory=dict,
+        desc="The combinable losses sharing a single softmax pass. They must agree on `logits_scale_factor`.",
+        hint=FieldHint.core,
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.gt(len(self.losses), 0)
+        for name, loss in self.losses.items():
+            if not loss.combinable:
+                raise ValueError(
+                    f"Loss `{name}` (`{type(loss).__name__}`) is not combinable and cannot share the softmax."
+                )
+        # A single softmax serves one effective scale (stacked with the common model scale).
+        Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
+
+    @property
+    def loss_class(self) -> "type[LanguageModelLoss]":
+        from fast_llm.layers.language_model.loss.monolithic import MonolithicLoss
+
+        return MonolithicLoss
+
+    def get_reference_models(self) -> set[str]:
+        return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}

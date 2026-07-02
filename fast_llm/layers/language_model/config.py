@@ -1,4 +1,3 @@
-import enum
 import typing
 
 from fast_llm.config import Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -32,13 +31,6 @@ class LanguageModelKwargs(LanguageModelLossKwargs):
 
 
 LM_HEAD_LOSS_NAME = "lm_head_loss"
-
-
-class LossImplementation(enum.StrEnum):
-    # One loss kernel per loss, each running its own softmax pass (the original, always-available path).
-    per_loss = "per_loss"
-    # A single monolithic torch.compile kernel running the softmax once for all combinable losses.
-    fused = "fused"
 
 
 @config_class()
@@ -151,13 +143,6 @@ class LanguageModelHeadConfig(BlockConfig):
         doc="If not provided, all heads are equally weighted.",
         hint=FieldHint.feature,
     )
-    loss_implementation: LossImplementation = Field(
-        default=LossImplementation.per_loss,
-        desc="Select the head-loss implementation. `per_loss` runs each loss separately (the default);"
-        " `fused` runs a single monolithic kernel that shares one softmax pass across combinable losses."
-        " Losses not supported by the monolithic kernel fall back to their own implementation.",
-        hint=FieldHint.expert,
-    )
 
     def get_layer(
         self,
@@ -192,11 +177,6 @@ class LanguageModelHeadConfig(BlockConfig):
     def _validate(self) -> None:
         super()._validate()
         assert LM_HEAD_LOSS_NAME not in self.losses
-        if self.loss_implementation != LossImplementation.per_loss:
-            # The monolithic kernel shares a single softmax across losses, so they must agree on the
-            # effective logits scale factor (model scale stacked with each loss's own scale factor).
-            scale_factors = {self.logits_scale_factor * loss.logits_scale_factor for loss in self.losses.values()}
-            Assert.leq(len(scale_factors), 1)
 
     def get_reference_models(self) -> set[str]:
         return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}

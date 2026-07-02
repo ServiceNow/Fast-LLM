@@ -62,8 +62,6 @@ class LMHeadTestConfig:
             "cross_entropy_splits": self.num_splits,
             "prediction_heads": self.prediction_heads,
         }
-        if self.loss_implementation != "per_loss":
-            head_config["loss_implementation"] = self.loss_implementation
         if self.final_logit_softcap is not None:
             head_config["final_logit_softcap"] = self.final_logit_softcap
         losses = {}
@@ -91,6 +89,17 @@ class LMHeadTestConfig:
             losses["gspo_loss"] = {"type": "gspo"}
             if isinstance(self.gspo_loss, float):
                 losses["gspo_loss"]["weight"] = self.gspo_loss
+        if self.loss_implementation == "fused" and losses:
+            # Wrap the combinable losses in a single `monolithic` loss that shares one softmax; keep the
+            # child keys so the registered metric names match the per-loss configuration.
+            combinable = {
+                name: loss
+                for name, loss in losses.items()
+                if loss["type"] in ("label", "distillation", "z_loss", "grpo")
+            }
+            if combinable:
+                losses = {name: loss for name, loss in losses.items() if name not in combinable}
+                losses["monolithic"] = {"type": "monolithic", "losses": combinable}
         if losses:
             head_config["losses"] = losses
 
@@ -396,9 +405,9 @@ _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
 _add_configs("distillation_loss_temperature", distillation_loss=True, distillation_temperature=2.0)
 
-# Monolithic ("fused") head-loss path. Cross-entropy, z-loss, and the from-distribution (distillation) losses
-# run in the monolithic kernel; unsupported losses fall back to their own implementation and accumulate into
-# the same gradient.
+# Monolithic loss type: the combinable losses (cross-entropy, z-loss, distillation, GRPO) are wrapped in a
+# single `monolithic` loss that shares one softmax pass; the head treats it as an ordinary loss. These
+# configs must match their per-loss equivalents above (validated against the same independent reference).
 _add_configs("fused", loss_implementation="fused")
 _add_configs("fused_bfloat16", loss_implementation="fused", compute_dtype=DataType.bfloat16)
 _add_configs("fused_logit_scaling", loss_implementation="fused", logits_scale_factor=5.0)
@@ -424,27 +433,6 @@ _add_configs(
     z_loss=0.5,
 )
 _add_configs("fused_grpo_and_z_loss", loss_implementation="fused", grpo_loss=True, z_loss=0.5)
-# GSPO is a monolithic-kernel kind: the shared softmax forward feeds an eager segment seam (compiled
-# forward → eager seam → compiled backward), so GSPO can share the softmax with a co-resident loss
-# (e.g. z-loss). No splits (per-segment aggregation can't recombine across cross_entropy_splits chunks).
-for loss_masking in (False, True):
-    _lm_head_test_configs.append(
-        LMHeadTestConfig(
-            f"fused_gspo_loss{'_masked' if loss_masking else ''}",
-            gspo_loss=True,
-            loss_masking=loss_masking,
-            loss_implementation="fused",
-        )
-    )
-    _lm_head_test_configs.append(
-        LMHeadTestConfig(
-            f"fused_gspo_and_z_loss{'_masked' if loss_masking else ''}",
-            gspo_loss=True,
-            z_loss=0.5,
-            loss_masking=loss_masking,
-            loss_implementation="fused",
-        )
-    )
 # GRPO metric family. Single-split only: per-split metric partials reduce across splits, which the
 # whole-sequence reference doesn't model.
 for _loss_implementation in ("per_loss", "fused"):

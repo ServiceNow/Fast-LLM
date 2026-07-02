@@ -8,7 +8,6 @@ from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
-from fast_llm.layers.language_model.loss.monolithic import MonolithicLossSpec
 
 
 class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss[ConfigType]):
@@ -34,18 +33,24 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
             divisor=self._get_label_count(kwargs),
         )
 
-    def get_monolithic_spec(
-        self, kwargs: dict[str, typing.Any], split_index: int = 0, losses: dict | None = None
-    ) -> MonolithicLossSpec | None:
-        return MonolithicLossSpec(
-            kind="z_loss",
-            name=self.name,
-            weight=self._weight,
-            logits_scale_factor=self._logits_scale_factor,
-            grad_output=self._get_grad_output(kwargs),
-            divisor=self._get_label_count(kwargs),
-            loss_mask=self._get_loss_mask(kwargs, split_index),
+    def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
+        return self._get_loss_mask(kwargs, split_index), self._get_grad_output(kwargs), self._get_label_count(kwargs)
+
+    def combinable_core(
+        self,
+        logits_norm: torch.Tensor,
+        exp_logits: torch.Tensor,
+        sum_exp_logits: torch.Tensor,
+        logits_max: torch.Tensor,
+        group: "torch.distributed.ProcessGroup | None",
+        logits_scale_factor: float,
+        arguments: tuple,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, None]:
+        loss_mask, grad_output, divisor = arguments
+        loss, grad = z_loss_combinable(
+            exp_logits, sum_exp_logits, logits_max, loss_mask, grad_output, divisor, logits_scale_factor
         )
+        return loss, grad, None
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return {"return_prediction_mask": True}
@@ -65,6 +70,28 @@ def z_loss(
     return torch.mean(out)
 
 
+def z_loss_combinable(
+    exp_logits: torch.Tensor,  # (*batch, vocab)
+    sum_exp_logits: torch.Tensor,  # (*batch,)
+    logits_max: torch.Tensor,  # (*batch,)
+    loss_mask: torch.Tensor | None,  # (*batch,)
+    grad_output: float | None,
+    divisor: float,
+    logits_scale_factor: float,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """
+    The post-softmax z-loss block shared by `fused_z_loss_forward_backward` (after its softmax) and the
+    monolithic head loss (over the shared softmax). Returns the loss scalar and the uncast, masked gradient
+    contribution; the caller casts to the logits dtype (the monolithic path defers that to one final cast).
+    """
+    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
+    loss_term, grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, grad_output)
+    loss = reduce_losses(loss_term, divisor, loss_mask)
+    if grad is not None and loss_mask is not None:
+        grad = grad * loss_mask.unsqueeze(-1)
+    return loss, grad
+
+
 @torch.compile
 def fused_z_loss_forward_backward(
     logits: torch.Tensor,
@@ -81,15 +108,11 @@ def fused_z_loss_forward_backward(
     """
     if divisor is None:
         divisor = logits.shape[:-1].numel()
-    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
     _, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
-    loss_term, grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, grad_output)
-
-    loss = reduce_losses(loss_term, divisor, loss_mask)
-
+    loss, grad = z_loss_combinable(
+        exp_logits, sum_exp_logits, logits_max, loss_mask, grad_output, divisor, logits_scale_factor
+    )
     if grad is not None:
-        if loss_mask is not None:
-            grad = grad * loss_mask.unsqueeze(-1)
         grad = grad.to(logits.dtype)
         if grad_logits is None:
             grad_logits = grad
