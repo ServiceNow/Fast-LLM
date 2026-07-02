@@ -10,13 +10,18 @@ from fast_llm.engine.config_utils import data_type
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.functional.config import EntropyLossType, TargetFormat
-from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
+from fast_llm.functional.entropy_loss import torch_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
-from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelZLossConfig
+from fast_llm.layers.language_model.loss.config import (
+    LanguageModelDistillationLossConfig,
+    LanguageModelGRPOLossConfig,
+    LanguageModelLabelEntropyLossConfig,
+    LanguageModelZLossConfig,
+)
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.policy_gradient import (
@@ -273,7 +278,6 @@ def _test_entropy_loss(
 ):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
         pytest.skip(reason="Reverse KL loss not implemented for target labels")
-    # TODO: Test tensor-parallel implementation.
     logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, target_format, batch_shape, dtype)
     local_logits = split_op(logits, group, -1).contiguous()
     local_target = target if target_format == TargetFormat.labels else split_op(target, group, -1).contiguous()
@@ -291,16 +295,19 @@ def _test_entropy_loss(
         previous_grad = torch.randn_like(grad_ref)
         grad_ref = grad_ref + previous_grad
         local_previous_grad = split_op(previous_grad, group, -1).contiguous()
-    out_fused, grad_fused = fused_entropy_loss_forward_backward(
-        logits=local_logits,
-        target=local_target,
-        loss_mask=loss_mask,
-        grad_logits=local_previous_grad.clone() if accumulate else None,
-        grad_output=grad_output,
-        group=group,
-        logits_scale_factor=logits_scale_factor,
-        target_format=target_format,
-        entropy_loss_type=entropy_loss_type,
+    divisor = local_logits.shape[:-1].numel()
+    if target_format == TargetFormat.labels:
+        loss = _combinable_loss(
+            LanguageModelLabelEntropyLossConfig(loss_type=entropy_loss_type), "ce", logits_scale_factor
+        )
+        arguments = (local_target, grad_output, divisor)
+    else:
+        loss = _combinable_loss(
+            LanguageModelDistillationLossConfig(loss_type=entropy_loss_type), "distillation", logits_scale_factor
+        )
+        arguments = (local_target, loss_mask, grad_output, divisor, entropy_loss_type, 1.0)
+    out_fused, grad_fused, _ = loss.combinable_forward_backward(
+        local_logits, group, local_previous_grad.clone() if accumulate else None, arguments
     )
     _compare_losses_and_grads(
         out_fused,
@@ -332,7 +339,7 @@ def _test_entropy_loss(
         grad_output is not None,
         grad_triton,
         grad_ref,
-        threshold=1e-5 if target_format != TargetFormat.probabilities and data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
         group=group,
     )
 
@@ -595,7 +602,7 @@ def _test_z_loss(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
     _LOSS_PARAMETERS,
 )
-@pytest.mark.parametrize("target_format", TargetFormat)
+@pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits))
 @pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
 def test_entropy_loss(
     batch_shape,
@@ -727,7 +734,7 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
             suffix = f"{num_columns}-{grad_output}-{logits_scale_factor}-{loss_masking}-{dtype}-{block_size}-{accumulate}-{"_".join([str(i) for i in batch_shape])}"
             # Entropy loss
             for entropy_loss_type in EntropyLossType:
-                for target_format in TargetFormat:
+                for target_format in (TargetFormat.labels, TargetFormat.logits):
                     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
                         continue
                     with test_context.subtest(
@@ -842,7 +849,7 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         *(
             f"{entropy_loss_type}-{target_format}"
             for entropy_loss_type in EntropyLossType
-            for target_format in TargetFormat
+            for target_format in (TargetFormat.labels, TargetFormat.logits)
             if target_format != TargetFormat.labels or entropy_loss_type != EntropyLossType.reverse_kl
         ),
         "z_loss",

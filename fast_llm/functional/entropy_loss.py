@@ -2,7 +2,6 @@ import torch
 
 from fast_llm.core.distributed import ProcessGroup, ReduceOp, all_reduce
 from fast_llm.functional.config import EntropyLossType, TargetFormat
-from fast_llm.functional.utils import reduce_losses
 from fast_llm.utils import Assert
 
 
@@ -140,8 +139,8 @@ def reverse_kl_from_distribution_core(
     """
     Reverse-KL math from a precomputed student softmax (adding a teacher softmax when the target is logits).
 
-    This plain (un-compiled) core is shared between the public `_fused_reverse_kl_base_from_distribution`
-    wrapper and the monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
+    Used by the distillation `combinable_core`, inlined inside its `@torch.compile` boundary (standalone
+    or monolithic).
     """
     assert target_format in (TargetFormat.logits, TargetFormat.probabilities)
     predicted_log_probability = logits_norm - sum_exp_logits.log().unsqueeze(-1)
@@ -172,30 +171,6 @@ def reverse_kl_from_distribution_core(
     return per_sample_loss, grad
 
 
-@torch.compile
-def _fused_reverse_kl_base_from_distribution(
-    logits: torch.Tensor,  # (*batch, vocab)
-    target: torch.Tensor,  # (*batch, vocab)
-    grad_output: float | None,
-    logits_scale_factor: float,
-    target_format: TargetFormat,
-    group: ProcessGroup | None = None,
-    temperature: float = 1.0,
-) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits, _ = softmax_base(logits, logits_scale_factor, group)
-    return reverse_kl_from_distribution_core(
-        logits_norm,
-        exp_logits,
-        sum_exp_logits,
-        target,
-        grad_output,
-        logits_scale_factor,
-        target_format,
-        group,
-        temperature,
-    )
-
-
 def cross_entropy_from_distribution_core(
     logits_norm: torch.Tensor,  # (*batch, vocab)
     exp_logits: torch.Tensor,  # (*batch, vocab)
@@ -212,8 +187,8 @@ def cross_entropy_from_distribution_core(
     Cross-entropy / forward-KL math from a precomputed student softmax (adding a teacher softmax when the
     target is logits).
 
-    This plain (un-compiled) core is shared between the public `_fused_cross_entropy_base_from_distribution`
-    wrapper and the monolithic head-loss kernel, which inlines it inside its own `@torch.compile` boundary.
+    Used by the distillation `combinable_core`, inlined inside its `@torch.compile` boundary (standalone
+    or monolithic).
     """
     if target_format == TargetFormat.logits:
         target_logits_norm, exp_logits_targets, sum_exp_target_logits, _ = softmax_base(
@@ -246,32 +221,6 @@ def cross_entropy_from_distribution_core(
         grad = (exp_logits - sum_exp_logits.unsqueeze(-1) * target) * (grad_output / sum_exp_logits.unsqueeze(-1))
 
     return per_sample_loss, grad
-
-
-@torch.compile
-def _fused_cross_entropy_base_from_distribution(
-    logits: torch.Tensor,  # (*batch, vocab)
-    target: torch.Tensor,  # (*batch, vocab)
-    grad_output: float | None,
-    logits_scale_factor: float,
-    target_format: TargetFormat,
-    group: ProcessGroup | None = None,
-    temperature: float = 1.0,
-    return_kl_loss: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits, _ = softmax_base(logits, logits_scale_factor, group)
-    return cross_entropy_from_distribution_core(
-        logits_norm,
-        exp_logits,
-        sum_exp_logits,
-        target,
-        grad_output,
-        logits_scale_factor,
-        target_format,
-        group,
-        temperature,
-        return_kl_loss,
-    )
 
 
 def predicted_logits_from_labels(
@@ -327,9 +276,8 @@ def cross_entropy_from_labels_core(
     """
     Cross-entropy from labels, taking the already-computed shared softmax tensors. Returns the unmasked
     per-sample loss and (when `grad_output` is given) the unmasked gradient; the caller applies the loss
-    mask, reduction, and dtype cast. This plain (un-compiled) core is shared between the public
-    `_fused_cross_entropy_base_from_labels` wrapper and the monolithic head-loss kernel, which inlines it
-    inside its own `@torch.compile` boundary.
+    mask, reduction, and dtype cast. Used by the label / GRPO `combinable_core`, inlined inside its
+    `@torch.compile` boundary (standalone or monolithic).
     """
     predicted_logits, target_masked, target_mask = predicted_logits_from_labels(logits_norm, target, loss_mask, group)
 
@@ -370,90 +318,3 @@ def z_loss_core(
     else:
         grad = (2 * grad_output * (log_sum_exp_logits / sum_exp_logits)).unsqueeze(-1) * exp_logits
     return loss_term, grad
-
-
-@torch.compile
-def _fused_cross_entropy_base_from_labels(
-    logits: torch.Tensor,  # (*batch, vocab)
-    target: torch.Tensor,  # (*batch,)
-    loss_mask: torch.Tensor,  # (*batch,)
-    grad_output: float | None,
-    logits_scale_factor: float,
-    group: ProcessGroup | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None]:  # (*batch,), (*batch, vocab)
-    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
-    return cross_entropy_from_labels_core(
-        logits_norm, exp_logits, sum_exp_logits, target, loss_mask, grad_output, group
-    )
-
-
-@torch.compile
-def fused_entropy_loss_forward_backward(
-    logits: torch.Tensor,  # (*batch, vocab)
-    target: torch.Tensor,  # (*batch,) or (*batch, vocab)
-    loss_mask: torch.Tensor | None,  # (*batch,)
-    grad_logits: torch.Tensor | None = None,
-    grad_output: float | None = None,
-    group: torch.distributed.ProcessGroup | None = None,
-    logits_scale_factor: float = 1.0,
-    temperature: float = 1.0,
-    target_format: TargetFormat = TargetFormat.labels,
-    entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
-    divisor: float | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """
-    A fused implementation of cross-entropy with torch compile.
-    It is an improvement over the pytorch implementation because of the fused casting, both in speed and memory,
-    but still suboptimal because it needs multiple kernels.
-    """
-    if divisor is None:
-        divisor = logits.shape[:-1].numel()
-    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
-    if target_format == TargetFormat.labels:
-        assert entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl)
-        assert loss_mask is None
-        loss_mask = target >= 0
-        losses, grad = _fused_cross_entropy_base_from_labels(
-            logits,
-            target,
-            loss_mask,
-            grad_output,
-            logits_scale_factor,
-            group,
-        )
-    elif entropy_loss_type in (EntropyLossType.cross_entropy, EntropyLossType.forward_kl):
-        losses, grad = _fused_cross_entropy_base_from_distribution(
-            logits,
-            target,
-            grad_output,
-            logits_scale_factor,
-            target_format,
-            group,
-            temperature,
-            return_kl_loss=entropy_loss_type == EntropyLossType.forward_kl,
-        )
-    elif entropy_loss_type == EntropyLossType.reverse_kl:
-        losses, grad = _fused_reverse_kl_base_from_distribution(
-            logits,
-            target,
-            grad_output,
-            logits_scale_factor,
-            target_format,
-            group,
-            temperature,
-        )
-    else:
-        raise NotImplementedError(entropy_loss_type)
-
-    loss = reduce_losses(losses, divisor, loss_mask)
-
-    if grad is not None:
-        if loss_mask is not None:
-            grad = grad * loss_mask.unsqueeze(-1)
-        grad = grad.to(logits.dtype)
-        if grad_logits is None:
-            grad_logits = grad
-        else:
-            grad_logits.add_(grad)
-
-    return loss, grad_logits

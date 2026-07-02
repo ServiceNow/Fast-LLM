@@ -6,7 +6,6 @@ from fast_llm.functional.config import EntropyLossType, TargetFormat, TritonConf
 from fast_llm.functional.entropy_loss import (
     cross_entropy_from_distribution_core,
     cross_entropy_from_labels_core,
-    fused_entropy_loss_forward_backward,
     reverse_kl_from_distribution_core,
 )
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
@@ -29,22 +28,24 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        return (
-            triton_entropy_loss_forward_backward
-            if TritonConfig.enabled(logits.device, self._config.use_triton)
-            else fused_entropy_loss_forward_backward
-        )(
-            logits,
-            self._get_labels(kwargs, split_index),
-            None,  # Labels are already masked
-            grad_logits=grad_logits,
-            grad_output=self._get_grad_output(kwargs),
-            group=self._parallel_dim.group if self._vocab_parallel else None,
-            logits_scale_factor=self._logits_scale_factor,
-            target_format=TargetFormat.labels,
-            entropy_loss_type=self._config.loss_type,
-            divisor=self._get_label_count(kwargs),
-        )
+        arguments = self.combinable_extract(kwargs, split_index, losses is not None)
+        group = self._parallel_dim.group if self._vocab_parallel else None
+        if TritonConfig.enabled(logits.device, self._config.use_triton):
+            target, grad_output, divisor = arguments
+            return triton_entropy_loss_forward_backward(
+                logits,
+                target,
+                None,  # Labels are already masked
+                grad_logits=grad_logits,
+                grad_output=grad_output,
+                group=group,
+                logits_scale_factor=self._logits_scale_factor,
+                target_format=TargetFormat.labels,
+                entropy_loss_type=self._config.loss_type,
+                divisor=divisor,
+            )
+        loss, grad_logits, _ = self.combinable_forward_backward(logits, group, grad_logits, arguments)
+        return loss, grad_logits
 
     def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
         return self._get_labels(kwargs, split_index), self._get_grad_output(kwargs), self._get_label_count(kwargs)
@@ -85,23 +86,25 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        return (
-            triton_entropy_loss_forward_backward
-            if TritonConfig.enabled(logits.device, self._config.use_triton)
-            else fused_entropy_loss_forward_backward
-        )(
-            logits,
-            self._get_reference_model_logits(self._config.reference_model, kwargs, split_index),
-            self._get_loss_mask(kwargs, split_index),
-            grad_output=self._get_grad_output(kwargs),
-            grad_logits=grad_logits,
-            group=self._parallel_dim.group if self._vocab_parallel else None,
-            logits_scale_factor=self._logits_scale_factor,
-            temperature=self._config.temperature,
-            target_format=TargetFormat.logits,
-            entropy_loss_type=self._config.loss_type,
-            divisor=self._get_label_count(kwargs),
-        )
+        arguments = self.combinable_extract(kwargs, split_index, losses is not None)
+        group = self._parallel_dim.group if self._vocab_parallel else None
+        if TritonConfig.enabled(logits.device, self._config.use_triton):
+            target, loss_mask, grad_output, divisor, entropy_loss_type, temperature = arguments
+            return triton_entropy_loss_forward_backward(
+                logits,
+                target,
+                loss_mask,
+                grad_output=grad_output,
+                grad_logits=grad_logits,
+                group=group,
+                logits_scale_factor=self._logits_scale_factor,
+                temperature=temperature,
+                target_format=TargetFormat.logits,
+                entropy_loss_type=entropy_loss_type,
+                divisor=divisor,
+            )
+        loss, grad_logits, _ = self.combinable_forward_backward(logits, group, grad_logits, arguments)
+        return loss, grad_logits
 
     def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
         return (
