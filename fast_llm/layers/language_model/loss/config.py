@@ -36,7 +36,7 @@ class LanguageModelLossKwargs(BlockKwargs):
 @config_class(registry=True)
 class LanguageModelLossConfig(Config):
     _abstract: typing.ClassVar[bool] = True
-    # Whether this loss can be a `MonolithicLossConfig` entry (shares one softmax via `combinable_core`).
+    # Whether this loss can be a `MonolithicLossConfig` entry (shares one softmax via `fused_core`).
     combinable: typing.ClassVar[bool] = False
 
     weight: float = Field(

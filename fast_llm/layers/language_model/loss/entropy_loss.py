@@ -28,7 +28,7 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        arguments = self.combinable_extract(kwargs, split_index, losses is not None)
+        arguments = self.get_inputs(kwargs, split_index, losses is not None)
         group = self._parallel_dim.group if self._vocab_parallel else None
         if TritonConfig.enabled(logits.device, self._config.use_triton):
             target, grad_output, divisor = arguments
@@ -47,11 +47,11 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
         loss, grad_logits, _ = self.combinable_forward_backward(logits, group, grad_logits, arguments)
         return loss, grad_logits
 
-    def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
+    def get_inputs(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
         return self._get_labels(kwargs, split_index), self._get_grad_output(kwargs), self._get_label_count(kwargs)
 
     @staticmethod
-    def combinable_core(
+    def fused_core(
         logits_norm: torch.Tensor,
         exp_logits: torch.Tensor,
         sum_exp_logits: torch.Tensor,
@@ -86,7 +86,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        arguments = self.combinable_extract(kwargs, split_index, losses is not None)
+        arguments = self.get_inputs(kwargs, split_index, losses is not None)
         group = self._parallel_dim.group if self._vocab_parallel else None
         if TritonConfig.enabled(logits.device, self._config.use_triton):
             target, loss_mask, grad_output, divisor, entropy_loss_type, temperature = arguments
@@ -106,7 +106,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
         loss, grad_logits, _ = self.combinable_forward_backward(logits, group, grad_logits, arguments)
         return loss, grad_logits
 
-    def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
+    def get_inputs(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
         return (
             self._get_reference_model_logits(self._config.reference_model, kwargs, split_index),
             self._get_loss_mask(kwargs, split_index),
@@ -117,7 +117,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
         )
 
     @staticmethod
-    def combinable_core(
+    def fused_core(
         logits_norm: torch.Tensor,
         exp_logits: torch.Tensor,
         sum_exp_logits: torch.Tensor,

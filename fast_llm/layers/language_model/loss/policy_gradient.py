@@ -102,7 +102,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        arguments = self.combinable_extract(kwargs, split_index, losses is not None)
+        arguments = self.get_inputs(kwargs, split_index, losses is not None)
         group = self._parallel_dim.group if self._vocab_parallel else None
         if TritonConfig.enabled(logits.device, self._config.use_triton):
             from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
@@ -143,7 +143,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         self.register_combinable_extras(extra, kwargs, losses)
         return loss, grad_logits
 
-    def combinable_extract(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
+    def get_inputs(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
         # When nothing is logged this step, drop the metric-only outputs (`new_logprobs_mean` and the
         # GRPO metric family) by passing `num_labels_in_seq=None` / `compute_metrics=False`.
         return (
@@ -160,7 +160,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         )
 
     @staticmethod
-    def combinable_core(
+    def fused_core(
         logits_norm: torch.Tensor,
         exp_logits: torch.Tensor,
         sum_exp_logits: torch.Tensor,

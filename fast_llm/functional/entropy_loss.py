@@ -139,7 +139,7 @@ def reverse_kl_from_distribution_core(
     """
     Reverse-KL math from a precomputed student softmax (adding a teacher softmax when the target is logits).
 
-    Used by the distillation `combinable_core`, inlined inside its `@torch.compile` boundary (standalone
+    Used by the distillation `fused_core`, inlined inside its `@torch.compile` boundary (standalone
     or monolithic).
     """
     assert target_format in (TargetFormat.logits, TargetFormat.probabilities)
@@ -187,7 +187,7 @@ def cross_entropy_from_distribution_core(
     Cross-entropy / forward-KL math from a precomputed student softmax (adding a teacher softmax when the
     target is logits).
 
-    Used by the distillation `combinable_core`, inlined inside its `@torch.compile` boundary (standalone
+    Used by the distillation `fused_core`, inlined inside its `@torch.compile` boundary (standalone
     or monolithic).
     """
     if target_format == TargetFormat.logits:
@@ -276,7 +276,7 @@ def cross_entropy_from_labels_core(
     """
     Cross-entropy from labels, taking the already-computed shared softmax tensors. Returns the unmasked
     per-sample loss and (when `grad_output` is given) the unmasked gradient; the caller applies the loss
-    mask, reduction, and dtype cast. Used by the label / GRPO `combinable_core`, inlined inside its
+    mask, reduction, and dtype cast. Used by the label / GRPO `fused_core`, inlined inside its
     `@torch.compile` boundary (standalone or monolithic).
     """
     predicted_logits, target_masked, target_mask = predicted_logits_from_labels(logits_norm, target, loss_mask, group)
@@ -308,7 +308,7 @@ def z_loss_core(
     Z-loss from the already-computed shared softmax tensors. Returns the unmasked per-sample loss term
     (`log_sum_exp ** 2`) and (when `grad_output` is given) the unmasked gradient; the caller applies the
     loss mask, reduction, and dtype cast. z-loss needs the un-regularized log-sum-exp, so it adds back
-    `logits_max` (cross-entropy cancels it). Inlined by the z-loss `combinable_core` inside its
+    `logits_max` (cross-entropy cancels it). Inlined by the z-loss `fused_core` inside its
     `@torch.compile` boundary (standalone or monolithic).
     """
     log_sum_exp_logits = sum_exp_logits.log() + logits_max

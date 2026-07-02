@@ -21,16 +21,16 @@ def _monolithic_core(
     arguments: tuple[tuple, ...],
 ) -> tuple[list, torch.Tensor | None]:
     """
-    One shared softmax over the logits, then each child loss's `combinable_core` consuming it. The child
+    One shared softmax over the logits, then each child loss's `fused_core` consuming it. The child
     list is fixed per config, so the loop unrolls inside this single `@torch.compile` boundary and each
-    `combinable_core` dispatches (and inlines) to its loss type's math — every enabled loss is fused over
+    `fused_core` dispatches (and inlines) to its loss type's math — every enabled loss is fused over
     one softmax. Gradient contributions accumulate in fp32 and cast to `logits.dtype` once at the end.
     """
     logits_norm, exp_logits, sum_exp_logits, logits_max = softmax_base(logits, logits_scale_factor, group)
     grad = None
     results = []
     for child, child_arguments in zip(children, arguments):
-        loss, child_grad, extra = child.combinable_core(
+        loss, child_grad, extra = child.fused_core(
             logits_norm, exp_logits, sum_exp_logits, logits_max, group, logits_scale_factor, child_arguments
         )
         results.append((loss, extra))
@@ -104,7 +104,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor | None, torch.Tensor | None]":
         register = losses is not None
-        arguments = tuple(child.combinable_extract(kwargs, split_index, register) for child in self._children)
+        arguments = tuple(child.get_inputs(kwargs, split_index, register) for child in self._children)
         group = self._parallel_dim.group if self._vocab_parallel else None
         results, grad_logits = _monolithic_core(
             tuple(self._children), logits, group, self._softmax_scale_factor, grad_logits, arguments
