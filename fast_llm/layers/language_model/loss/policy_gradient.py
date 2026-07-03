@@ -254,7 +254,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
     def register_combinable_extras(self, extra: tuple, kwargs: dict[str, typing.Any], losses: dict | None) -> None:
         new_logprobs_mean, metrics = extra
         self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
-        if metrics is not None and losses is not None:
+        if metrics is not None:
             self._register_grpo_metrics(metrics, kwargs, losses)
 
     def _register_extra_metrics(

@@ -119,7 +119,7 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
         # The head owns the `.logits`; split on `.losses.` so the name resolves whether this loss sits
         # directly under the head or nested inside a composite loss (e.g. `MonolithicLoss`).
         Assert.incl(
-            logits_name := self.module_name.split(".losses.")[0] + f".logits",
+            logits_name := self.module_name.split(".losses.")[0] + ".logits",
             reference_hidden_states := kwargs[f"reference_{reference_model}_hidden_states"],
         )
         # The logits are already sequence-parallel if needed, we don't want to split again.
@@ -169,6 +169,21 @@ class CombinableLoss:
     `register_combinable_extras` when they emit outputs beyond the loss scalar."""
 
     _logits_scale_factor: float
+
+    def get_inputs(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
+        raise NotImplementedError()
+
+    @staticmethod
+    def fused_core(
+        logits_norm: torch.Tensor,
+        exp_logits: torch.Tensor,
+        sum_exp_logits: torch.Tensor,
+        logits_max: torch.Tensor,
+        group: "torch.distributed.ProcessGroup | None",
+        logits_scale_factor: float,
+        arguments: tuple,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, typing.Any]:
+        raise NotImplementedError()
 
     @torch.compile
     def combinable_forward_backward(
