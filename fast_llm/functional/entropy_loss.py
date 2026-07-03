@@ -226,7 +226,7 @@ def predicted_logits_from_labels(
 
     May also recover probabilities or log probabilities:
     `predicted_probabilities = predicted_logits.exp() / sum_exp_logits`
-    `predicted_log_probabilities = predicted_logits / sum_exp_logits.log()`
+    `predicted_log_probabilities = predicted_logits - sum_exp_logits.log()`
 
     Un-compiled core, inlined into a `@torch.compile` boundary; `fused_predicted_logits_from_labels` is the
     compiled standalone wrapper.

@@ -13,13 +13,13 @@ from fast_llm.utils import safe_merge_dicts
 
 @torch.compile
 def _monolithic_core(
-    children: tuple["LanguageModelLoss", ...],
+    children: tuple[LanguageModelLoss, ...],
     logits: torch.Tensor,  # (*batch, vocab)
     group: ProcessGroup | None,
     logits_scale_factor: float,
     grad_logits: torch.Tensor | None,
     arguments: tuple[tuple, ...],
-) -> tuple[list, torch.Tensor | None]:
+) -> tuple[list[tuple[torch.Tensor, typing.Any]], torch.Tensor | None]:
     """
     One shared softmax over the logits, then each child loss's `fused_core` consuming it. The child
     list is fixed per config, so the loop unrolls inside this single `@torch.compile` boundary and each
@@ -29,7 +29,7 @@ def _monolithic_core(
     logits_norm, exp_logits, sum_exp_logits, logits_max = softmax_base(logits, logits_scale_factor, group)
     grad = None
     results = []
-    for child, child_arguments in zip(children, arguments):
+    for child, child_arguments in zip(children, arguments, strict=True):
         loss, child_grad, extra = child.fused_core(
             logits_norm, exp_logits, sum_exp_logits, logits_max, group, logits_scale_factor, child_arguments
         )
