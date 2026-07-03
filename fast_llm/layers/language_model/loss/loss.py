@@ -102,7 +102,8 @@ class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[Config
 
     def _get_grad_output(self, kwargs: dict[str, typing.Any]) -> float | None:
         grad_output = kwargs.get(LanguageModelKwargs.grad_output)
-        return None if grad_output is None else grad_output * self._weight
+        # A zero-weight loss contributes an all-zero gradient; return `None` so the backward term drops out.
+        return None if grad_output is None or self._weight == 0 else grad_output * self._weight
 
     def _get_labels(self, kwargs: dict[str, typing.Any], split_index: int = 0):
         return self._prepare_target(kwargs[LanguageModelLossKwargs.labels], split_index)
