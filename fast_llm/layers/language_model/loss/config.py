@@ -36,8 +36,6 @@ class LanguageModelLossKwargs(BlockKwargs):
 @config_class(registry=True)
 class LanguageModelLossConfig(Config):
     _abstract: typing.ClassVar[bool] = True
-    # Whether this loss shares the vocabulary softmax via `fused_core`, so it can be fused with others.
-    combinable: typing.ClassVar[bool] = False
 
     weight: float = Field(
         default=1.0,
@@ -88,20 +86,27 @@ class LanguageModelLossConfig(Config):
         return set()
 
 
+@config_class()
+class CombinableLossConfig(LanguageModelLossConfig):
+    """Base for losses that share the vocabulary softmax via `fused_core`, so several can be fused together."""
+
+    _abstract: typing.ClassVar[bool] = True
+
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
+
 @config_class(dynamic_type={LanguageModelLossConfig: "label"})
-class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
+class LanguageModelLabelEntropyLossConfig(CombinableLossConfig):
     _abstract: typing.ClassVar[bool] = False
-    combinable: typing.ClassVar[bool] = True
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
         desc="Type of loss to use.",
         hint=FieldHint.core,
-    )
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
     )
 
     def _validate(self) -> None:
@@ -125,9 +130,8 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "distillation"})
-class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
+class LanguageModelDistillationLossConfig(CombinableLossConfig):
     _abstract: typing.ClassVar[bool] = False
-    combinable: typing.ClassVar[bool] = True
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
@@ -144,11 +148,6 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         hint=FieldHint.optional,
         desc="Temperature for teacher softmax.",
         valid=check_field(Assert.gt, 0.0),
-    )
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
     )
 
     @classmethod
@@ -197,17 +196,10 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "z_loss"})
-class LanguageModelZLossConfig(LanguageModelLossConfig):
+class LanguageModelZLossConfig(CombinableLossConfig):
     """Z-loss regularization to prevent overconfidence."""
 
     _abstract: typing.ClassVar[bool] = False
-    combinable: typing.ClassVar[bool] = True
-
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
-    )
 
     @property
     def loss_class(self) -> "type[LanguageModelZLoss]":
@@ -237,17 +229,11 @@ class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
-class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig):
+class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig, CombinableLossConfig):
     """Group-Relative Policy Optimization: per-token IS-ratio clipping."""
 
     _abstract: typing.ClassVar[bool] = False
-    combinable: typing.ClassVar[bool] = True
 
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
-    )
     metrics: GRPOMetricsLevel = Field(
         default=GRPOMetricsLevel.none,
         desc=(
@@ -301,11 +287,11 @@ class MonolithicLossConfig(LanguageModelLossConfig):
         super()._validate()
         Assert.gt(len(self.losses), 0)
         for name, loss in self.losses.items():
-            if not loss.combinable:
+            if not isinstance(loss, CombinableLossConfig):
                 raise ValueError(
                     f"Loss `{name}` (`{type(loss).__name__}`) is not combinable and cannot share the softmax."
                 )
-            if getattr(loss, "use_triton", None) is not None:
+            if loss.use_triton is not None:
                 raise ValueError(f"Loss `{name}` sets `use_triton`, which has no effect on a fused child loss.")
         # A single softmax serves one effective scale (stacked with the common model scale).
         Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
