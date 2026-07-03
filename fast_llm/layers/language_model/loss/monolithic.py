@@ -84,7 +84,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
                     prediction_heads=prediction_heads,
                     vocab_parallel=vocab_parallel,
                     num_splits=num_splits,
-                    logits_scale_factor=logits_scale_factor,
+                    logits_scale_factor=self._logits_scale_factor,
                     weight=self._weight,
                     register_loss=children_register,
                 )
