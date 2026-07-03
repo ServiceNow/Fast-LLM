@@ -23,6 +23,7 @@ from fast_llm.layers.language_model.loss.config import (
 )
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
+from fast_llm.layers.language_model.loss.monolithic import _monolithic_core
 from fast_llm.layers.language_model.loss.policy_gradient import (
     GRPOMetrics,
     compute_grpo_metrics,
@@ -595,6 +596,44 @@ def _test_z_loss(
     )
 
 
+def _test_monolithic_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate, group=None
+):
+    # A cross-entropy (labels) + z-loss composite sharing one softmax, checked against the same two losses run
+    # standalone. This exercises the shared, tensor-parallel-reduced softmax and the fp32 gradient accumulation
+    # against the already-validated single-loss path.
+    logits, target, _ = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    divisor = max(int((target >= 0).sum().item()), 1)
+    children = (
+        _combinable_loss(LanguageModelLabelEntropyLossConfig(), "cross_entropy", logits_scale_factor),
+        _combinable_loss(LanguageModelZLossConfig(), "z_loss", logits_scale_factor),
+    )
+    arguments = ((target, grad_output, divisor), (None, grad_output, local_logits.shape[:-1].numel()))
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    # Reference: run each loss standalone, accumulating into one gradient buffer.
+    grad_ref = previous_grad.clone() if accumulate else None
+    losses_ref = []
+    for child, child_arguments in zip(children, arguments, strict=True):
+        loss_ref, grad_ref, _ = child.combinable_forward_backward(local_logits, group, grad_ref, child_arguments)
+        losses_ref.append(loss_ref)
+
+    results, grad_fused = _monolithic_core(
+        children, local_logits, group, logits_scale_factor, previous_grad.clone() if accumulate else None, arguments
+    )
+
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    for (loss_fused, _), loss_ref in zip(results, losses_ref, strict=True):
+        Assert.rms_close_relative(loss_fused, loss_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        # The composite sums child gradients in fp32 and casts once; the standalone path casts each child
+        # gradient before adding. In fp16 the two differ by up to a rounding step, so allow a wider abs floor.
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
 @pytest.mark.parametrize(
@@ -641,6 +680,18 @@ def test_z_loss(
     _test_z_loss(
         batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
     )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate)
 
 
 @pytest.mark.slow
@@ -813,6 +864,20 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                             compute_entropy,
                             test_context.group,
                         )
+            # Monolithic composite: multiple losses share one tensor-parallel-reduced softmax.
+            with test_context.subtest(base_path, f"monolithic-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_loss(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        accumulate,
+                        test_context.group,
+                    )
 
 
 @pytest.mark.slow
@@ -856,6 +921,7 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "gspo",
         "grpo_metrics-False",
         "grpo_metrics-True",
+        "monolithic",
     ),
 )
 def test_lm_loss_distributed(

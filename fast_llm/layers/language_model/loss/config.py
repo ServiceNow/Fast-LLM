@@ -104,6 +104,12 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
         hint=FieldHint.expert,
     )
 
+    def _validate(self) -> None:
+        super()._validate()
+        # Labels are one-hot, so their forward-KL reduces to cross-entropy; reverse-KL is not defined.
+        if self.loss_type == EntropyLossType.reverse_kl:
+            raise ValueError("`reverse_kl` is not supported for a label loss.")
+
     @classmethod
     def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
         if "implementation" in default:
@@ -299,6 +305,8 @@ class MonolithicLossConfig(LanguageModelLossConfig):
                 raise ValueError(
                     f"Loss `{name}` (`{type(loss).__name__}`) is not combinable and cannot share the softmax."
                 )
+            if getattr(loss, "use_triton", None) is not None:
+                raise ValueError(f"Loss `{name}` sets `use_triton`, which has no effect on a fused child loss.")
         # A single softmax serves one effective scale (stacked with the common model scale).
         Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
 
