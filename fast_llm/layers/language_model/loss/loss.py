@@ -166,7 +166,9 @@ class CombinableLoss:
     `combinable_forward_backward` or several sharing one softmax when fused together. Subclasses implement
     `get_inputs` (eager kwargs -> argument tuple, built outside the compiled boundary) and the `fused_core`
     static method (post-softmax math returning `(loss, uncast_grad, extra)`), and override
-    `register_combinable_extras` when they emit outputs beyond the loss scalar."""
+    `register_combinable_extras` when they emit outputs beyond the loss scalar. A loss whose gradient can't
+    be produced inside the compiled boundary (an eager seam between forward and backward) instead has its
+    `fused_core` return `(None, None, forward_state)` and completes its loss/gradient in `finish`."""
 
     _logits_scale_factor: float
 
@@ -220,6 +222,20 @@ class CombinableLoss:
         self, extra: typing.Any, kwargs: dict[str, typing.Any], losses: dict | None
     ) -> None:
         """Register per-loss outputs beyond the loss scalar (produced by `fused_core`). No-op by default."""
+
+    def finish(
+        self,
+        loss: torch.Tensor | None,
+        extra: typing.Any,
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+        grad_logits: torch.Tensor | None,
+        logits_dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, typing.Any, torch.Tensor | None]:
+        """Complete a loss that couldn't finish inside the compiled shared-softmax boundary, accumulating its
+        gradient into `grad_logits` and returning `(loss, extra, grad_logits)`. A passthrough by default; a
+        loss with an eager seam runs it here from the forward state its `fused_core` returned as `extra`."""
+        return loss, extra, grad_logits
 
 
 def loss_forward_backward(
