@@ -40,9 +40,9 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._process_group = self._pool.get_process_group(range(world_size), 0)
             logger.info(f"Weights broadcast rendezvous at {init_method} connected")
 
-    def run_begin(self, step: int):
+    def run_begin(self, step: int, documents_seen: int):
         # TODO: ====== Send a train / run begin signal? ======
-        self._broadcast_weights(step)
+        self._broadcast_weights(step, documents_seen)
 
     def step_end(
         self,
@@ -50,9 +50,10 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
         reduced_losses: dict[str, float | int],
         update_successful: bool,
         train_metrics: dict[str, typing.Any] | None,
+        documents_seen: int,
     ):
         if update_successful:
-            self._broadcast_weights(step)
+            self._broadcast_weights(step, documents_seen)
 
     def train_end(self, step: int):
         # TODO: ====== Send something on unsuccessful ends? ======
@@ -69,10 +70,17 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             del self._pool
             del self._process_group
 
-    def _broadcast_weights(self, step: int):
+    def _broadcast_weights(self, step: int, documents_seen: int):
         if self._do_broadcast:
+            # `document_count` is the model version consumers stamp onto rollouts (aligning staleness
+            # with DeepSpeed's document clock); `step` is kept so consumers can also log the raw step.
             self._client.xadd(
-                REDIS_TRAINING_STREAM, {REDIS_TRAINING_FIELD: json.dumps({"type": "weights_ready", "step": step})}
+                REDIS_TRAINING_STREAM,
+                {
+                    REDIS_TRAINING_FIELD: json.dumps(
+                        {"type": "weights_ready", "step": step, "document_count": documents_seen}
+                    )
+                },
             )
         for shard_name, layer_name, tensor in self._model.iter_checkpoint(self._config.export, {}):
             if self._do_broadcast:

@@ -203,7 +203,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         safe_barrier(self._distributed.world_group, "train begin")
 
         for callback in self._callbacks.values():
-            callback.run_begin(self._completed_steps)
+            callback.run_begin(self._completed_steps, self._documents_seen)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -237,7 +237,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     nan_iters += not all(math.isfinite(loss) for loss in reduced_losses.values())
 
                 for callback in self._callbacks.values():
-                    callback.step_end(self._completed_steps, reduced_losses, update_successful, train_metrics)
+                    callback.step_end(
+                        self._completed_steps,
+                        reduced_losses,
+                        update_successful,
+                        train_metrics,
+                        self._documents_seen,
+                    )
                 # Logging.
                 metrics = {}
                 if is_logging:
