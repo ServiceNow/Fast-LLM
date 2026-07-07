@@ -29,6 +29,8 @@ class LanguageModelLossKwargs(BlockKwargs):
     rejected_spans = "rejected_spans"
     advantages = "advantages"
     old_log_probabilities = "old_log_probabilities"
+    reward = "reward"
+    model_version = "model_version"
     label_counts = "label_counts"
     num_labels_in_batch = "num_labels_in_batch"
 

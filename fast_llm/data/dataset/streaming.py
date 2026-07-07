@@ -31,6 +31,10 @@ class RedisStreamingDocumentData(Config):
     rejected_span: tuple[int, int] | None = Field(default=None)
     advantage: float | None = Field(default=None)
     old_log_probabilities: torch.Tensor | None = Field(default=None)
+    # Raw (un-normalized) reward, a per-rollout scalar (broadcast per-token like `advantage`).
+    reward: float | None = Field(default=None)
+    # Model version each token was generated under (documents-seen units), one per token.
+    model_version: torch.Tensor | None = Field(default=None)
 
     def _validate(self):
         # Decode message
@@ -53,9 +57,15 @@ class RedisStreamingDocumentData(Config):
                 self.old_log_probabilities = torch.frombuffer(self.old_log_probabilities, dtype=torch.float32)
             elif isinstance(self.old_log_probabilities, (list, tuple)):
                 self.old_log_probabilities = torch.tensor(self.old_log_probabilities, dtype=torch.float32)
+            if isinstance(self.model_version, bytes):
+                self.model_version = torch.frombuffer(self.model_version, dtype=torch.int64)
+            elif isinstance(self.model_version, (list, tuple)):
+                self.model_version = torch.tensor(self.model_version, dtype=torch.int64)
         super()._validate()
         if self.old_log_probabilities is not None:
             Assert.eq(len(self.old_log_probabilities), self.num_tokens)
+        if self.model_version is not None:
+            Assert.eq(len(self.model_version), self.num_tokens)
 
     @functools.cached_property
     def num_tokens(self) -> int:
@@ -78,6 +88,8 @@ class RedisStreamingDocumentData(Config):
         message: dict[str, str | int | float | bytes] = {"tokens": self.tokens.numpy().tobytes()}
         if self.old_log_probabilities is not None:
             message["old_log_probabilities"] = self.old_log_probabilities.numpy().tobytes()
+        if self.model_version is not None:
+            message["model_version"] = self.model_version.numpy().tobytes()
         data = {}
         if self.loss_masking_spans is not None:
             data["loss_masking_spans"] = self.loss_masking_spans
@@ -87,6 +99,8 @@ class RedisStreamingDocumentData(Config):
             data["rejected_span"] = self.rejected_span
         if self.advantage is not None:
             data["advantage"] = self.advantage
+        if self.reward is not None:
+            data["reward"] = self.reward
         if data:
             message["data"] = json.dumps(data)
         return message
@@ -111,6 +125,12 @@ class RedisStreamingDocumentData(Config):
             old_log_probabilities=(
                 None if self.old_log_probabilities is None else TokenDataDocument(data=self.old_log_probabilities)
             ),
+            reward=(
+                None
+                if self.reward is None
+                else TokenDataDocument(data=torch.full([sample_size], self.reward, dtype=torch.float32))
+            ),
+            model_version=(None if self.model_version is None else TokenDataDocument(data=self.model_version)),
         )
 
 

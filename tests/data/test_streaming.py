@@ -48,6 +48,22 @@ def fake_redis(monkeypatch):
             {"tokens": list(range(3)), "advantage": 0.33, "old_log_probabilities": [0.25, -0.52, 0.99]},
             {"tokens": list(range(4)), "advantage": 0.7, "old_log_probabilities": [1, 2, 3, 4]},
         ),
+        (
+            {
+                "tokens": list(range(3)),
+                "advantage": 0.33,
+                "old_log_probabilities": [0.25, -0.52, 0.99],
+                "reward": 1.0,
+                "model_version": [5, 5, 5],
+            },
+            {
+                "tokens": list(range(4)),
+                "advantage": 0.7,
+                "old_log_probabilities": [1, 2, 3, 4],
+                "reward": 0.0,
+                "model_version": [7, 8, 8, 9],
+            },
+        ),
     ],
 )
 def test_streaming_dataset(
@@ -96,6 +112,18 @@ def test_streaming_dataset(
             )
         else:
             assert sampled_document.old_log_probabilities is None
+
+        if "reward" in document:
+            Assert.rms_close(
+                sampled_document.reward.data, torch.full([len(document["tokens"])], document["reward"]), 1e-8
+            )
+        else:
+            assert sampled_document.reward is None
+
+        if "model_version" in document:
+            Assert.eq(sampled_document.model_version.data.tolist(), document["model_version"])
+        else:
+            assert sampled_document.model_version is None
 
 
 @pytest.mark.parametrize(
