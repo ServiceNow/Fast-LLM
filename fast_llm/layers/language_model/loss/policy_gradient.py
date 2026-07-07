@@ -335,8 +335,15 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         return defs
 
 
-class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageModelPolicyGradientLoss[ConfigType]):
-    """GSPO: sequence-level geometric-mean IS-ratio clipping."""
+class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
+    CombinableLoss, LanguageModelPolicyGradientLoss[ConfigType]
+):
+    """GSPO: sequence-level geometric-mean IS-ratio clipping.
+
+    Standalone, `_forward_backward` runs the whole three-phase kernel (`fused_gspo_loss_forward_backward` or
+    its Triton twin). Fused into a shared softmax, `fused_core` runs only the forward on that softmax and the
+    segment seam + backward are deferred to `finish`, since the eager `index_add_` segment aggregation can't
+    run inside the compiled boundary."""
 
     def __init__(
         self,
@@ -368,6 +375,15 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         # aggregation can't recombine across chunks since each call only sees a slice.
         Assert.eq(self._num_splits, 1)
 
+    def _document_index_zero_based(self, kwargs: dict[str, typing.Any], split_index: int) -> torch.Tensor:
+        # `global_document_index_q` is 1-based per the data preprocessor convention; the kernel takes 0-based.
+        return (
+            self._prepare_target(
+                kwargs[BlockKwargs.global_document_index_q], split_index, split_by_distance=False
+            ).long()
+            - 1
+        )
+
     def _forward_backward(
         self,
         logits: "torch.Tensor",
@@ -376,13 +392,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        document_index_zero_based = (
-            self._prepare_target(
-                kwargs[BlockKwargs.global_document_index_q], split_index, split_by_distance=False
-            ).long()
-            - 1
-        )
-        # `global_document_index_q` is 1-based per the data preprocessor convention; the kernel takes 0-based.
+        document_index_zero_based = self._document_index_zero_based(kwargs, split_index)
         # `num_documents_in_sequence` is the doc count for this DP rank's batch — identical across
         # SDP/SP ranks within a DP rank, so per-segment buffers are sized consistently for all-reduce.
         num_segments = kwargs[BlockKwargs.num_documents_in_sequence]
@@ -416,6 +426,78 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
 
         self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
         return loss, grad
+
+    def get_inputs(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
+        return (self._get_labels(kwargs, split_index),)
+
+    @staticmethod
+    def fused_core(
+        logits_norm: torch.Tensor,
+        exp_logits: torch.Tensor,
+        sum_exp_logits: torch.Tensor,
+        logits_max: torch.Tensor,
+        group: "torch.distributed.ProcessGroup | None",
+        logits_scale_factor: float,
+        arguments: tuple,
+    ) -> tuple[None, None, tuple]:
+        """GSPO forward over the shared softmax: the per-token log-probs plus the softmax tensors its seam and
+        backward need. Returns `(None, None, forward_state)` — GSPO's loss and gradient can't be produced here
+        (the segment aggregation is eager), so both are deferred to `finish`."""
+        (target,) = arguments
+        loss_mask = target >= 0
+        predicted_logits, target_masked, target_mask = predicted_logits_from_labels(
+            logits_norm, target, loss_mask, group
+        )
+        new_log_probs = predicted_logits - sum_exp_logits.log()
+        return None, None, (new_log_probs, loss_mask, exp_logits, sum_exp_logits, target_masked, target_mask)
+
+    def finish(
+        self,
+        loss: torch.Tensor | None,
+        extra: tuple,
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+        grad_logits: torch.Tensor | None,
+        logits_dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Run the eager segment seam and the compiled backward over the shared softmax deferred by
+        `fused_core`, accumulating GSPO's gradient into `grad_logits`. Returns the loss and the `new_logprobs`
+        metric (registered by `register_combinable_extras`)."""
+        new_log_probs, loss_mask, exp_logits, sum_exp_logits, target_masked, target_mask = extra
+        document_index_zero_based = self._document_index_zero_based(kwargs, split_index)
+        loss, new_logprobs_mean, effective_grad = gspo_segment_seam(
+            new_log_probs,
+            loss_mask,
+            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
+            document_index_zero_based,
+            kwargs[BlockKwargs.num_documents_in_sequence],
+            self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
+            kwargs[LanguageModelKwargs.num_documents_in_batch],
+            self._get_grad_output(kwargs),
+            self._sequence_data_dim.group if self._sequence_data_active else None,
+            self._parallel_dim.group if self._sequence_parallel else None,
+            self._config.epsilon_low,
+            self._config.epsilon_high,
+            self._logits_scale_factor,
+        )
+        if effective_grad is not None:
+            grad_logits = gspo_backward_core(
+                exp_logits,
+                sum_exp_logits,
+                target_masked,
+                target_mask,
+                loss_mask,
+                effective_grad,
+                logits_dtype,
+                grad_logits,
+            )
+        return loss, new_logprobs_mean, grad_logits
+
+    def register_combinable_extras(
+        self, extra: torch.Tensor | None, kwargs: dict[str, typing.Any], losses: dict | None
+    ) -> None:
+        self._register_new_logprobs(extra, kwargs, losses)
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return super().get_preprocessing_config() | {"return_document_index": True}

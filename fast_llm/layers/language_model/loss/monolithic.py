@@ -111,6 +111,9 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
 
         total_loss = None
         for child, (loss, extra) in zip(self._children, results, strict=True):
+            # A child whose gradient can't be produced inside the compiled boundary (an eager seam) had
+            # `fused_core` return `(None, None, forward_state)`; `finish` completes its loss/gradient here.
+            loss, extra, grad_logits = child.finish(loss, extra, kwargs, split_index, grad_logits, logits.dtype)
             if child._do_register_loss:
                 child._register_loss(child.name, loss, losses)
             child.register_combinable_extras(extra, kwargs, losses)
