@@ -552,6 +552,69 @@ def _gspo_forward_core(
     return new_log_probs, exp_logits, sum_exp_logits, target_masked, target_mask
 
 
+@torch.compile
+def _gspo_segment_weights(
+    new_log_probs: torch.Tensor,  # (*batch,)
+    loss_mask: torch.Tensor,  # (*batch,) bool
+    advantages: torch.Tensor,  # (*batch,)
+    old_log_probabilities: torch.Tensor,  # (*batch,)
+    num_labels_in_seq: torch.Tensor,  # (*batch,)
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compiled pre-aggregation block: the per-token contributions to the two per-segment sums, ready
+    for `index_add_`. Each labeled token contributes `1 / N_d` so all of doc d's tokens sum to 1 (across
+    SDP/SP ranks too), regardless of how the doc is sharded. Products stay in `new_log_probs.dtype` (fp32)
+    — casting to a possibly-low input dtype before the segment sum would round each contribution."""
+    log_ratio = (new_log_probs - old_log_probabilities).reshape(-1)
+    mean_token_weight = loss_mask.reshape(-1).to(log_ratio.dtype) / num_labels_in_seq.reshape(-1).to(
+        log_ratio.dtype
+    ).clamp(min=1)
+    return log_ratio * mean_token_weight, advantages.reshape(-1).to(log_ratio.dtype) * mean_token_weight
+
+
+@torch.compile
+def _gspo_segment_loss(
+    mean_log_ratio_per_segment: torch.Tensor,  # (num_segments,)
+    mean_advantage_per_segment: torch.Tensor,  # (num_segments,)
+    flat_document_index: torch.Tensor,  # (*batch,) int
+    new_log_probs: torch.Tensor,  # (*batch,)
+    loss_mask: torch.Tensor,  # (*batch,) bool
+    num_labels_in_seq: torch.Tensor,  # (*batch,)
+    epsilon_low: float,
+    epsilon_high: float,
+    need_grad: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Compiled post-aggregation block: from the reduced per-segment sums to the undivided loss sum, the
+    `new_logprobs` metric, and the unscaled per-token backward coefficient
+    `clip_factor · loss_weight · R_s`. The `/ divisor` and `grad_output` scaling stay eager so those
+    per-step-varying scalars never specialize this graph (`epsilon_*` are fixed per run, so they don't)."""
+    segment_ratio = mean_log_ratio_per_segment.exp()  # (num_segments,) — geometric-mean IS ratio
+    segment_advantage = mean_advantage_per_segment.detach()  # (num_segments,) — no grad through A
+
+    probability_ratio = segment_ratio[flat_document_index].reshape(new_log_probs.shape)
+    advantage_per_token = segment_advantage[flat_document_index].reshape(new_log_probs.shape)
+    loss_weight = loss_mask.to(new_log_probs.dtype)
+
+    losses = -torch.min(
+        probability_ratio * advantage_per_token,
+        torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantage_per_token,
+    )
+    loss_sum = (losses * loss_weight).sum()
+    new_logprobs_mean = (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
+
+    if need_grad:
+        effective_grad_unscaled = (
+            (
+                torch.clamp_min(advantage_per_token, 0) * (probability_ratio <= 1 + epsilon_high)
+                + torch.clamp_max(advantage_per_token, 0) * (probability_ratio >= 1 - epsilon_low)
+            )
+            * loss_weight
+            * probability_ratio
+        )
+    else:
+        effective_grad_unscaled = None
+    return loss_sum, new_logprobs_mean, effective_grad_unscaled
+
+
 def gspo_segment_seam(
     new_log_probs: torch.Tensor,  # (*batch,)
     loss_mask: torch.Tensor,  # (*batch,) bool
@@ -568,29 +631,20 @@ def gspo_segment_seam(
     epsilon_high: float,
     logits_scale_factor: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-    """Eager segment seam between the compiled forward and backward. The `index_add_` segment
-    aggregation and the symbolic `num_segments` live here so they never enter a compiled boundary
-    (no per-`num_segments` recompiles). Returns the loss, the `new_logprobs` metric, and the per-token
-    backward coefficient `effective_grad = grad_output_scaled · clip_factor · loss_weight · R_s`
-    (None when no gradient is requested)."""
-    log_ratio = new_log_probs - old_log_probabilities
-
+    """Eager segment seam between the compiled forward and backward, orchestrating two compiled blocks
+    around the parts that can't compile: the `index_add_` segment aggregation (whose symbolic
+    `num_segments` would trigger per-value recompiles) and the SDP/SP all-reduces. Returns the loss, the
+    `new_logprobs` metric, and the per-token backward coefficient
+    `effective_grad = grad_output_scaled · clip_factor · loss_weight · R_s` (None when no gradient is requested)."""
     flat_document_index = document_index_zero_based.reshape(-1).long()
-    flat_mask = loss_mask.reshape(-1).to(log_ratio.dtype)
-    # Per-token weight: mask / per-document label count, from the preprocessor.
-    # Each labeled token contributes `1 / N_d` so all of doc d's tokens sum to 1 (across
-    # SDP/SP ranks too), regardless of how the doc is sharded.
-    mean_token_weight = flat_mask / num_labels_in_seq.reshape(-1).to(log_ratio.dtype).clamp(min=1)
-    # Pre-divide the per-token contributions by the per-doc label count, then sum per segment.
-    # All tokens in a segment share the same N_d, so this is mathematically equivalent to
-    # `log_ratio_sum / N_d` but avoids any per-segment denominator extraction.
-    mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, log_ratio.reshape(-1) * mean_token_weight
+    weighted_log_ratio, weighted_advantage = _gspo_segment_weights(
+        new_log_probs, loss_mask, advantages, old_log_probabilities, num_labels_in_seq
     )
-    # Accumulate in `log_ratio.dtype` (fp32). Casting the product back to `advantages.dtype`
-    # before summing would round each token's contribution to a possibly-low input dtype.
-    mean_advantage_per_segment = log_ratio.new_zeros(num_segments).index_add_(
-        0, flat_document_index, advantages.reshape(-1).to(log_ratio.dtype) * mean_token_weight
+    mean_log_ratio_per_segment = weighted_log_ratio.new_zeros(num_segments).index_add_(
+        0, flat_document_index, weighted_log_ratio
+    )
+    mean_advantage_per_segment = weighted_advantage.new_zeros(num_segments).index_add_(
+        0, flat_document_index, weighted_advantage
     )
     for reduce_group in (sdp_group, sp_group):
         if reduce_group is not None:
@@ -601,34 +655,21 @@ def gspo_segment_seam(
                 mean_advantage_per_segment, op=torch.distributed.ReduceOp.SUM, group=reduce_group
             )
 
-    segment_ratio = mean_log_ratio_per_segment.exp()  # (num_segments,) — geometric-mean IS ratio
-    segment_advantage = mean_advantage_per_segment.detach()  # (num_segments,) — no grad through A
-
-    probability_ratio = segment_ratio[flat_document_index].reshape(log_ratio.shape)
-    advantage_per_token = segment_advantage[flat_document_index].reshape(log_ratio.shape)
-    loss_weight = loss_mask.to(log_ratio.dtype)
-
-    losses = -torch.min(
-        probability_ratio * advantage_per_token,
-        torch.clamp(probability_ratio, 1 - epsilon_low, 1 + epsilon_high) * advantage_per_token,
+    loss_sum, new_logprobs_mean, effective_grad_unscaled = _gspo_segment_loss(
+        mean_log_ratio_per_segment,
+        mean_advantage_per_segment,
+        flat_document_index,
+        new_log_probs,
+        loss_mask,
+        num_labels_in_seq,
+        epsilon_low,
+        epsilon_high,
+        grad_output is not None,
     )
-    loss = (losses * loss_weight).sum() / divisor
-
-    new_logprobs_mean = (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
-
-    if grad_output is None:
-        return loss, new_logprobs_mean, None
-
-    grad_output_scaled = grad_output / divisor * logits_scale_factor
-    probability_ratio_grad = (
-        grad_output_scaled
-        * (
-            torch.clamp_min(advantage_per_token, 0) * (probability_ratio <= 1 + epsilon_high)
-            + torch.clamp_max(advantage_per_token, 0) * (probability_ratio >= 1 - epsilon_low)
-        )
-        * loss_weight
+    loss = loss_sum / divisor
+    effective_grad = (
+        None if grad_output is None else effective_grad_unscaled * (grad_output / divisor * logits_scale_factor)
     )
-    effective_grad = probability_ratio_grad * probability_ratio
     return loss, new_logprobs_mean, effective_grad
 
 
