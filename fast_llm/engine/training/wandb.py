@@ -5,6 +5,7 @@ import yaml
 
 from fast_llm.config import Config
 from fast_llm.engine.config_utils.run import Run
+from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.training.config import WandbConfig
 
 
@@ -13,6 +14,9 @@ class Wandb:
         self._config = config
         self._is_setup = True
         self._run = run
+        # Whether the `documents_seen` custom x-axis has been declared (RL runs only, done lazily on
+        # the first log that carries it so non-RL runs are unaffected).
+        self._defined_documents_axis = False
         if self._config.entity_name is not None and self._run.is_main_rank:
             import wandb
             import wandb.sdk.lib.runid
@@ -50,6 +54,17 @@ class Wandb:
         # Note: metrics modified in-place
         if self._wandb is not None:
             import wandb
+
+            if not self._defined_documents_axis and any(
+                isinstance(values, dict) and "documents_seen" in values for values in metrics.values()
+            ):
+                # Offer `documents_seen` as an alternative (cross-run) x-axis for the training metrics.
+                # `wandb.log(step=...)` still records the global step, so both axes remain available.
+                self._wandb.define_metric(f"{PhaseType.training}/documents_seen")
+                self._wandb.define_metric(
+                    f"{PhaseType.training}/*", step_metric=f"{PhaseType.training}/documents_seen"
+                )
+                self._defined_documents_axis = True
 
             wandb.log(metrics, step=completed_steps, commit=commit)  # noqa
 

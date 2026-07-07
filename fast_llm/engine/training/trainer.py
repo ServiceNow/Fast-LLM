@@ -39,6 +39,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     _wandb: Wandb
     _optimizer: Optimizer | None
     _completed_steps: int
+    _documents_seen: int = 0
     _schedule: Schedule
 
     def __init__(self, config: TrainerConfig):
@@ -227,6 +228,12 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     return_metrics=is_logging,
                 )
 
+                # Cumulative document count (the RL x-axis / model-version clock); `None` when the
+                # data provides no document counts (non-RL runs).
+                step_num_documents = self._runner._num_documents_in_batch
+                if step_num_documents is not None:
+                    self._documents_seen += step_num_documents
+
                 # Advanced, skipped, and Nan iterations.
                 if update_successful:
                     advanced_iters += 1
@@ -257,6 +264,11 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         metrics_key = PhaseType.training
                         metrics[metrics_key] = {
                             "batch_size": self._batch_size,
+                            **(
+                                {"num_documents": step_num_documents, "documents_seen": self._documents_seen}
+                                if step_num_documents is not None
+                                else {}
+                            ),
                             **{
                                 name: (value / advanced_iters if advanced_iters > 0 else float("nan"))
                                 for name, value in total_losses.items()
@@ -350,6 +362,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             if self._do_train:
                 self._optimizer.reset_state()
             self._completed_steps = 0
+            self._documents_seen = 0
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")
             self._load_checkpoint(self._config.training.checkpoint, last_iteration)
@@ -387,6 +400,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         metadata = {
             "optimizer": self._optimizer.save(),
             "completed_steps": self._completed_steps,
+            "documents_seen": self._documents_seen,
         }
         if metrics is not None:
             metadata["metrics"] = metrics
@@ -430,6 +444,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps = metadata["schedules"][PhaseType.training]["completed_steps"]
         else:
             self._completed_steps = metadata["completed_steps"]
+        self._documents_seen = metadata.get("documents_seen", 0)
         # TODO: Move barrier, ok file to FastLLMModel
         safe_barrier(
             self._distributed.world_group,
