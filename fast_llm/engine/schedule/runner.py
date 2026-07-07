@@ -66,6 +66,9 @@ class BatchContext:
 
 class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     _is_setup: bool = False
+    # Whole-step document count (DP-summed) from the last `run_step`, or None when the data does not
+    # provide document counts (i.e. no loss requested `return_document_count`).
+    _num_documents_in_batch: int | None = None
     _compute_stream: torch.cuda.Stream | MockStream
     _data_stream: torch.cuda.Stream | MockStream
     _pipeline_stream: torch.cuda.Stream | MockStream
@@ -322,6 +325,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         model_inputs[0][0].share_batch_data(
             [model_input for model_inputs_ in model_inputs for model_input in model_inputs_], self._distributed
         )
+        # Whole-step DP-summed document count (the loss-normalization divisor), for `documents_seen`.
+        self._num_documents_in_batch = model_inputs[0][0].num_documents_in_batch
 
         for micro_batch, model_inputs_ in enumerate(model_inputs):
             Assert.eq(len(model_inputs_), self._config.micro_batch_splits)
