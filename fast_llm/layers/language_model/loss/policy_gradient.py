@@ -375,6 +375,15 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
         # aggregation can't recombine across chunks since each call only sees a slice.
         Assert.eq(self._num_splits, 1)
 
+    def _document_index_zero_based(self, kwargs: dict[str, typing.Any], split_index: int) -> torch.Tensor:
+        # `global_document_index_q` is 1-based per the data preprocessor convention; the kernel takes 0-based.
+        return (
+            self._prepare_target(
+                kwargs[BlockKwargs.global_document_index_q], split_index, split_by_distance=False
+            ).long()
+            - 1
+        )
+
     def _forward_backward(
         self,
         logits: "torch.Tensor",
@@ -383,13 +392,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        document_index_zero_based = (
-            self._prepare_target(
-                kwargs[BlockKwargs.global_document_index_q], split_index, split_by_distance=False
-            ).long()
-            - 1
-        )
-        # `global_document_index_q` is 1-based per the data preprocessor convention; the kernel takes 0-based.
+        document_index_zero_based = self._document_index_zero_based(kwargs, split_index)
         # `num_documents_in_sequence` is the doc count for this DP rank's batch — identical across
         # SDP/SP ranks within a DP rank, so per-segment buffers are sized consistently for all-reduce.
         num_segments = kwargs[BlockKwargs.num_documents_in_sequence]
@@ -461,12 +464,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
         `fused_core`, accumulating GSPO's gradient into `grad_logits`. Returns the loss and the `new_logprobs`
         metric (registered by `register_combinable_extras`)."""
         new_log_probs, loss_mask, exp_logits, sum_exp_logits, target_masked, target_mask = extra
-        document_index_zero_based = (
-            self._prepare_target(
-                kwargs[BlockKwargs.global_document_index_q], split_index, split_by_distance=False
-            ).long()
-            - 1
-        )
+        document_index_zero_based = self._document_index_zero_based(kwargs, split_index)
         loss, new_logprobs_mean, effective_grad = gspo_segment_seam(
             new_log_probs,
             loss_mask,

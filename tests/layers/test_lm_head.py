@@ -405,9 +405,9 @@ _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
 _add_configs("distillation_loss_temperature", distillation_loss=True, distillation_temperature=2.0)
 
-# Monolithic loss type: the combinable losses (cross-entropy, z-loss, distillation, GRPO) are wrapped in a
-# single `monolithic` loss that shares one softmax pass; the head treats it as an ordinary loss. These
-# configs must match their per-loss equivalents above (validated against the same independent reference).
+# Monolithic loss type: the combinable losses are wrapped in a single `monolithic` loss that shares one
+# softmax pass; the head treats it as an ordinary loss. These configs must match their per-loss equivalents
+# above (validated against the same independent reference).
 _add_configs("fused", loss_implementation="fused")
 _add_configs("fused_bfloat16", loss_implementation="fused", compute_dtype=DataType.bfloat16)
 _add_configs("fused_logit_scaling", loss_implementation="fused", logits_scale_factor=5.0)
