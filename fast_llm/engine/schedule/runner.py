@@ -158,6 +158,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             assert self._support_training
 
         metrics = {} if return_metrics else None
+        if metrics is not None:
+            # Always present on logging steps so "no wait" shows as 0 rather than a gap.
+            metrics["data_wait_time_ms"] = 0.0
         # Set the context.
         context = BatchContext(
             iteration=iteration,
@@ -431,6 +434,9 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 next(context.data_iterator)
 
             data_time = (time.perf_counter() - start_time) * 1000
+            if context.metrics is not None:
+                # Time the trainer spent blocked waiting for the data loader — how input-starved it is.
+                context.metrics["data_wait_time_ms"] = context.metrics.get("data_wait_time_ms", 0.0) + data_time
             if data_time > self._config.data_batch_warn_time_ms:
                 logger.warning(f"Data loading took {data_time:,.2f} ms")
         return context.inputs.pop(step.global_index).detach().requires_grad_(step.stage != 0)
