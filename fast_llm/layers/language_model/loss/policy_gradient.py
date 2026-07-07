@@ -12,11 +12,11 @@ from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import (
-    GRPOMetricsLevel,
     LanguageModelGRPOLossConfig,
     LanguageModelGSPOLossConfig,
     LanguageModelLossKwargs,
     LanguageModelPolicyGradientLossConfig,
+    PolicyLossMetrics,
 )
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 from fast_llm.utils import Assert
@@ -36,10 +36,58 @@ class GRPOMetrics(typing.NamedTuple):
     entropy: torch.Tensor | None
 
 
+class GSPOMetrics(typing.NamedTuple):
+    # Statistics over segments (documents); GSPO clips per segment. `*_sum` fields are raw sums over
+    # segments (divided by the document count at registration time to form means / fractions).
+    old_logprobs: torch.Tensor
+    ratio_sum: torch.Tensor
+    ratio_squared_sum: torch.Tensor
+    kl_sum: torch.Tensor
+    clipped_sum: torch.Tensor
+    advantage_sum: torch.Tensor
+    max_advantage: torch.Tensor
+    min_advantage: torch.Tensor
+    num_segments: torch.Tensor
+    entropy: torch.Tensor | None
+
+
 class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLossConfig](
     LanguageModelLoss[ConfigType]
 ):
     """Shared scaffolding for policy-gradient losses (GRPO, GSPO)."""
+
+    def __init__(
+        self,
+        config: ConfigType,
+        distributed_config: DistributedConfig,
+        *,
+        name: str,
+        prediction_distance: int = 1,
+        prediction_heads: int = 1,
+        vocab_parallel: bool = False,
+        num_splits: int = 1,
+        logits_scale_factor: float = 1.0,
+        weight: float = 1.0,
+        register_loss: bool = False,
+    ):
+        super().__init__(
+            config,
+            distributed_config,
+            name=name,
+            prediction_distance=prediction_distance,
+            prediction_heads=prediction_heads,
+            vocab_parallel=vocab_parallel,
+            num_splits=num_splits,
+            logits_scale_factor=logits_scale_factor,
+            weight=weight,
+            register_loss=register_loss,
+        )
+        # The extra metrics need a second softmax over the full logits, which pipeline parallelism splits.
+        Assert.custom(
+            lambda metrics, pipeline_parallel: metrics == PolicyLossMetrics.none or pipeline_parallel == 1,
+            config.metrics,
+            distributed_config.pipeline_parallel,
+        )
 
     def _register_new_logprobs(
         self,
@@ -68,38 +116,6 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
 
 class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageModelPolicyGradientLoss[ConfigType]):
     """GRPO: per-token IS-ratio clipping."""
-
-    def __init__(
-        self,
-        config: ConfigType,
-        distributed_config: DistributedConfig,
-        *,
-        name: str,
-        prediction_distance: int = 1,
-        prediction_heads: int = 1,
-        vocab_parallel: bool = False,
-        num_splits: int = 1,
-        logits_scale_factor: float = 1.0,
-        weight: float = 1.0,
-        register_loss: bool = False,
-    ):
-        super().__init__(
-            config,
-            distributed_config,
-            name=name,
-            prediction_distance=prediction_distance,
-            prediction_heads=prediction_heads,
-            vocab_parallel=vocab_parallel,
-            num_splits=num_splits,
-            logits_scale_factor=logits_scale_factor,
-            weight=weight,
-            register_loss=register_loss,
-        )
-        Assert.custom(
-            lambda metrics, pipeline_parallel: metrics == GRPOMetricsLevel.none or pipeline_parallel == 1,
-            config.metrics,
-            distributed_config.pipeline_parallel,
-        )
 
     def _forward_backward(
         self,
@@ -137,7 +153,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
 
         # Skip the extra softmax pass when there is nothing to register.
-        if losses is not None and self._config.metrics != GRPOMetricsLevel.none:
+        if losses is not None and self._config.metrics != PolicyLossMetrics.none:
             self._register_extra_metrics(logits, kwargs, losses, split_index)
 
         return loss, grad
@@ -159,7 +175,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._config.epsilon_high,
             self._logits_scale_factor,
             group=self._parallel_dim.group if self._vocab_parallel else None,
-            compute_entropy=self._config.metrics == GRPOMetricsLevel.with_entropy,
+            compute_entropy=self._config.metrics == PolicyLossMetrics.with_entropy,
         )
 
         num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
@@ -198,7 +214,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
 
     def get_loss_definitions(self) -> list[LossDef]:
         defs = super().get_loss_definitions()
-        if self._config.metrics != GRPOMetricsLevel.none:
+        if self._config.metrics != PolicyLossMetrics.none:
             defs.extend(
                 [
                     LossDef(f"{self._name}_old_logprobs"),
@@ -213,7 +229,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
                     LossDef(f"{self._name}_num_tokens"),
                 ]
             )
-            if self._config.metrics == GRPOMetricsLevel.with_entropy:
+            if self._config.metrics == PolicyLossMetrics.with_entropy:
                 defs.append(LossDef(f"{self._name}_entropy"))
         return defs
 
@@ -298,7 +314,78 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         )
 
         self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
+
+        # Skip the extra softmax pass when there is nothing to register.
+        if losses is not None and self._config.metrics != PolicyLossMetrics.none:
+            self._register_extra_metrics(logits, kwargs, losses, split_index, document_index_zero_based, num_segments)
+
         return loss, grad
+
+    def _register_extra_metrics(
+        self,
+        logits: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict | None,
+        split_index: int,
+        document_index_zero_based: torch.Tensor,
+        num_segments: int,
+    ) -> None:
+        metrics = compute_gspo_metrics(
+            logits,
+            self._get_labels(kwargs, split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
+            document_index_zero_based,
+            num_segments,
+            self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
+            self._config.epsilon_low,
+            self._config.epsilon_high,
+            self._logits_scale_factor,
+            group=self._parallel_dim.group if self._vocab_parallel else None,
+            sdp_group=self._sequence_data_dim.group if self._sequence_data_active else None,
+            sp_group=self._parallel_dim.group if self._sequence_parallel else None,
+            compute_entropy=self._config.metrics == PolicyLossMetrics.with_entropy,
+        )
+
+        num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
+
+        self._register_loss(f"{self._name}_old_logprobs", metrics.old_logprobs / num_documents, losses)
+        self._register_loss(f"{self._name}_ratio_new_old", metrics.ratio_sum / num_documents, losses)
+        self._register_loss(f"{self._name}_ratio_new_old_sum", metrics.ratio_sum, losses)
+        self._register_loss(f"{self._name}_ratio_new_old_squared_sum", metrics.ratio_squared_sum, losses)
+        self._register_loss(f"{self._name}_kl_new_old", metrics.kl_sum / num_documents, losses)
+        self._register_loss(f"{self._name}_clipped_ratio_fraction", metrics.clipped_sum / num_documents, losses)
+        self._register_loss(f"{self._name}_advantage", metrics.advantage_sum / num_documents, losses)
+        self._register_loss(
+            f"{self._name}_max_advantage", metrics.max_advantage, losses, reduce_op=torch.distributed.ReduceOp.MAX
+        )
+        self._register_loss(
+            f"{self._name}_min_advantage", metrics.min_advantage, losses, reduce_op=torch.distributed.ReduceOp.MIN
+        )
+        self._register_loss(f"{self._name}_num_segments", metrics.num_segments, losses)
+        if metrics.entropy is not None:
+            self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
+
+    def get_loss_definitions(self) -> list[LossDef]:
+        defs = super().get_loss_definitions()
+        if self._config.metrics != PolicyLossMetrics.none:
+            defs.extend(
+                [
+                    LossDef(f"{self._name}_old_logprobs"),
+                    LossDef(f"{self._name}_ratio_new_old"),
+                    LossDef(f"{self._name}_ratio_new_old_sum"),
+                    LossDef(f"{self._name}_ratio_new_old_squared_sum"),
+                    LossDef(f"{self._name}_kl_new_old"),
+                    LossDef(f"{self._name}_clipped_ratio_fraction"),
+                    LossDef(f"{self._name}_advantage"),
+                    LossDef(f"{self._name}_max_advantage", reduction=ReductionType.maximum),
+                    LossDef(f"{self._name}_min_advantage", reduction=ReductionType.minimum),
+                    LossDef(f"{self._name}_num_segments"),
+                ]
+            )
+            if self._config.metrics == PolicyLossMetrics.with_entropy:
+                defs.append(LossDef(f"{self._name}_entropy"))
+        return defs
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return super().get_preprocessing_config() | {"return_document_index": True}
@@ -355,6 +442,88 @@ def compute_grpo_metrics(
         max_advantage=torch.where(loss_mask, advantages, neg_inf).max(),
         min_advantage=torch.where(loss_mask, advantages, pos_inf).min(),
         num_tokens=mask.sum(),
+        entropy=entropy,
+    )
+
+
+# Not @torch.compile for the same reason as `fused_gspo_loss_forward_backward`: the Python-int
+# `num_segments` argument trips dynamo. Metrics run only on logging steps, so eager is fine.
+def compute_gspo_metrics(
+    logits: torch.Tensor,  # (*batch, vocab_local)
+    target: torch.Tensor,  # (*batch,)
+    advantages: torch.Tensor,  # (*batch,)
+    old_log_probabilities: torch.Tensor,  # (*batch,)
+    document_index_zero_based: torch.Tensor,  # (*batch,) int — segment ID per token, 0-based
+    num_segments: int,
+    num_labels_in_seq: torch.Tensor,  # (*batch,) — per-document labeled-token count broadcast per token
+    epsilon_low: float = 0.2,
+    epsilon_high: float = 0.2,
+    logits_scale_factor: float = 1.0,
+    group: torch.distributed.ProcessGroup | None = None,
+    sdp_group: torch.distributed.ProcessGroup | None = None,
+    sp_group: torch.distributed.ProcessGroup | None = None,
+    compute_entropy: bool = False,
+) -> GSPOMetrics:
+    """Segment-level GSPO diagnostics (GSPO clips per document/segment).
+
+    Reuses the loss's segment aggregation to build the per-segment geometric-mean ratio and
+    advantage. Per-segment sums are then accumulated as token-weighted sums with weight
+    `mask / num_labels_in_seq` — which sums to 1 per document across SDP/SP ranks — so they partition
+    correctly across ranks and reduce (SUM) exactly like the per-token loss, rather than summing the
+    SDP/SP-duplicated segment buffers. Advantage extrema use MAX/MIN reduction, which is idempotent
+    under that duplication.
+    """
+    loss_mask = target >= 0
+
+    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
+    predicted_logits, _, _ = fused_predicted_logits_from_labels(logits_norm, target, loss_mask, group)
+    new_log_probs = predicted_logits - sum_exp_logits.log()
+    log_ratio = new_log_probs - old_log_probabilities
+
+    flat_document_index = document_index_zero_based.reshape(-1).long()
+    flat_mask = loss_mask.reshape(-1).to(log_ratio.dtype)
+    mean_token_weight = flat_mask / num_labels_in_seq.reshape(-1).to(log_ratio.dtype).clamp(min=1)
+
+    mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
+        0, flat_document_index, log_ratio.reshape(-1) * mean_token_weight
+    )
+    mean_advantage_per_segment = log_ratio.new_zeros(num_segments).index_add_(
+        0, flat_document_index, advantages.reshape(-1).to(log_ratio.dtype) * mean_token_weight
+    )
+    for reduce_group in (sdp_group, sp_group):
+        if reduce_group is not None:
+            all_reduce(mean_log_ratio_per_segment, op=ReduceOp.SUM, group=reduce_group)
+            all_reduce(mean_advantage_per_segment, op=ReduceOp.SUM, group=reduce_group)
+
+    segment_ratio = mean_log_ratio_per_segment.exp()  # geometric-mean IS ratio per segment
+    clipped_segment = (segment_ratio < 1.0 - epsilon_low) | (segment_ratio > 1.0 + epsilon_high)
+    kl_segment = segment_ratio - mean_log_ratio_per_segment - 1.0  # k3 estimator, per segment
+
+    ratio_per_token = segment_ratio[flat_document_index]
+
+    # Advantage extrema over the masked tokens (idempotent under SDP/SP duplication, and robust to
+    # empty segments). Advantage is constant within a document, so this equals the per-segment extrema.
+    neg_inf = advantages.new_full((), float("-inf"))
+    pos_inf = advantages.new_full((), float("inf"))
+
+    entropy: torch.Tensor | None = None
+    if compute_entropy:
+        weighted_logits_sum = (exp_logits * logits_norm).sum(-1)
+        if group is not None:
+            all_reduce(weighted_logits_sum, op=ReduceOp.SUM, group=group)
+        entropy_per_token = sum_exp_logits.log() - weighted_logits_sum / sum_exp_logits
+        entropy = (entropy_per_token.reshape(-1) * mean_token_weight).sum()
+
+    return GSPOMetrics(
+        old_logprobs=(old_log_probabilities.reshape(-1) * mean_token_weight).sum(),
+        ratio_sum=(ratio_per_token * mean_token_weight).sum(),
+        ratio_squared_sum=(ratio_per_token * ratio_per_token * mean_token_weight).sum(),
+        kl_sum=(kl_segment[flat_document_index] * mean_token_weight).sum(),
+        clipped_sum=(clipped_segment[flat_document_index].to(log_ratio.dtype) * mean_token_weight).sum(),
+        advantage_sum=(mean_advantage_per_segment[flat_document_index] * mean_token_weight).sum(),
+        max_advantage=torch.where(loss_mask, advantages, neg_inf).max(),
+        min_advantage=torch.where(loss_mask, advantages, pos_inf).min(),
+        num_segments=mean_token_weight.sum(),
         entropy=entropy,
     )
 

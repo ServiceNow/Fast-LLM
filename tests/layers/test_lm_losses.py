@@ -20,7 +20,9 @@ from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.policy_gradient import (
     GRPOMetrics,
+    GSPOMetrics,
     compute_grpo_metrics,
+    compute_gspo_metrics,
     fused_grpo_loss_forward_backward,
     fused_gspo_loss_forward_backward,
 )
@@ -165,6 +167,73 @@ def reference_grpo_metrics(
         max_advantage=advantages[loss_mask].max(),
         min_advantage=advantages[loss_mask].min(),
         num_tokens=mask.sum(),
+        entropy=entropy,
+    )
+
+
+def reference_gspo_metrics(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    advantages: torch.Tensor,
+    old_log_probabilities: torch.Tensor,
+    document_index: torch.Tensor,
+    num_segments: int,
+    num_labels_in_seq: torch.Tensor,
+    epsilon_low: float,
+    epsilon_high: float,
+    logits_scale_factor: float,
+    compute_entropy: bool,
+) -> GSPOMetrics:
+    log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
+    loss_mask = target >= 0
+    new_log_probs = log_softmax.gather(-1, (target * loss_mask).unsqueeze(-1)).squeeze(-1)
+    log_ratio = new_log_probs - old_log_probabilities.float()
+
+    flat_doc = document_index.reshape(-1).long()
+    flat_mask = loss_mask.reshape(-1)
+    flat_log_ratio = log_ratio.reshape(-1)
+    flat_advantages = advantages.reshape(-1).float()
+    flat_old = old_log_probabilities.reshape(-1).float()
+
+    old_logprobs = log_ratio.new_zeros(())
+    ratio_sum = log_ratio.new_zeros(())
+    ratio_squared_sum = log_ratio.new_zeros(())
+    kl_sum = log_ratio.new_zeros(())
+    clipped_sum = log_ratio.new_zeros(())
+    advantage_sum = log_ratio.new_zeros(())
+    num_segments_count = log_ratio.new_zeros(())
+    for segment in range(num_segments):
+        in_segment = (flat_doc == segment) & flat_mask
+        count = in_segment.sum()
+        if int(count) == 0:
+            continue
+        count_float = count.float()
+        mean_log_ratio = flat_log_ratio[in_segment].sum() / count_float
+        ratio = mean_log_ratio.exp()
+        ratio_sum = ratio_sum + ratio
+        ratio_squared_sum = ratio_squared_sum + ratio * ratio
+        kl_sum = kl_sum + (ratio - mean_log_ratio - 1.0)
+        clipped_sum = clipped_sum + ((ratio < 1 - epsilon_low) | (ratio > 1 + epsilon_high)).float()
+        advantage_sum = advantage_sum + flat_advantages[in_segment].sum() / count_float
+        old_logprobs = old_logprobs + flat_old[in_segment].sum() / count_float
+        num_segments_count = num_segments_count + 1.0
+
+    entropy = None
+    if compute_entropy:
+        entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1).reshape(-1)
+        masked = flat_mask.float() / num_labels_in_seq.reshape(-1).float().clamp(min=1)
+        entropy = (entropy_per_token * masked).sum()
+
+    return GSPOMetrics(
+        old_logprobs=old_logprobs,
+        ratio_sum=ratio_sum,
+        ratio_squared_sum=ratio_squared_sum,
+        kl_sum=kl_sum,
+        clipped_sum=clipped_sum,
+        advantage_sum=advantage_sum,
+        max_advantage=advantages[loss_mask].max(),
+        min_advantage=advantages[loss_mask].min(),
+        num_segments=num_segments_count,
         entropy=entropy,
     )
 
@@ -531,6 +600,64 @@ def _test_grpo_metrics(
     _check_grpo_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
+def _check_gspo_metrics(ref: GSPOMetrics, got: GSPOMetrics, threshold: float) -> None:
+    for name in GSPOMetrics._fields:
+        ref_value = getattr(ref, name)
+        got_value = getattr(got, name)
+        if ref_value is None:
+            assert got_value is None, name
+        else:
+            Assert.rms_close_relative(got_value, ref_value, threshold)
+
+
+def _test_gspo_metrics(
+    batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, num_segments, group=None
+):
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    # Per-token segment IDs + per-document labeled-token counts, mirroring `_test_gspo_loss`.
+    seq_len = batch_shape[-1] if len(batch_shape) > 1 else batch_shape[0]
+    span = max(seq_len // num_segments, 1)
+    base = torch.arange(seq_len, device=target.device) // span
+    document_index = base.clamp(max=num_segments - 1).expand(batch_shape).contiguous()
+    flat_doc = document_index.reshape(-1).long()
+    flat_target = target.reshape(-1)
+    labels_per_document = torch.zeros(num_segments, dtype=torch.int32, device=target.device).scatter_add(
+        0, flat_doc, (flat_target >= 0).to(torch.int32)
+    )
+    num_labels_in_seq = labels_per_document[flat_doc].reshape(target.shape)
+
+    ref = reference_gspo_metrics(
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        num_labels_in_seq,
+        epsilon_low=0.2,
+        epsilon_high=0.2,
+        logits_scale_factor=logits_scale_factor,
+        compute_entropy=compute_entropy,
+    )
+    got = compute_gspo_metrics(
+        split_op(logits, group, -1).contiguous(),
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        num_labels_in_seq,
+        epsilon_low=0.2,
+        epsilon_high=0.2,
+        logits_scale_factor=logits_scale_factor,
+        group=group,
+        compute_entropy=compute_entropy,
+    )
+    _check_gspo_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
+
+
 def _test_z_loss(
     batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
 ):
@@ -696,6 +823,29 @@ def test_grpo_metrics(
     compute_entropy,
 ):
     _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "num_segments", "accumulate"),
+    _GSPO_PARAMETERS,
+)
+@pytest.mark.parametrize("compute_entropy", (False, True))
+def test_gspo_metrics(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    num_segments,
+    accumulate,
+    compute_entropy,
+):
+    _test_gspo_metrics(
+        batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, num_segments
+    )
 
 
 @pytest.mark.skip(reason="DPO loss is broken")
