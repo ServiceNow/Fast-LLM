@@ -151,7 +151,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         *,
         iteration: int = 1,
         return_metrics: bool = False,
-    ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None]:
+    ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None, int | None]:
         assert self._is_setup
         assert schedule._config is self._config  # Noqa
         if schedule.phase.is_training:
@@ -225,7 +225,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._record_event(context, EventType.compute_wait_data, None)
 
         if not context.is_training or self._config.skip_step:
-            return self._reduce_losses(context), True, metrics
+            return self._reduce_losses(context), True, metrics, self._num_documents_in_batch
 
         for name, tied_parameter in self._tied_parameters.items():
             if tied_parameter.group is not None:
@@ -284,7 +284,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 lambda: log_memory_usage(f"End of {context.phase} iteration {iteration}", str)
             )
 
-        return self._reduce_losses(context), update_successful, metrics
+        return self._reduce_losses(context), update_successful, metrics, self._num_documents_in_batch
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
         reduced_losses = {
@@ -325,7 +325,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         model_inputs[0][0].share_batch_data(
             [model_input for model_inputs_ in model_inputs for model_input in model_inputs_], self._distributed
         )
-        # Whole-step DP-summed document count (the loss-normalization divisor), for `documents_seen`.
+        # Whole-step DP-summed document count (the loss-normalization divisor).
         self._num_documents_in_batch = model_inputs[0][0].num_documents_in_batch
 
         for micro_batch, model_inputs_ in enumerate(model_inputs):

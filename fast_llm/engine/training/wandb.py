@@ -14,8 +14,8 @@ class Wandb:
         self._config = config
         self._is_setup = True
         self._run = run
-        # Whether the `documents_seen` custom x-axis has been declared (RL runs only, done lazily on
-        # the first log that carries it so non-RL runs are unaffected).
+        # Whether the `documents_seen` custom x-axis has been declared. Done lazily on the first log
+        # that carries a `documents_seen` value, since not every run produces one.
         self._defined_documents_axis = False
         if self._config.entity_name is not None and self._run.is_main_rank:
             import wandb
@@ -55,15 +55,12 @@ class Wandb:
         if self._wandb is not None:
             import wandb
 
-            if not self._defined_documents_axis and any(
-                isinstance(values, dict) and "documents_seen" in values for values in metrics.values()
-            ):
+            if not self._defined_documents_axis and any("documents_seen" in values for values in metrics.values()):
                 # Offer `documents_seen` as an alternative (cross-run) x-axis for the training metrics.
                 # `wandb.log(step=...)` still records the global step, so both axes remain available.
-                self._wandb.define_metric(f"{PhaseType.training}/documents_seen")
-                self._wandb.define_metric(
-                    f"{PhaseType.training}/*", step_metric=f"{PhaseType.training}/documents_seen"
-                )
+                documents_seen_metric = f"{PhaseType.training}/documents_seen"
+                self._wandb.define_metric(documents_seen_metric)
+                self._wandb.define_metric(f"{PhaseType.training}/*", step_metric=documents_seen_metric)
                 self._defined_documents_axis = True
 
             wandb.log(metrics, step=completed_steps, commit=commit)  # noqa

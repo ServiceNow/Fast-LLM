@@ -221,16 +221,15 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
                 # TODO: Data loader hates getting all micro-batches at once.
                 #   (Also preprocessing adds overhead)
-                reduced_losses, update_successful, train_metrics = self._runner.run_step(
+                reduced_losses, update_successful, train_metrics, step_num_documents = self._runner.run_step(
                     train_iterator,
                     self._schedule,
                     iteration=self._completed_steps,
                     return_metrics=is_logging,
                 )
 
-                # Cumulative document count (the RL x-axis / model-version clock); `None` when the
-                # data provides no document counts (non-RL runs).
-                step_num_documents = self._runner._num_documents_in_batch
+                # Cumulative document count across training steps; `None` when the data provides no
+                # document counts.
                 if step_num_documents is not None:
                     self._documents_seen += step_num_documents
 
