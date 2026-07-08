@@ -16,7 +16,7 @@ from fast_llm.layers.language_model.loss.config import (
     LanguageModelGSPOLossConfig,
     LanguageModelLossKwargs,
     LanguageModelPolicyGradientLossConfig,
-    PolicyLossMetrics,
+    PolicyMetricsLevel,
 )
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 from fast_llm.utils import Assert
@@ -76,7 +76,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
         )
         # The extra metrics need a second softmax over the full logits, which pipeline parallelism splits.
         Assert.custom(
-            lambda metrics, pipeline_parallel: metrics == PolicyLossMetrics.none or pipeline_parallel == 1,
+            lambda metrics, pipeline_parallel: metrics == PolicyMetricsLevel.none or pipeline_parallel == 1,
             config.metrics,
             distributed_config.pipeline_parallel,
         )
@@ -94,7 +94,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
         )
 
     def _policy_metric_definitions(self, *extra: LossDef) -> list[LossDef]:
-        if self._config.metrics == PolicyLossMetrics.none:
+        if self._config.metrics == PolicyMetricsLevel.none:
             return []
         defs = [
             LossDef(f"{self._name}_old_logprobs"),
@@ -109,7 +109,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             *extra,
             LossDef(f"{self._name}_num_tokens"),
         ]
-        if self._config.metrics == PolicyLossMetrics.with_entropy:
+        if self._config.metrics == PolicyMetricsLevel.with_entropy:
             defs.append(LossDef(f"{self._name}_entropy"))
         return defs
 
@@ -182,7 +182,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
 
         # Skip the extra softmax pass when there is nothing to register.
-        if losses is not None and self._config.metrics != PolicyLossMetrics.none:
+        if losses is not None and self._config.metrics != PolicyMetricsLevel.none:
             self._register_extra_metrics(logits, kwargs, losses, split_index)
 
         return loss, grad
@@ -191,7 +191,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         self,
         logits: torch.Tensor,
         kwargs: dict[str, typing.Any],
-        losses: dict | None,
+        losses: dict,
         split_index: int,
     ) -> None:
         metrics = compute_grpo_metrics(
@@ -204,7 +204,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._config.epsilon_high,
             self._logits_scale_factor,
             group=self._parallel_dim.group if self._vocab_parallel else None,
-            compute_entropy=self._config.metrics == PolicyLossMetrics.with_entropy,
+            compute_entropy=self._config.metrics == PolicyMetricsLevel.with_entropy,
         )
         self._register_policy_metrics(metrics, kwargs, losses)
 
@@ -294,7 +294,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         self._register_new_logprobs(new_logprobs_mean, kwargs, losses)
 
         # Skip the extra softmax pass when there is nothing to register.
-        if losses is not None and self._config.metrics != PolicyLossMetrics.none:
+        if losses is not None and self._config.metrics != PolicyMetricsLevel.none:
             self._register_extra_metrics(logits, kwargs, losses, split_index, document_index_zero_based, num_segments)
 
         return loss, grad
@@ -303,7 +303,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         self,
         logits: torch.Tensor,
         kwargs: dict[str, typing.Any],
-        losses: dict | None,
+        losses: dict,
         split_index: int,
         document_index_zero_based: torch.Tensor,
         num_segments: int,
@@ -322,7 +322,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
             group=self._parallel_dim.group if self._vocab_parallel else None,
             sdp_group=self._sequence_data_dim.group if self._sequence_data_active else None,
             sp_group=self._parallel_dim.group if self._sequence_parallel else None,
-            compute_entropy=self._config.metrics == PolicyLossMetrics.with_entropy,
+            compute_entropy=self._config.metrics == PolicyMetricsLevel.with_entropy,
         )
         self._register_policy_metrics(metrics, kwargs, losses)
 
@@ -439,7 +439,7 @@ def compute_gspo_metrics(
     old_log_probabilities: torch.Tensor,  # (*batch,)
     document_index_zero_based: torch.Tensor,  # (*batch,) int — segment ID per token, 0-based
     num_segments: int,
-    num_labels_in_seq: torch.Tensor,  # (*batch,) — per-document labeled-token count broadcast per token
+    label_counts: torch.Tensor,  # (*batch,) — per-document labeled-token count broadcast per token
     epsilon_low: float = 0.2,
     epsilon_high: float = 0.2,
     logits_scale_factor: float = 1.0,
@@ -458,7 +458,7 @@ def compute_gspo_metrics(
     )
     flat_document_index = document_index_zero_based.reshape(-1).long()
     flat_mask = loss_mask.reshape(-1).to(log_ratio.dtype)
-    document_weight = flat_mask / num_labels_in_seq.reshape(-1).to(log_ratio.dtype).clamp(min=1)
+    document_weight = flat_mask / label_counts.reshape(-1).to(log_ratio.dtype).clamp(min=1)
 
     mean_log_ratio_per_segment = log_ratio.new_zeros(num_segments).index_add_(
         0, flat_document_index, log_ratio.reshape(-1) * document_weight

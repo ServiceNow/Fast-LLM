@@ -205,7 +205,7 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
         return LanguageModelZLoss
 
 
-class PolicyLossMetrics(enum.StrEnum):
+class PolicyMetricsLevel(enum.StrEnum):
     none = "none"
     basic = "basic"
     with_entropy = "with_entropy"
@@ -219,8 +219,8 @@ class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
 
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
-    metrics: PolicyLossMetrics = Field(
-        default=PolicyLossMetrics.none,
+    metrics: PolicyMetricsLevel = Field(
+        default=PolicyMetricsLevel.none,
         desc=(
             "Additional diagnostic metrics to log. "
             "`basic`: importance-ratio, KL and advantage statistics. "
