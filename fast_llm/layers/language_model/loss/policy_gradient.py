@@ -581,7 +581,7 @@ def _gspo_segment_loss(
     num_labels_in_seq: torch.Tensor,  # (*batch,)
     epsilon_low: float,
     epsilon_high: float,
-    need_grad: bool,
+    compute_grad: bool,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """Compiled post-aggregation block: from the reduced per-segment sums to the undivided loss sum, the
     `new_logprobs` metric, and the unscaled per-token backward coefficient
@@ -601,7 +601,7 @@ def _gspo_segment_loss(
     loss_sum = (losses * loss_weight).sum()
     new_logprobs_mean = (new_log_probs * loss_mask / num_labels_in_seq.clamp(min=1)).sum()
 
-    if need_grad:
+    if compute_grad:
         effective_grad_unscaled = (
             (
                 torch.clamp_min(advantage_per_token, 0) * (probability_ratio <= 1 + epsilon_high)
