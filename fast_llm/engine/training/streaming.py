@@ -71,6 +71,9 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._weight_sync_pending = False
         if update_successful:
             self._broadcast_weights(step)
+        # Report the last measured sync (not reset between steps): a broadcast runs on ~every step so
+        # this stays current, and holding the value keeps a skipped or not-yet-harvested step from
+        # dropping the metric.
         if self._weight_sync_time_ms is None:
             return None
         return {"weight_sync_time_ms": self._weight_sync_time_ms}
@@ -95,10 +98,11 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._client.xadd(
                 REDIS_TRAINING_STREAM, {REDIS_TRAINING_FIELD: json.dumps({"type": "weights_ready", "step": step})}
             )
+        weight_sync_start_time = None
         if self._use_cuda_timing:
             self._weight_sync_start.record()
         elif self._do_broadcast:
-            sync_start_time = time.perf_counter()
+            weight_sync_start_time = time.perf_counter()
         for shard_name, layer_name, tensor in self._model.iter_checkpoint(self._config.export, {}):
             if self._do_broadcast:
                 # TODO: ====== Broadcast metadata in advance =======
@@ -111,4 +115,4 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._weight_sync_end.record()
             self._weight_sync_pending = True
         elif self._do_broadcast:
-            self._weight_sync_time_ms = (time.perf_counter() - sync_start_time) * 1000
+            self._weight_sync_time_ms = (time.perf_counter() - weight_sync_start_time) * 1000
