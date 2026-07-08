@@ -48,6 +48,7 @@ class GSPOMetrics(typing.NamedTuple):
     max_advantage: torch.Tensor
     min_advantage: torch.Tensor
     num_segments: torch.Tensor
+    num_tokens: torch.Tensor
     entropy: torch.Tensor | None
 
 
@@ -100,6 +101,26 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
         self._register_loss(
             self._logprob_metric_name, new_logprobs_mean, losses, reduce_op=torch.distributed.ReduceOp.SUM
         )
+
+    def _policy_metric_definitions(self, *extra: LossDef) -> list[LossDef]:
+        if self._config.metrics == PolicyLossMetrics.none:
+            return []
+        defs = [
+            LossDef(f"{self._name}_old_logprobs"),
+            LossDef(f"{self._name}_ratio_new_old"),
+            LossDef(f"{self._name}_ratio_new_old_sum"),
+            LossDef(f"{self._name}_ratio_new_old_squared_sum"),
+            LossDef(f"{self._name}_kl_new_old"),
+            LossDef(f"{self._name}_clipped_ratio_fraction"),
+            LossDef(f"{self._name}_advantage"),
+            LossDef(f"{self._name}_max_advantage", reduction=ReductionType.maximum),
+            LossDef(f"{self._name}_min_advantage", reduction=ReductionType.minimum),
+            *extra,
+            LossDef(f"{self._name}_num_tokens"),
+        ]
+        if self._config.metrics == PolicyLossMetrics.with_entropy:
+            defs.append(LossDef(f"{self._name}_entropy"))
+        return defs
 
     def get_loss_definitions(self) -> list[LossDef]:
         defs = super().get_loss_definitions()
@@ -213,25 +234,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
             self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
 
     def get_loss_definitions(self) -> list[LossDef]:
-        defs = super().get_loss_definitions()
-        if self._config.metrics != PolicyLossMetrics.none:
-            defs.extend(
-                [
-                    LossDef(f"{self._name}_old_logprobs"),
-                    LossDef(f"{self._name}_ratio_new_old"),
-                    LossDef(f"{self._name}_ratio_new_old_sum"),
-                    LossDef(f"{self._name}_ratio_new_old_squared_sum"),
-                    LossDef(f"{self._name}_kl_new_old"),
-                    LossDef(f"{self._name}_clipped_ratio_fraction"),
-                    LossDef(f"{self._name}_advantage"),
-                    LossDef(f"{self._name}_max_advantage", reduction=ReductionType.maximum),
-                    LossDef(f"{self._name}_min_advantage", reduction=ReductionType.minimum),
-                    LossDef(f"{self._name}_num_tokens"),
-                ]
-            )
-            if self._config.metrics == PolicyLossMetrics.with_entropy:
-                defs.append(LossDef(f"{self._name}_entropy"))
-        return defs
+        return super().get_loss_definitions() + self._policy_metric_definitions()
 
 
 class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageModelPolicyGradientLoss[ConfigType]):
@@ -363,29 +366,12 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
             f"{self._name}_min_advantage", metrics.min_advantage, losses, reduce_op=torch.distributed.ReduceOp.MIN
         )
         self._register_loss(f"{self._name}_num_segments", metrics.num_segments, losses)
+        self._register_loss(f"{self._name}_num_tokens", metrics.num_tokens, losses)
         if metrics.entropy is not None:
             self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
 
     def get_loss_definitions(self) -> list[LossDef]:
-        defs = super().get_loss_definitions()
-        if self._config.metrics != PolicyLossMetrics.none:
-            defs.extend(
-                [
-                    LossDef(f"{self._name}_old_logprobs"),
-                    LossDef(f"{self._name}_ratio_new_old"),
-                    LossDef(f"{self._name}_ratio_new_old_sum"),
-                    LossDef(f"{self._name}_ratio_new_old_squared_sum"),
-                    LossDef(f"{self._name}_kl_new_old"),
-                    LossDef(f"{self._name}_clipped_ratio_fraction"),
-                    LossDef(f"{self._name}_advantage"),
-                    LossDef(f"{self._name}_max_advantage", reduction=ReductionType.maximum),
-                    LossDef(f"{self._name}_min_advantage", reduction=ReductionType.minimum),
-                    LossDef(f"{self._name}_num_segments"),
-                ]
-            )
-            if self._config.metrics == PolicyLossMetrics.with_entropy:
-                defs.append(LossDef(f"{self._name}_entropy"))
-        return defs
+        return super().get_loss_definitions() + self._policy_metric_definitions(LossDef(f"{self._name}_num_segments"))
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return super().get_preprocessing_config() | {"return_document_index": True}
@@ -524,6 +510,7 @@ def compute_gspo_metrics(
         max_advantage=torch.where(loss_mask, advantages, neg_inf).max(),
         min_advantage=torch.where(loss_mask, advantages, pos_inf).min(),
         num_segments=mean_token_weight.sum(),
+        num_tokens=flat_mask.sum(),
         entropy=entropy,
     )
 

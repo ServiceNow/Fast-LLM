@@ -234,6 +234,7 @@ def reference_gspo_metrics(
         max_advantage=advantages[loss_mask].max(),
         min_advantage=advantages[loss_mask].min(),
         num_segments=num_segments_count,
+        num_tokens=loss_mask.sum(),
         entropy=entropy,
     )
 
@@ -939,6 +940,21 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                             compute_entropy,
                             test_context.group,
                         )
+            # GSPO metrics
+            for compute_entropy in (False, True):
+                with test_context.subtest(base_path, f"gspo_metrics-{compute_entropy}-{suffix}", 2) as subtest:
+                    if subtest.do_run:
+                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                        _test_gspo_metrics(
+                            batch_shape,
+                            num_columns,
+                            logits_scale_factor,
+                            loss_masking,
+                            dtype,
+                            compute_entropy,
+                            4,
+                            test_context.group,
+                        )
 
 
 @pytest.mark.slow
@@ -981,6 +997,8 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "grpo",
         "grpo_metrics-False",
         "grpo_metrics-True",
+        "gspo_metrics-False",
+        "gspo_metrics-True",
     ),
 )
 def test_lm_loss_distributed(
