@@ -32,7 +32,7 @@ class LengthPreprocessingConfig(BatchPreprocessingConfig):
 
 @config_class()
 class TokenPreprocessingConfig(LengthPreprocessingConfig):
-    return_document_count: bool = Field(default=False)
+    return_document_count: bool = Field(default=True)
 
 
 @config_class()
