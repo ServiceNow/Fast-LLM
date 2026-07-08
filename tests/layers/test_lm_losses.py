@@ -19,8 +19,7 @@ from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
 from fast_llm.layers.language_model.loss.policy_gradient import (
-    GRPOMetrics,
-    GSPOMetrics,
+    PolicyMetrics,
     compute_grpo_metrics,
     compute_gspo_metrics,
     fused_grpo_loss_forward_backward,
@@ -139,7 +138,7 @@ def reference_grpo_metrics(
     epsilon_high: float,
     logits_scale_factor: float,
     compute_entropy: bool,
-) -> GRPOMetrics:
+) -> PolicyMetrics:
     log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
     loss_mask = target >= 0
     mask = loss_mask.float()
@@ -156,7 +155,7 @@ def reference_grpo_metrics(
         entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1)
         entropy = (entropy_per_token * masked).sum()
 
-    return GRPOMetrics(
+    return PolicyMetrics(
         old_logprobs=(old_log_probabilities.float() * masked).sum(),
         ratio_new_old=(ratio * masked).sum(),
         ratio_new_old_sum=(ratio * mask).sum(),
@@ -167,6 +166,7 @@ def reference_grpo_metrics(
         max_advantage=advantages[loss_mask].max(),
         min_advantage=advantages[loss_mask].min(),
         num_tokens=mask.sum(),
+        num_segments=None,
         entropy=entropy,
     )
 
@@ -183,7 +183,7 @@ def reference_gspo_metrics(
     epsilon_high: float,
     logits_scale_factor: float,
     compute_entropy: bool,
-) -> GSPOMetrics:
+) -> PolicyMetrics:
     log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
     loss_mask = target >= 0
     new_log_probs = log_softmax.gather(-1, (target * loss_mask).unsqueeze(-1)).squeeze(-1)
@@ -224,17 +224,18 @@ def reference_gspo_metrics(
         masked = flat_mask.float() / num_labels_in_seq.reshape(-1).float().clamp(min=1)
         entropy = (entropy_per_token * masked).sum()
 
-    return GSPOMetrics(
+    return PolicyMetrics(
         old_logprobs=old_logprobs,
-        ratio_sum=ratio_sum,
-        ratio_squared_sum=ratio_squared_sum,
-        kl_sum=kl_sum,
-        clipped_sum=clipped_sum,
-        advantage_sum=advantage_sum,
+        ratio_new_old=ratio_sum,
+        ratio_new_old_sum=ratio_sum,
+        ratio_new_old_squared_sum=ratio_squared_sum,
+        kl_new_old=kl_sum,
+        clipped_ratio_fraction=clipped_sum,
+        advantage=advantage_sum,
         max_advantage=advantages[loss_mask].max(),
         min_advantage=advantages[loss_mask].min(),
-        num_segments=num_segments_count,
         num_tokens=loss_mask.sum(),
+        num_segments=num_segments_count,
         entropy=entropy,
     )
 
@@ -554,8 +555,8 @@ def _test_gspo_loss(
     Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
-def _check_grpo_metrics(ref: GRPOMetrics, got: GRPOMetrics, threshold: float) -> None:
-    for name in GRPOMetrics._fields:
+def _check_policy_metrics(ref: PolicyMetrics, got: PolicyMetrics, threshold: float) -> None:
+    for name in PolicyMetrics._fields:
         ref_value = getattr(ref, name)
         got_value = getattr(got, name)
         if ref_value is None:
@@ -598,17 +599,7 @@ def _test_grpo_metrics(
         group=group,
         compute_entropy=compute_entropy,
     )
-    _check_grpo_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
-
-
-def _check_gspo_metrics(ref: GSPOMetrics, got: GSPOMetrics, threshold: float) -> None:
-    for name in GSPOMetrics._fields:
-        ref_value = getattr(ref, name)
-        got_value = getattr(got, name)
-        if ref_value is None:
-            assert got_value is None, name
-        else:
-            Assert.rms_close_relative(got_value, ref_value, threshold)
+    _check_policy_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
 def _test_gspo_metrics(
@@ -656,7 +647,7 @@ def _test_gspo_metrics(
         group=group,
         compute_entropy=compute_entropy,
     )
-    _check_gspo_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
+    _check_policy_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
 def _test_z_loss(
