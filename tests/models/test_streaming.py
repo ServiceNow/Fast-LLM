@@ -112,6 +112,8 @@ def _run_event_consumer(
                 if message["type"] == "training_finished":
                     return
                 elif message["type"] == "weights_ready":
+                    Assert.incl("documents_seen", message)
+                    Assert.geq(message["documents_seen"], 0)
                     weights = {}
                     while True:
                         meta = _broadcast_object(None, process_group, src=0)

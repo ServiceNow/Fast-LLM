@@ -72,13 +72,13 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
 
     def _broadcast_weights(self, step: int, documents_seen: int):
         if self._do_broadcast:
-            # `document_count` is the model version consumers stamp onto rollouts (aligning staleness
-            # with DeepSpeed's document clock); `step` is kept so consumers can also log the raw step.
+            # `documents_seen` is the cumulative document count, which doubles as the model version;
+            # `step` is the raw training step.
             self._client.xadd(
                 REDIS_TRAINING_STREAM,
                 {
                     REDIS_TRAINING_FIELD: json.dumps(
-                        {"type": "weights_ready", "step": step, "document_count": documents_seen}
+                        {"type": "weights_ready", "step": step, "documents_seen": documents_seen}
                     )
                 },
             )
