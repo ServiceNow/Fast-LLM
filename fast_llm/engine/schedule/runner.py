@@ -67,7 +67,7 @@ class BatchContext:
 class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
     _is_setup: bool = False
     # Whole-step document count (DP-summed) from the last `run_step`, or None when the data does not
-    # provide document counts (i.e. no loss requested `return_document_count`).
+    # provide document counts (i.e. non-token data).
     _num_documents_in_batch: int | None = None
     _compute_stream: torch.cuda.Stream | MockStream
     _data_stream: torch.cuda.Stream | MockStream

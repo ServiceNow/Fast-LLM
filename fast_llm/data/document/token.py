@@ -102,14 +102,13 @@ class TokenBatch(Batch, TokenDocument):
         model_input = self._model_input_class(tokens=self.tokens[begin:end])
         lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, end)
 
-        if config.return_document_count:
-            # Set the global whole-batch count on every rank's first microbatch; `share_batch_data`
-            # will sum across DP via `batch_data_group`. (`begin == 0` would only set it on the
-            # SDP rank-0 first microbatch, leaving other SDP ranks with 0 after the DP-only sum.)
-            # Exclude the padding "length" from the document count.
-            model_input.num_documents = (
-                len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0) if is_first_for_rank else 0
-            )
+        # Set the global whole-batch count on every rank's first microbatch; `share_batch_data`
+        # will sum across DP via `batch_data_group`. (`begin == 0` would only set it on the
+        # SDP rank-0 first microbatch, leaving other SDP ranks with 0 after the DP-only sum.)
+        # Exclude the padding "length" from the document count.
+        model_input.num_documents = (
+            len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0) if is_first_for_rank else 0
+        )
 
         if config.return_document_index:
             # Globally-consistent 1-based document index per token, computed from the unsliced
