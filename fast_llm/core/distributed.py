@@ -15,14 +15,13 @@ import typing
 
 import torch
 import torch.monitor
+from torch._C._distributed_c10d import AllgatherOptions, ReduceScatterOptions
 from torch.distributed import (  # noqa
     ProcessGroup,
     ReduceOp,
     all_gather,
-    all_gather_into_tensor,
     all_reduce,
     reduce_scatter,
-    reduce_scatter_tensor,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +62,47 @@ def broadcast(
     else:
         work.wait()
         return None
+
+
+def all_gather_into_tensor(
+    output_tensor: torch.Tensor, input_tensor: torch.Tensor, group: ProcessGroup, async_op: bool = False
+) -> torch.distributed.Work | None:
+    """
+    Same as torch.distributed.all_gather_into_tensor, but calling the group directly instead of going through
+    torch's deprecated public wrapper. As of torch 2.13, that wrapper only supports the generic `ProcessGroup`
+    returned by `torch.distributed.new_group` and raises an `AttributeError` on the raw `Backend` objects
+    (e.g. `ProcessGroupGloo`, `ProcessGroupNCCL`) used here.
+    """
+    assert group is not None
+    opts = AllgatherOptions()
+    opts.asyncOp = async_op
+    work = group._allgather_base(output_tensor, input_tensor, opts)
+    if async_op:
+        return work
+    elif work is not None:
+        work.wait()
+    return None
+
+
+def reduce_scatter_tensor(
+    output: torch.Tensor,
+    input_: torch.Tensor,
+    group: ProcessGroup,
+    op: ReduceOp.RedOpType = ReduceOp.SUM,
+    async_op: bool = False,
+) -> torch.distributed.Work | None:
+    """Same as torch.distributed.reduce_scatter_tensor, bypassing torch's deprecated wrapper for the same reason
+    as `all_gather_into_tensor` above."""
+    assert group is not None
+    opts = ReduceScatterOptions()
+    opts.reduceOp = op
+    opts.asyncOp = async_op
+    work = group._reduce_scatter_base(output, input_, opts)
+    if async_op:
+        return work
+    elif work is not None:
+        work.wait()
+    return None
 
 
 def check_parallel_match(tensor: torch.Tensor, group: ProcessGroup | None, name: str) -> None:
@@ -114,7 +154,7 @@ def all_gather_scalar(
         value = torch.full([1], value, dtype=dtype, device=_get_device(group))
         output_tensor = value.new_empty((group.size(),))
         with set_timeout(group, timeout):
-            torch.distributed.all_gather_into_tensor(output_tensor, value, group=group)
+            all_gather_into_tensor(output_tensor, value, group=group)
         return output_tensor.tolist()
     else:
         return value
