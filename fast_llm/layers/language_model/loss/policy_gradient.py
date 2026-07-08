@@ -700,8 +700,9 @@ def gspo_backward_core(
     return grad_logits
 
 
-# Orchestrator only: the eager `index_add_` segment seam (with the Python-int `num_segments`) sits
-# between the compiled forward and backward cores, so it stays out of every compiled boundary.
+# Orchestrator only: between the compiled forward and backward cores, the segment seam keeps its
+# `index_add_` (with the Python-int `num_segments`) and SDP/SP all-reduces eager, bracketing them with
+# compiled sub-blocks, so `num_segments` never enters a compiled boundary.
 def fused_gspo_loss_forward_backward(
     logits: torch.Tensor,  # (*batch, vocab)
     target: torch.Tensor,  # (*batch,)
