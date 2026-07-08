@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import typing
 
 import torch
@@ -23,6 +24,19 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
         super().__init__(config)
         self._model = model
         self._do_broadcast = self._model.config.distributed.rank == 0
+        # Weight-sync timing, measured on the broadcasting rank only. On CUDA we bracket the sync with
+        # events and read the result one step later (`_weight_sync_pending`), so the always-on timer
+        # never forces a CPU stall on the broadcast, which otherwise overlaps the next step's compute.
+        self._use_cuda_timing = (
+            self._do_broadcast
+            and self._config.broadcast.backend == DistributedBackend.nccl
+            and torch.cuda.is_available()
+        )
+        self._weight_sync_time_ms: float | None = None
+        self._weight_sync_pending = False
+        if self._use_cuda_timing:
+            self._weight_sync_start = torch.cuda.Event(enable_timing=True)
+            self._weight_sync_end = torch.cuda.Event(enable_timing=True)
         if self._do_broadcast:
             self._client = self._config.get_client()
             init_method = f"tcp://{config.broadcast.host}:{config.broadcast.port}"
@@ -50,9 +64,16 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
         reduced_losses: dict[str, float | int],
         update_successful: bool,
         train_metrics: dict[str, typing.Any] | None,
-    ):
+    ) -> dict[str, typing.Any] | None:
+        # Harvest the previous broadcast's timing before re-recording the events on this step's sync.
+        if self._weight_sync_pending and self._weight_sync_end.query():
+            self._weight_sync_time_ms = self._weight_sync_start.elapsed_time(self._weight_sync_end)
+            self._weight_sync_pending = False
         if update_successful:
             self._broadcast_weights(step)
+        if self._weight_sync_time_ms is None:
+            return None
+        return {"weight_sync_time_ms": self._weight_sync_time_ms}
 
     def train_end(self, step: int):
         # TODO: ====== Send something on unsuccessful ends? ======
@@ -74,6 +95,10 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._client.xadd(
                 REDIS_TRAINING_STREAM, {REDIS_TRAINING_FIELD: json.dumps({"type": "weights_ready", "step": step})}
             )
+        if self._use_cuda_timing:
+            self._weight_sync_start.record()
+        elif self._do_broadcast:
+            sync_start_time = time.perf_counter()
         for shard_name, layer_name, tensor in self._model.iter_checkpoint(self._config.export, {}):
             if self._do_broadcast:
                 # TODO: ====== Broadcast metadata in advance =======
@@ -82,3 +107,8 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
         # Broadcast end of weights broadcast
         if self._do_broadcast:
             _broadcast_object(None, self._process_group, src=0)
+        if self._use_cuda_timing:
+            self._weight_sync_end.record()
+            self._weight_sync_pending = True
+        elif self._do_broadcast:
+            self._weight_sync_time_ms = (time.perf_counter() - sync_start_time) * 1000
