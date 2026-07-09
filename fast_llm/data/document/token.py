@@ -36,7 +36,7 @@ class TokenModelInput(BlockModelInput, TokenDocument):
 
     @classmethod
     def share_batch_data(cls, model_inputs: "list[TokenModelInput]", distributed: "Distributed"):
-        if model_inputs[0].num_documents is not None and model_inputs[0].num_documents_in_batch is None:
+        if model_inputs[0].num_documents_in_batch is None:
             # We sum over sequences but not within a sequence.
             num_documents_in_batch = allreduce_scalar(
                 sum(model_input.num_documents for model_input in model_inputs),
