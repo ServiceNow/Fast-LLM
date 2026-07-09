@@ -63,7 +63,6 @@ class PreprocessingTestConfig:
     return_prediction_mask: bool = False
     return_label_counts: bool = False
     return_position_index: bool = False
-    return_document_count: bool = False
     return_cumulative_sequence_lengths: bool = False
 
     @functools.cached_property
@@ -76,7 +75,6 @@ class PreprocessingTestConfig:
             "return_prediction_mask": self.return_prediction_mask,
             "return_label_counts": self.return_label_counts,
             "return_position_index": self.return_position_index,
-            "return_document_count": self.return_document_count,
             "return_cumulative_sequence_lengths": self.return_cumulative_sequence_lengths,
         }
 
@@ -237,11 +235,8 @@ class PreprocessingTestConfig:
         return result
 
     @functools.cached_property
-    def expected_num_documents(self) -> list[int | None]:
-        if self.return_document_count:
-            return [len(self.tokens) if split_index == 0 else 0 for split_index in range(self.micro_batch_splits)]
-        else:
-            return [None] * self.micro_batch_splits
+    def expected_num_documents(self) -> list[int]:
+        return [len(self.tokens) if split_index == 0 else 0 for split_index in range(self.micro_batch_splits)]
 
 
 _BASE_TEST_CASES = [
@@ -313,13 +308,11 @@ _RETURN_CONFIG_VARIANTS: dict[str, dict] = {
     "prediction_mask": {"return_prediction_mask": True},
     "label_counts": {"return_label_counts": True},
     "position_index": {"return_position_index": True},
-    "document_count": {"return_document_count": True},
     "cumulative_sequence_lengths": {"return_cumulative_sequence_lengths": True},
     "all": {
         "return_prediction_mask": True,
         "return_label_counts": True,
         "return_position_index": True,
-        "return_document_count": True,
         "return_cumulative_sequence_lengths": True,
     },
 }
