@@ -263,11 +263,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         metrics_key = PhaseType.training
                         metrics[metrics_key] = {
                             "batch_size": self._batch_size,
-                            **(
-                                {"num_documents": step_num_documents, "documents_seen": self._documents_seen}
-                                if step_num_documents is not None
-                                else {}
-                            ),
+                            "num_documents": step_num_documents,
+                            "documents_seen": self._documents_seen,
                             **{
                                 name: (value / advanced_iters if advanced_iters > 0 else float("nan"))
                                 for name, value in total_losses.items()
