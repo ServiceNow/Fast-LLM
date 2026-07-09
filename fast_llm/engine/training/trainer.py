@@ -239,8 +239,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     skipped_iters += 1
                     nan_iters += not all(math.isfinite(loss) for loss in reduced_losses.values())
 
+                callback_metrics = {}
                 for callback in self._callbacks.values():
-                    callback.step_end(self._completed_steps, reduced_losses, update_successful, train_metrics)
+                    returned_metrics = callback.step_end(
+                        self._completed_steps, reduced_losses, update_successful, train_metrics
+                    )
+                    if returned_metrics:
+                        callback_metrics.update(returned_metrics)
                 # Logging.
                 metrics = {}
                 if is_logging:
@@ -279,6 +284,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             ),
                             "run": self._run.index,
                             **train_metrics,
+                            **callback_metrics,
                             **get_and_reset_memory_usage_mib(),
                         }
 

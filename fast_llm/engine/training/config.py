@@ -397,8 +397,9 @@ class TrainerCallback[ConfigType: TrainerCallbackConfig](Configurable[ConfigType
         reduced_losses: dict[str, float | int],
         update_successful: bool,
         train_metrics: dict[str, typing.Any] | None,
-    ):
-        pass
+    ) -> dict[str, typing.Any] | None:
+        """Optionally return a dict of scalar metrics to merge into the step's training logs."""
+        return None
 
     def train_end(self, step: int):
         pass
