@@ -6,7 +6,7 @@ import torch
 from fast_llm.core.distributed import allreduce_scalar
 from fast_llm.data.document.abstract import Batch, Document
 from fast_llm.data.document.block import BlockModelInput, LengthModelInputPreprocessor
-from fast_llm.data.document.config import TokenPreprocessingConfig
+from fast_llm.data.document.config import LengthPreprocessingConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
@@ -98,7 +98,7 @@ class TokenBatch(Batch, TokenDocument):
 
         return lengths, first_document_begin, document_end
 
-    def _get_model_input(self, begin: int, end: int, config: TokenPreprocessingConfig, *, is_first_for_rank: bool):
+    def _get_model_input(self, begin: int, end: int, config: LengthPreprocessingConfig, *, is_first_for_rank: bool):
         model_input = self._model_input_class(tokens=self.tokens[begin:end])
         lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, end)
 
