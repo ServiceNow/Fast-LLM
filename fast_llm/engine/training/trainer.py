@@ -39,7 +39,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     _wandb: Wandb
     _optimizer: Optimizer | None
     _completed_steps: int
-    _documents_seen: int = 0
+    _documents_seen: int
     _schedule: Schedule
 
     def __init__(self, config: TrainerConfig):
@@ -228,10 +228,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     return_metrics=is_logging,
                 )
 
-                # Cumulative document count across training steps; `None` when the data provides no
-                # document counts.
-                if step_num_documents is not None:
-                    self._documents_seen += step_num_documents
+                # Cumulative document count across training steps.
+                self._documents_seen += step_num_documents
 
                 # Advanced, skipped, and Nan iterations.
                 if update_successful:

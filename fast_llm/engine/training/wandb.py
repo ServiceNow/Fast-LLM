@@ -5,7 +5,6 @@ import yaml
 
 from fast_llm.config import Config
 from fast_llm.engine.config_utils.run import Run
-from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.training.config import WandbConfig
 
 
@@ -44,11 +43,6 @@ class Wandb:
                     wandb_path.write_text(yaml.safe_dump(wandb_config))
             # TODO: Does wandb work with nested configs?
             self._wandb = wandb.init(config=experiment_config.to_dict(), **wandb_config)
-            # Offer `documents_seen` as an alternative (cross-run) x-axis for the training metrics.
-            # `wandb.log(step=...)` still records the global step, so both axes remain available.
-            documents_seen_metric = f"{PhaseType.training}/documents_seen"
-            self._wandb.define_metric(documents_seen_metric)
-            self._wandb.define_metric(f"{PhaseType.training}/*", step_metric=documents_seen_metric)
         else:
             self._wandb = None
 
