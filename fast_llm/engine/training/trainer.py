@@ -228,7 +228,6 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     return_metrics=is_logging,
                 )
 
-                # Cumulative document count across training steps.
                 self._documents_seen += step_num_documents
 
                 # Advanced, skipped, and Nan iterations.
