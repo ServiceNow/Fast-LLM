@@ -54,9 +54,9 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             self._process_group = self._pool.get_process_group(range(world_size), 0)
             logger.info(f"Weights broadcast rendezvous at {init_method} connected")
 
-    def run_begin(self, step: int):
+    def run_begin(self, step: int, documents_seen: int):
         # TODO: ====== Send a train / run begin signal? ======
-        self._broadcast_weights(step)
+        self._broadcast_weights(step, documents_seen)
 
     def step_end(
         self,
@@ -64,13 +64,14 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
         reduced_losses: dict[str, float | int],
         update_successful: bool,
         train_metrics: dict[str, typing.Any] | None,
+        documents_seen: int,
     ) -> dict[str, typing.Any] | None:
         # Harvest the previous broadcast's timing before re-recording the events on this step's sync.
         if self._weight_sync_pending and self._weight_sync_end.query():
             self._weight_sync_time_ms = self._weight_sync_start.elapsed_time(self._weight_sync_end)
             self._weight_sync_pending = False
         if update_successful:
-            self._broadcast_weights(step)
+            self._broadcast_weights(step, documents_seen)
         # Report the last measured sync (not reset between steps): a broadcast runs on ~every step so
         # this stays current, and holding the value keeps a skipped or not-yet-harvested step from
         # dropping the metric.
@@ -93,10 +94,15 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
             del self._pool
             del self._process_group
 
-    def _broadcast_weights(self, step: int):
+    def _broadcast_weights(self, step: int, documents_seen: int):
         if self._do_broadcast:
             self._client.xadd(
-                REDIS_TRAINING_STREAM, {REDIS_TRAINING_FIELD: json.dumps({"type": "weights_ready", "step": step})}
+                REDIS_TRAINING_STREAM,
+                {
+                    REDIS_TRAINING_FIELD: json.dumps(
+                        {"type": "weights_ready", "step": step, "documents_seen": documents_seen}
+                    )
+                },
             )
         weight_sync_start_time = None
         if self._use_cuda_timing:
