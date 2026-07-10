@@ -42,6 +42,10 @@ model:
           epsilon_high: 0.004
           # = 1 / sampling_temperature (temperature 0.7).
           logits_scale_factor: 1.4285714
+          # Log lag/instability diagnostics (staleness, reward, clip fraction, ratio
+          # variance, KL, advantage). `with_entropy` also logs entropy; `none` disables
+          # them and skips the extra softmax. Requires pipeline_parallel == 1.
+          metrics: basic
 
 data:
   # Token budget per micro-batch. Must be >= the longest packed sequence, so it tracks
