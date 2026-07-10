@@ -96,8 +96,6 @@ class StreamingTrainerCallback[ConfigType: StreamingTrainerCallbackConfig](Train
 
     def _broadcast_weights(self, step: int, documents_seen: int):
         if self._do_broadcast:
-            # `documents_seen` is the cumulative document count, which doubles as the model version;
-            # `step` is the raw training step.
             self._client.xadd(
                 REDIS_TRAINING_STREAM,
                 {

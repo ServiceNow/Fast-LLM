@@ -93,6 +93,7 @@ def _run_event_consumer(
         process_group = pool.get_process_group(range(world_size), consumer_rank)
         timeout_ms = int(streaming_config.timeout * 1000)
         last_id = "0-0"
+        last_documents_seen = 0
         while True:
             result = client.xread(
                 streams={REDIS_TRAINING_STREAM: last_id},
@@ -113,7 +114,8 @@ def _run_event_consumer(
                     return
                 elif message["type"] == "weights_ready":
                     Assert.incl("documents_seen", message)
-                    Assert.geq(message["documents_seen"], 0)
+                    Assert.geq(message["documents_seen"], last_documents_seen)
+                    last_documents_seen = message["documents_seen"]
                     weights = {}
                     while True:
                         meta = _broadcast_object(None, process_group, src=0)
