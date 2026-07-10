@@ -842,8 +842,7 @@ def test_gspo_metrics(
     )
 
 
-@pytest.mark.parametrize("include_model_version", (True, False))
-def test_policy_data_metrics(include_model_version):
+def test_policy_data_metrics():
     """`_register_data_metrics` logs reward and staleness (documents_seen - model_version) mean/max/min."""
     config = LanguageModelGRPOLossConfig.from_dict({"metrics": "basic"})
     loss = config.get_layer(DistributedConfig.from_dict({}), name="grpo", prediction_distance=1, prediction_heads=1)
@@ -860,7 +859,7 @@ def test_policy_data_metrics(include_model_version):
     kwargs = {
         LanguageModelLossKwargs.labels: [labels],
         LanguageModelLossKwargs.reward: [reward],
-        LanguageModelLossKwargs.model_version: [model_version] if include_model_version else [None],
+        LanguageModelLossKwargs.model_version: [model_version],
         LanguageModelLossKwargs.label_counts: [label_counts],
         LanguageModelKwargs.num_documents_in_batch: num_documents,
         LanguageModelKwargs.documents_seen: documents_seen,
@@ -874,10 +873,6 @@ def test_policy_data_metrics(include_model_version):
         return (values * masked).sum() / num_documents, values[loss_mask].max(), values[loss_mask].min()
 
     for name, values in (("train_samples_reward", reward), ("staleness", documents_seen - model_version)):
-        if name == "staleness" and not include_model_version:
-            # Declared but not registered (data absent) -> reduces to 0 downstream, no entries here.
-            assert losses[f"grpo_{name}"] == []
-            continue
         mean, maximum, minimum = reference(values)
         Assert.rms_close_relative(losses[f"grpo_{name}"][0], mean, 1e-6)
         Assert.rms_close_relative(losses[f"grpo_max_{name}"][0], maximum, 1e-6)

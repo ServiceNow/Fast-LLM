@@ -148,20 +148,15 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
         # constant / near-constant within a document, so the per-document mean and the token extrema
         # are the natural summaries.
         num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
-        loss_mask = None
+        loss_mask = self._get_labels(kwargs, split_index) >= 0
+        label_counts = self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+        document_weight = loss_mask.float() / label_counts.float().clamp(min=1)
+        neg_inf = document_weight.new_full((), float("-inf"))
+        pos_inf = document_weight.new_full((), float("inf"))
         for metric_name, data_key, reference_key in self._DATA_METRIC_FIELDS:
-            targets = kwargs[data_key]
-            if targets[self._prediction_distance - 1] is None:
-                continue
-            values = self._prepare_target(targets, split_index).float()
+            values = self._prepare_target(kwargs[data_key], split_index).float()
             if reference_key is not None:
                 values = kwargs[reference_key] - values
-            if loss_mask is None:
-                loss_mask = self._get_labels(kwargs, split_index) >= 0
-                label_counts = self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
-                document_weight = loss_mask.float() / label_counts.float().clamp(min=1)
-                neg_inf = values.new_full((), float("-inf"))
-                pos_inf = values.new_full((), float("inf"))
             self._register_loss(
                 f"{self._name}_{metric_name}", (values * document_weight).sum() / num_documents, losses
             )
