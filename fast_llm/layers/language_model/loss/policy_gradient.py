@@ -48,6 +48,18 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
 ):
     """Shared scaffolding for policy-gradient losses (GRPO, GSPO)."""
 
+    # Per-token diagnostics supplied by the rollout producer, logged (mean/max/min) under the given
+    # metric name. Reward is logged as `train_samples_reward`: averaged over the sample-filtered
+    # training batch it is biased, so it is a diagnostic, not a valid policy-performance metric.
+    # Model version is logged as `staleness` (`documents_seen - model_version`, documents-seen units):
+    # how many documents were trained since each token's generating policy was synced. When a field's
+    # reference key is set, its per-token value is subtracted from that whole-batch scalar.
+    _DATA_METRIC_FIELDS = (
+        # (metric_name, data_key, reference_key)
+        ("train_samples_reward", LanguageModelLossKwargs.reward, None),
+        ("staleness", LanguageModelLossKwargs.model_version, LanguageModelKwargs.documents_seen),
+    )
+
     def __init__(
         self,
         config: ConfigType,
@@ -109,6 +121,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             *extra,
             LossDef(f"{self._name}_num_tokens"),
         ]
+        defs.extend(self._data_metric_definitions())
         if self._config.metrics == PolicyMetricsLevel.with_entropy:
             defs.append(LossDef(f"{self._name}_entropy"))
         return defs
@@ -129,6 +142,46 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             self._register_loss(f"{self._name}_num_segments", metrics.num_segments, losses)
         if metrics.entropy is not None:
             self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
+
+    def _register_data_metrics(self, kwargs: dict[str, typing.Any], losses: dict, split_index: int) -> None:
+        # The values are constant / near-constant within a document, so the per-document mean and the
+        # token extrema are the natural summaries.
+        num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
+        loss_mask = self._get_labels(kwargs, split_index) >= 0
+        label_counts = self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+        document_weight = loss_mask.float() / label_counts.float().clamp(min=1)
+        negative_infinity = document_weight.new_full((), float("-inf"))
+        positive_infinity = document_weight.new_full((), float("inf"))
+        for metric_name, data_key, reference_key in self._DATA_METRIC_FIELDS:
+            values = self._prepare_target(kwargs[data_key], split_index)
+            if reference_key is not None:
+                # Subtract before casting: both are large document counts, so casting first would
+                # lose the small difference to float32 rounding.
+                values = kwargs[reference_key] - values
+            values = values.float()
+            self._register_loss(
+                f"{self._name}_{metric_name}", (values * document_weight).sum() / num_documents, losses
+            )
+            self._register_loss(
+                f"{self._name}_max_{metric_name}",
+                torch.where(loss_mask, values, negative_infinity).max(),
+                losses,
+                reduce_op=torch.distributed.ReduceOp.MAX,
+            )
+            self._register_loss(
+                f"{self._name}_min_{metric_name}",
+                torch.where(loss_mask, values, positive_infinity).min(),
+                losses,
+                reduce_op=torch.distributed.ReduceOp.MIN,
+            )
+
+    def _data_metric_definitions(self) -> list[LossDef]:
+        defs = []
+        for name, *_ in self._DATA_METRIC_FIELDS:
+            defs.append(LossDef(f"{self._name}_{name}"))
+            defs.append(LossDef(f"{self._name}_max_{name}", reduction=ReductionType.maximum))
+            defs.append(LossDef(f"{self._name}_min_{name}", reduction=ReductionType.minimum))
+        return defs
 
     def get_loss_definitions(self) -> list[LossDef]:
         defs = super().get_loss_definitions()
@@ -184,6 +237,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](LanguageMod
         # Skip the extra softmax pass when there is nothing to register.
         if losses is not None and self._config.metrics != PolicyMetricsLevel.none:
             self._register_extra_metrics(logits, kwargs, losses, split_index)
+            self._register_data_metrics(kwargs, losses, split_index)
 
         return loss, grad
 
@@ -296,6 +350,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](LanguageMod
         # Skip the extra softmax pass when there is nothing to register.
         if losses is not None and self._config.metrics != PolicyMetricsLevel.none:
             self._register_extra_metrics(logits, kwargs, losses, split_index, document_index_zero_based, num_segments)
+            self._register_data_metrics(kwargs, losses, split_index)
 
         return loss, grad
 

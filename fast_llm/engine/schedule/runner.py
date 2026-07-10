@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 class BatchContext:
     iteration: int
     schedule: Schedule
+    documents_seen: int = 0
     # Index and data: (iteration, data_index, input, kwargs)
     data_iterator: typing.Iterator[tuple[int, torch.Tensor, dict]] = None
     inputs: dict[int, torch.Tensor] = dataclasses.field(default_factory=dict)
@@ -149,6 +150,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         schedule: Schedule,
         *,
         iteration: int = 1,
+        documents_seen: int = 0,
         return_metrics: bool = False,
     ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None, int]:
         assert self._is_setup
@@ -161,6 +163,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         context = BatchContext(
             iteration=iteration,
             schedule=schedule,
+            documents_seen=documents_seen,
             losses={loss_def: [] for loss_def in self._loss_definitions},
             metrics=metrics,
         )
@@ -336,6 +339,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     metrics=context.metrics,
                     extra_kwargs={
                         "grad_output": grad_output,
+                        "documents_seen": context.documents_seen,
                         "micro_batch": micro_batch,
                         "num_micro_batches": self._config.sequential_micro_batches,
                         "micro_batch_splits": self._config.micro_batch_splits,

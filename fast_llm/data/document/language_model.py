@@ -26,6 +26,8 @@ class LanguageModelDocument(TokenDocument):
     image_patches: PatchDocument | None = None
     advantages: TokenDataDocument | None = None
     old_log_probabilities: TokenDataDocument | None = None
+    reward: TokenDataDocument | None = None
+    model_version: TokenDataDocument | None = None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -34,6 +36,8 @@ class LanguageModelTargetInput(ModelInput):
     mask: torch.Tensor | None = None
     advantages: torch.Tensor | None = None
     old_log_probabilities: torch.Tensor | None = None
+    reward: torch.Tensor | None = None
+    model_version: torch.Tensor | None = None
     label_counts: torch.Tensor | None = None
     num_labels: int | None = None
     num_labels_in_batch: int | None = None
@@ -83,6 +87,8 @@ class LanguageModelInput(TokenModelInput):
             LanguageModelKwargs.hidden_states: self.hidden_states,
             LanguageModelKwargs.advantages: [target.advantages for target in self.targets],
             LanguageModelKwargs.old_log_probabilities: [target.old_log_probabilities for target in self.targets],
+            LanguageModelKwargs.reward: [target.reward for target in self.targets],
+            LanguageModelKwargs.model_version: [target.model_version for target in self.targets],
             LanguageModelKwargs.label_counts: [target.label_counts for target in self.targets],
             LanguageModelKwargs.num_labels_in_batch: [target.num_labels_in_batch for target in self.targets],
         }
@@ -105,6 +111,8 @@ class LanguageModelBatch(TokenBatch):
     image_patches: PatchBatch | None = None
     advantages: TokenDataBatch | None = None
     old_log_probabilities: TokenDataBatch | None = None
+    reward: TokenDataBatch | None = None
+    model_version: TokenDataBatch | None = None
 
     @classmethod
     def from_documents(
@@ -122,6 +130,10 @@ class LanguageModelBatch(TokenBatch):
         )
         batch.old_log_probabilities = TokenDataBatch.from_documents(
             [document.old_log_probabilities for document in documents], lengths, pad_to_size
+        )
+        batch.reward = TokenDataBatch.from_documents([document.reward for document in documents], lengths, pad_to_size)
+        batch.model_version = TokenDataBatch.from_documents(
+            [document.model_version for document in documents], lengths, pad_to_size
         )
         return batch
 
@@ -204,6 +216,10 @@ class LanguageModelBatch(TokenBatch):
                     target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(
                         label_begin, label_end
                     )
+                    if self.reward is not None:
+                        target_input.reward = self.reward.get_cropped_data(label_begin, label_end)
+                    if self.model_version is not None:
+                        target_input.model_version = self.model_version.get_cropped_data(label_begin, label_end)
 
                 model_input.targets.append(target_input)
 
