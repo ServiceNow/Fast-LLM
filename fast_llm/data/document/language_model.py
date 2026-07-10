@@ -216,7 +216,6 @@ class LanguageModelBatch(TokenBatch):
                     target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(
                         label_begin, label_end
                     )
-                    # Optional diagnostic data (present only when the producer sends it).
                     if self.reward is not None:
                         target_input.reward = self.reward.get_cropped_data(label_begin, label_end)
                     if self.model_version is not None:
