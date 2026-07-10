@@ -189,7 +189,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
         return defs
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
-        return {"use_grpo_data": True, "return_label_counts": True, "return_document_count": True}
+        return {"use_grpo_data": True, "return_label_counts": True}
 
     @functools.cached_property
     def _logprob_metric_name(self) -> str:
