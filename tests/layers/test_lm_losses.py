@@ -871,7 +871,7 @@ def test_policy_data_metrics(include_model_version):
         values = values.float()
         return (values * masked).sum() / num_documents, values[loss_mask].max(), values[loss_mask].min()
 
-    for name, values in (("reward", reward), ("model_version", model_version)):
+    for name, values in (("train_samples_reward", reward), ("model_version", model_version)):
         if name == "model_version" and not include_model_version:
             # Declared but not registered (data absent) -> reduces to 0 downstream, no entries here.
             assert losses[f"grpo_{name}"] == []

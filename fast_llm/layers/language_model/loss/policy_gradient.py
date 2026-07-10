@@ -48,10 +48,12 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
 ):
     """Shared scaffolding for policy-gradient losses (GRPO, GSPO)."""
 
-    # Per-token diagnostic data supplied by the rollout producer (mean/max/min logged when present).
-    # `reward` is the raw reward; `model_version` the version each token was generated under.
+    # Per-token diagnostics supplied by the rollout producer, logged (mean/max/min) under the given
+    # name. Reward is logged as `train_samples_reward`: averaged over the sample-filtered training
+    # batch it is biased, so it is a diagnostic, not a valid policy-performance metric. `model_version`
+    # is the version each token was generated under.
     _DATA_METRIC_FIELDS = (
-        ("reward", LanguageModelLossKwargs.reward),
+        ("train_samples_reward", LanguageModelLossKwargs.reward),
         ("model_version", LanguageModelLossKwargs.model_version),
     )
 
