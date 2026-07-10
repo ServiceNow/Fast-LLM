@@ -49,12 +49,15 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
     """Shared scaffolding for policy-gradient losses (GRPO, GSPO)."""
 
     # Per-token diagnostics supplied by the rollout producer, logged (mean/max/min) under the given
-    # name. Reward is logged as `train_samples_reward`: averaged over the sample-filtered training
-    # batch it is biased, so it is a diagnostic, not a valid policy-performance metric. `model_version`
-    # is the version each token was generated under.
+    # metric name. Reward is logged as `train_samples_reward`: averaged over the sample-filtered
+    # training batch it is biased, so it is a diagnostic, not a valid policy-performance metric.
+    # Model version is logged as `staleness` (`documents_seen - model_version`, documents-seen units):
+    # how many documents were trained since each token's generating policy was synced. When a field's
+    # reference key is set, its per-token value is subtracted from that whole-batch scalar.
     _DATA_METRIC_FIELDS = (
-        ("train_samples_reward", LanguageModelLossKwargs.reward),
-        ("model_version", LanguageModelLossKwargs.model_version),
+        # (metric_name, data_key, reference_key)
+        ("train_samples_reward", LanguageModelLossKwargs.reward, None),
+        ("staleness", LanguageModelLossKwargs.model_version, LanguageModelKwargs.documents_seen),
     )
 
     def __init__(
@@ -141,31 +144,33 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
 
     def _register_data_metrics(self, kwargs: dict[str, typing.Any], losses: dict, split_index: int) -> None:
-        # Mean (per document), max and min of each supplied per-token diagnostic. `reward` and
-        # `model_version` are constant / near-constant within a document, so the per-document mean and
-        # the token extrema are the natural summaries.
+        # Mean (per document), max and min of each supplied per-token diagnostic. The values are
+        # constant / near-constant within a document, so the per-document mean and the token extrema
+        # are the natural summaries.
         num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
         loss_mask = None
-        for name, key in self._DATA_METRIC_FIELDS:
+        for metric_name, key, reference_key in self._DATA_METRIC_FIELDS:
             targets = kwargs[key]
             if targets[self._prediction_distance - 1] is None:
                 continue
             values = self._prepare_target(targets, split_index).float()
+            if reference_key is not None:
+                values = kwargs[reference_key] - values
             if loss_mask is None:
                 loss_mask = self._get_labels(kwargs, split_index) >= 0
                 label_counts = self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
                 masked = loss_mask.float() / label_counts.float().clamp(min=1)
                 neg_inf = values.new_full((), float("-inf"))
                 pos_inf = values.new_full((), float("inf"))
-            self._register_loss(f"{self._name}_{name}", (values * masked).sum() / num_documents, losses)
+            self._register_loss(f"{self._name}_{metric_name}", (values * masked).sum() / num_documents, losses)
             self._register_loss(
-                f"{self._name}_max_{name}",
+                f"{self._name}_max_{metric_name}",
                 torch.where(loss_mask, values, neg_inf).max(),
                 losses,
                 reduce_op=torch.distributed.ReduceOp.MAX,
             )
             self._register_loss(
-                f"{self._name}_min_{name}",
+                f"{self._name}_min_{metric_name}",
                 torch.where(loss_mask, values, pos_inf).min(),
                 losses,
                 reduce_op=torch.distributed.ReduceOp.MIN,
@@ -173,7 +178,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
 
     def _data_metric_definitions(self) -> list[LossDef]:
         defs = []
-        for name, _ in self._DATA_METRIC_FIELDS:
+        for name, *_ in self._DATA_METRIC_FIELDS:
             defs.append(LossDef(f"{self._name}_{name}"))
             defs.append(LossDef(f"{self._name}_max_{name}", reduction=ReductionType.maximum))
             defs.append(LossDef(f"{self._name}_min_{name}", reduction=ReductionType.minimum))

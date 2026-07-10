@@ -844,7 +844,7 @@ def test_gspo_metrics(
 
 @pytest.mark.parametrize("include_model_version", (True, False))
 def test_policy_data_metrics(include_model_version):
-    """`_register_data_metrics` logs reward (and, when present, model_version) mean/max/min."""
+    """`_register_data_metrics` logs reward and staleness (documents_seen - model_version) mean/max/min."""
     config = LanguageModelGRPOLossConfig.from_dict({"metrics": "basic"})
     loss = config.get_layer(DistributedConfig.from_dict({}), name="grpo", prediction_distance=1, prediction_heads=1)
 
@@ -855,6 +855,7 @@ def test_policy_data_metrics(include_model_version):
     model_version = torch.tensor([5, 5, 5, 7, 8, 9], dtype=torch.int64)
     label_counts = torch.tensor([2, 2, 2, 3, 3, 3], dtype=torch.int32)
     num_documents = 2
+    documents_seen = 100
 
     kwargs = {
         LanguageModelLossKwargs.labels: [labels],
@@ -862,6 +863,7 @@ def test_policy_data_metrics(include_model_version):
         LanguageModelLossKwargs.model_version: [model_version] if include_model_version else [None],
         LanguageModelLossKwargs.label_counts: [label_counts],
         LanguageModelKwargs.num_documents_in_batch: num_documents,
+        LanguageModelKwargs.documents_seen: documents_seen,
     }
     losses = {loss_def.name: [] for loss_def in loss.get_loss_definitions()}
     loss._register_data_metrics(kwargs, losses, 0)
@@ -871,8 +873,8 @@ def test_policy_data_metrics(include_model_version):
         values = values.float()
         return (values * masked).sum() / num_documents, values[loss_mask].max(), values[loss_mask].min()
 
-    for name, values in (("train_samples_reward", reward), ("model_version", model_version)):
-        if name == "model_version" and not include_model_version:
+    for name, values in (("train_samples_reward", reward), ("staleness", documents_seen - model_version)):
+        if name == "staleness" and not include_model_version:
             # Declared but not registered (data absent) -> reduces to 0 downstream, no entries here.
             assert losses[f"grpo_{name}"] == []
             continue
