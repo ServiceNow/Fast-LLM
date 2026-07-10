@@ -708,7 +708,9 @@ update_and_add_testing_config(
     # Tests mixture of experts, mixtral converter.
     "llama",
     "llama_grpo",
-    updates={("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo"}}},
+    # Metrics default to `auto` (→ `basic` when pipeline_parallel == 1); pin `none` so this loss-mechanics
+    # config doesn't register the metric family (metrics are covered by the subtests in `test_lm_losses`).
+    updates={("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo", "metrics": "none"}}},
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,
@@ -724,7 +726,9 @@ update_and_add_testing_config(
 update_and_add_testing_config(
     "llama",
     "llama_gspo",
-    updates={("model", "base_model", "head", "losses"): {"gspo": {"type": "gspo"}}},
+    # Metrics default to `auto`; pin `none` for the same reason as `llama_grpo` (keep this config focused
+    # on loss mechanics; metrics are covered by `test_lm_losses`).
+    updates={("model", "base_model", "head", "losses"): {"gspo": {"type": "gspo", "metrics": "none"}}},
     # `ms*` (micro_batch_splits>1) and `ce*` (cross_entropy_splits>1) both produce
     # multiple kernel calls per micro-batch; GSPO's per-document geometric mean can't be
     # reconstructed from per-fragment `exp(mean)` values, so we skip these variants.
