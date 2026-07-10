@@ -29,6 +29,8 @@ class LanguageModelLossKwargs(BlockKwargs):
     rejected_spans = "rejected_spans"
     advantages = "advantages"
     old_log_probabilities = "old_log_probabilities"
+    reward = "reward"
+    model_version = "model_version"
     label_counts = "label_counts"
     num_labels_in_batch = "num_labels_in_batch"
 
@@ -205,7 +207,7 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
         return LanguageModelZLoss
 
 
-class GRPOMetricsLevel(enum.StrEnum):
+class PolicyMetricsLevel(enum.StrEnum):
     none = "none"
     basic = "basic"
     with_entropy = "with_entropy"
@@ -219,6 +221,16 @@ class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
 
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
+    metrics: PolicyMetricsLevel = Field(
+        default=PolicyMetricsLevel.none,
+        desc=(
+            "Additional diagnostic metrics to log. "
+            "`basic`: importance-ratio, KL and advantage statistics. "
+            "`with_entropy`: also log the policy entropy. "
+            "Not supported with pipeline_parallel > 1."
+        ),
+        hint=FieldHint.feature,
+    )
 
     @property
     def loss_class(self) -> "type[LanguageModelPolicyGradientLoss]":
@@ -235,16 +247,6 @@ class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig):
         default=None,
         desc="Enable triton implementation. Default: use if available.",
         hint=FieldHint.expert,
-    )
-    metrics: GRPOMetricsLevel = Field(
-        default=GRPOMetricsLevel.none,
-        desc=(
-            "Additional GRPO metrics to log. "
-            "`basic`: per-token ratio, KL, and advantage statistics. "
-            "`with_entropy`: also log per-token entropy. "
-            "Not supported with pipeline_parallel > 1."
-        ),
-        hint=FieldHint.feature,
     )
 
     @property

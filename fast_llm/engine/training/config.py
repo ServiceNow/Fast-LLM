@@ -388,7 +388,7 @@ class TrainerConfig(PretrainedFastLLMModelConfig, ExperimentConfig):
 
 class TrainerCallback[ConfigType: TrainerCallbackConfig](Configurable[ConfigType]):
     # TODO: Make a more exhaustive set of events and arguments.
-    def run_begin(self, step: int):
+    def run_begin(self, step: int, documents_seen: int):
         pass
 
     def step_end(
@@ -397,8 +397,10 @@ class TrainerCallback[ConfigType: TrainerCallbackConfig](Configurable[ConfigType
         reduced_losses: dict[str, float | int],
         update_successful: bool,
         train_metrics: dict[str, typing.Any] | None,
-    ):
-        pass
+        documents_seen: int,
+    ) -> dict[str, typing.Any] | None:
+        """Optionally return a dict of scalar metrics to merge into the step's training logs."""
+        return None
 
     def train_end(self, step: int):
         pass

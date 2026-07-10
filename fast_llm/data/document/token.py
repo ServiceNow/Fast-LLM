@@ -6,7 +6,7 @@ import torch
 from fast_llm.core.distributed import allreduce_scalar
 from fast_llm.data.document.abstract import Batch, Document
 from fast_llm.data.document.block import BlockModelInput, LengthModelInputPreprocessor
-from fast_llm.data.document.config import TokenPreprocessingConfig
+from fast_llm.data.document.config import LengthPreprocessingConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.tensor import TensorMeta
@@ -36,7 +36,7 @@ class TokenModelInput(BlockModelInput, TokenDocument):
 
     @classmethod
     def share_batch_data(cls, model_inputs: "list[TokenModelInput]", distributed: "Distributed"):
-        if model_inputs[0].num_documents is not None and model_inputs[0].num_documents_in_batch is None:
+        if model_inputs[0].num_documents_in_batch is None:
             # We sum over sequences but not within a sequence.
             num_documents_in_batch = allreduce_scalar(
                 sum(model_input.num_documents for model_input in model_inputs),
@@ -98,18 +98,17 @@ class TokenBatch(Batch, TokenDocument):
 
         return lengths, first_document_begin, document_end
 
-    def _get_model_input(self, begin: int, end: int, config: TokenPreprocessingConfig, *, is_first_for_rank: bool):
+    def _get_model_input(self, begin: int, end: int, config: LengthPreprocessingConfig, *, is_first_for_rank: bool):
         model_input = self._model_input_class(tokens=self.tokens[begin:end])
         lengths, first_document_begin, last_document_end = self._get_cropped_lengths(begin, end)
 
-        if config.return_document_count:
-            # Set the global whole-batch count on every rank's first microbatch; `share_batch_data`
-            # will sum across DP via `batch_data_group`. (`begin == 0` would only set it on the
-            # SDP rank-0 first microbatch, leaving other SDP ranks with 0 after the DP-only sum.)
-            # Exclude the padding "length" from the document count.
-            model_input.num_documents = (
-                len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0) if is_first_for_rank else 0
-            )
+        # Number of real documents on this rank (excluding the padding "length").
+        num_documents = len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0)
+
+        # Set this rank's document count on its first microbatch; `share_batch_data` DP-sums these
+        # contributions into the whole-batch count. (`begin == 0` would only set it on the SDP
+        # rank-0 first microbatch, leaving other SDP ranks with 0 after the DP-only sum.)
+        model_input.num_documents = num_documents if is_first_for_rank else 0
 
         if config.return_document_index:
             # Globally-consistent 1-based document index per token, computed from the unsliced
@@ -118,19 +117,17 @@ class TokenBatch(Batch, TokenDocument):
             global_cumulative_lengths = torch.from_numpy(padded_cumsum(self.lengths)).to(
                 dtype=torch.int32, device=self.device
             )
-            # Exclude the trailing padding "length" from the count.
-            num_documents_in_sequence = len(self.lengths) - (1 if self.unpadded_length < len(self.tokens) else 0)
             # Padding tokens fall past the last real document, so `searchsorted` would assign them the
             # phantom (num_documents + 1)-th index — one past the per-segment buffer sized by
-            # `num_documents_in_sequence`. Clamp them onto the last real document; their target is masked
-            # so the contribution is zero, and the 1-based index stays within `num_documents_in_sequence`.
+            # `num_documents`. Clamp them onto the last real document; their target is masked
+            # so the contribution is zero, and the 1-based index stays within `num_documents`.
             model_input.global_document_index_q = torch.searchsorted(
                 global_cumulative_lengths,
                 torch.arange(begin, end, device=self.device),
                 side="right",
                 out_int32=True,
-            ).clamp_(max=num_documents_in_sequence)
-            model_input.num_documents_in_sequence = num_documents_in_sequence
+            ).clamp_(max=num_documents)
+            model_input.num_documents_in_sequence = num_documents
 
         LengthModelInputPreprocessor(
             lengths=lengths,
