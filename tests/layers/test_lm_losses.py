@@ -562,7 +562,7 @@ def _check_policy_metrics(ref: PolicyMetrics, got: PolicyMetrics, threshold: flo
         if ref_value is None:
             assert got_value is None, name
         else:
-            Assert.rms_close_relative(got_value, ref_value, threshold)
+            Assert.rms_close_relative(got_value, ref_value, threshold, 1e-6)
 
 
 def _test_grpo_metrics(

@@ -4,9 +4,8 @@ import math
 import typing
 
 import torch
-from torch.distributed import all_reduce, reduce_scatter_tensor
 
-from fast_llm.core.distributed import ProcessGroup
+from fast_llm.core.distributed import ProcessGroup, all_reduce, reduce_scatter_tensor
 from fast_llm.core.ops import gather_op
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
