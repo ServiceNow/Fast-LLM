@@ -144,31 +144,33 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
 
     def _register_data_metrics(self, kwargs: dict[str, typing.Any], losses: dict, split_index: int) -> None:
-        # Mean (per document), max and min of each supplied per-token diagnostic. The values are
-        # constant / near-constant within a document, so the per-document mean and the token extrema
-        # are the natural summaries.
+        # The values are constant / near-constant within a document, so the per-document mean and the
+        # token extrema are the natural summaries.
         num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
         loss_mask = self._get_labels(kwargs, split_index) >= 0
         label_counts = self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
         document_weight = loss_mask.float() / label_counts.float().clamp(min=1)
-        neg_inf = document_weight.new_full((), float("-inf"))
-        pos_inf = document_weight.new_full((), float("inf"))
+        negative_infinity = document_weight.new_full((), float("-inf"))
+        positive_infinity = document_weight.new_full((), float("inf"))
         for metric_name, data_key, reference_key in self._DATA_METRIC_FIELDS:
-            values = self._prepare_target(kwargs[data_key], split_index).float()
+            values = self._prepare_target(kwargs[data_key], split_index)
             if reference_key is not None:
+                # Subtract before casting: both are large document counts, so casting first would
+                # lose the small difference to float32 rounding.
                 values = kwargs[reference_key] - values
+            values = values.float()
             self._register_loss(
                 f"{self._name}_{metric_name}", (values * document_weight).sum() / num_documents, losses
             )
             self._register_loss(
                 f"{self._name}_max_{metric_name}",
-                torch.where(loss_mask, values, neg_inf).max(),
+                torch.where(loss_mask, values, negative_infinity).max(),
                 losses,
                 reduce_op=torch.distributed.ReduceOp.MAX,
             )
             self._register_loss(
                 f"{self._name}_min_{metric_name}",
-                torch.where(loss_mask, values, pos_inf).min(),
+                torch.where(loss_mask, values, positive_infinity).min(),
                 losses,
                 reduce_op=torch.distributed.ReduceOp.MIN,
             )

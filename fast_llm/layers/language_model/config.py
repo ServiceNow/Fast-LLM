@@ -25,7 +25,7 @@ class LanguageModelKwargs(LanguageModelLossKwargs):
     sample_map = "sample_map"
     embedding_map = "embedding_map"
     num_documents_in_batch = "num_documents_in_batch"
-    # Cumulative document count at the start of the step; the staleness reference for `model_version`.
+    # Cumulative document count at the start of the step.
     documents_seen = "documents_seen"
     # TODO: These are generic
     phase = "phase"
