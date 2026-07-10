@@ -335,6 +335,27 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         )
         self._register_policy_metrics(metrics, kwargs, losses)
 
+    def triton_metrics(
+        self,
+        new_log_probs: torch.Tensor,  # flat, from the kernel's shared softmax
+        entropy_per_token: torch.Tensor,  # flat, from the kernel's `Σ exp·logits_norm`
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+    ) -> PolicyMetrics:
+        """GRPO metric family from the triton kernel's shared-softmax outputs, reusing `grpo_metrics_core` so
+        the metrics add no second softmax."""
+        target = self._get_labels(kwargs, split_index)
+        return grpo_metrics_core(
+            new_log_probs.reshape(target.shape),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
+            target >= 0,
+            self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
+            self._config.epsilon_low,
+            self._config.epsilon_high,
+            entropy_per_token.reshape(target.shape),
+        )
+
     def get_loss_definitions(self) -> list[LossDef]:
         return super().get_loss_definitions() + self._policy_metric_definitions()
 
@@ -580,6 +601,48 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
             else None
         )
         return loss, (new_logprobs_mean, metrics), grad_logits
+
+    def compute_triton_seam(
+        self,
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+        max_logits: torch.Tensor,  # (n_rows,)
+        sum_exp_logits: torch.Tensor,  # (n_rows,)
+        predicted_logits: torch.Tensor,  # (n_rows,)
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """GSPO's contribution to the triton monolithic kernel: recover per-token new log-probs from the
+        triton forward pass, run the segment seam, and return the loss, the `new_logprobs` metric, and the
+        flat per-token backward coefficient (`None` when no gradient is requested) the kernel superposes."""
+        target = self._get_labels(kwargs, split_index)
+        loss_mask = target >= 0
+        new_log_probs = (predicted_logits - max_logits - sum_exp_logits.log()).reshape(loss_mask.shape)
+        loss, new_logprobs_mean, effective_grad = self._run_segment_seam(new_log_probs, loss_mask, kwargs, split_index)
+        return loss, new_logprobs_mean, None if effective_grad is None else effective_grad.reshape(-1).contiguous()
+
+    def triton_metrics(
+        self,
+        new_log_probs: torch.Tensor,  # flat, from the kernel's shared softmax
+        entropy_per_token: torch.Tensor,  # flat, from the kernel's `Σ exp·logits_norm`
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+    ) -> PolicyMetrics:
+        """GSPO segment-level metric family from the triton kernel's shared-softmax outputs, reusing
+        `gspo_metrics_core` so the metrics add no second softmax."""
+        target = self._get_labels(kwargs, split_index)
+        return gspo_metrics_core(
+            new_log_probs.reshape(target.shape),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.advantages], split_index),
+            self._prepare_target(kwargs[LanguageModelLossKwargs.old_log_probabilities], split_index),
+            target >= 0,
+            self._document_index_zero_based(kwargs, split_index),
+            kwargs[BlockKwargs.num_documents_in_sequence],
+            self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
+            self._config.epsilon_low,
+            self._config.epsilon_high,
+            entropy_per_token.reshape(target.shape),
+            self._sequence_data_dim.group if self._sequence_data_active else None,
+            self._parallel_dim.group if self._sequence_parallel else None,
+        )
 
     def register_combinable_extras(self, extra: tuple, kwargs: dict[str, typing.Any], losses: dict | None) -> None:
         new_logprobs_mean, metrics = extra

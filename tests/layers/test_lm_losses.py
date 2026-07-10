@@ -14,6 +14,7 @@ from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backward
+from fast_llm.functional.triton.monolithic_loss import triton_monolithic_loss_forward_backward
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.loss.config import (
     LanguageModelDistillationLossConfig,
@@ -748,6 +749,67 @@ def _test_monolithic_loss(
         Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
 
 
+def _test_monolithic_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
+):
+    # The triton monolithic kernel (cross-entropy + z-loss over one softmax) against the sum of the standalone
+    # triton kernels. Both use the same label-count divisor, as the head threads the same divisor to each
+    # combinable child. Tensor-parallel `group` is passed per call for the distributed subtest (case B).
+    if not triton_available:
+        return
+    logits, target, _ = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    divisor = max(int((target >= 0).sum().item()), 1)
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    # Reference: standalone triton cross-entropy then z-loss, accumulating into one gradient buffer.
+    grad_ref = previous_grad.clone() if accumulate else None
+    ce_ref, grad_ref = triton_entropy_loss_forward_backward(
+        local_logits,
+        target,
+        None,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        target_format=TargetFormat.labels,
+        divisor=divisor,
+        block_size=block_size,
+    )
+    z_ref, grad_ref = triton_z_loss_forward_backward(
+        local_logits,
+        None,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        divisor=divisor,
+        block_size=block_size,
+    )
+
+    ce_fused, z_fused, _, _, grad_fused, _, _ = triton_monolithic_loss_forward_backward(
+        local_logits,
+        target.contiguous(),
+        previous_grad.clone() if accumulate else None,
+        logits_scale_factor,
+        group,
+        divisor,
+        ce=(grad_output,),
+        z=(None, grad_output),
+        block_size=block_size,
+    )
+
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(ce_fused, ce_ref, threshold, 1e-6)
+    Assert.rms_close_relative(z_fused, z_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        # The kernel superposes both losses' gradients in fp32 before the single cast; the standalone path
+        # rounds cross-entropy's gradient before z-loss adds to it, so the two differ by up to a rounding step.
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
 @pytest.mark.parametrize(
@@ -806,6 +868,20 @@ def test_monolithic_loss(
     batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
 ):
     _test_monolithic_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_loss_triton(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
 
 
 @pytest.mark.slow
@@ -1018,6 +1094,21 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         logits_scale_factor,
                         loss_masking,
                         dtype,
+                        accumulate,
+                        test_context.group,
+                    )
+            # Triton monolithic composite: the vocab-parallel reduced-softmax path (case B).
+            with test_context.subtest(base_path, f"monolithic-triton-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_loss_triton(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        block_size,
                         accumulate,
                         test_context.group,
                     )

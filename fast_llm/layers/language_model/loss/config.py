@@ -276,6 +276,11 @@ class MonolithicLossConfig(LanguageModelLossConfig):
         desc="The combinable losses sharing a single softmax pass. They must agree on `logits_scale_factor`.",
         hint=FieldHint.core,
     )
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable the triton implementation of the shared-softmax kernel. Default: use if available.",
+        hint=FieldHint.expert,
+    )
 
     def _validate(self) -> None:
         super()._validate()
@@ -289,6 +294,23 @@ class MonolithicLossConfig(LanguageModelLossConfig):
                 raise ValueError(f"Loss `{name}` sets `use_triton`, which has no effect on a fused child loss.")
         # A single softmax serves one effective scale (stacked with the common model scale).
         Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
+        if self.use_triton:
+            # The triton kernel has one slot per loss kind, so it fuses at most one of each.
+            seen_kinds = set()
+            for name, loss in self.losses.items():
+                if isinstance(loss, LanguageModelLabelEntropyLossConfig):
+                    kind = "label"
+                elif isinstance(loss, LanguageModelZLossConfig):
+                    kind = "z_loss"
+                elif isinstance(loss, LanguageModelGSPOLossConfig):
+                    kind = "gspo"
+                elif isinstance(loss, LanguageModelGRPOLossConfig):
+                    kind = "grpo"
+                else:
+                    raise ValueError(f"Loss `{name}` (`{type(loss).__name__}`) has no triton fused implementation.")
+                if kind in seen_kinds:
+                    raise ValueError(f"The triton path fuses at most one `{kind}` loss; `{name}` is a duplicate.")
+                seen_kinds.add(kind)
 
     @property
     def loss_class(self) -> "type[LanguageModelLoss]":
