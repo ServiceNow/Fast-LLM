@@ -121,7 +121,7 @@ class LossEvaluator[ConfigType: LossEvaluatorConfig](Evaluator[ConfigType]):
         begin_time = time.perf_counter()
         total_losses = {loss_def.name: 0.0 for loss_def in self._loss_definitions}
         for iter_ in range(self._config.iterations):
-            iter_losses, _, _ = self._runner.run_step(
+            iter_losses, _, _, _ = self._runner.run_step(
                 self._data_iterator, self._schedule, iteration=completed_evaluation_steps + iter_
             )
             for name, value in iter_losses.items():

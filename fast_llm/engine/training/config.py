@@ -398,8 +398,9 @@ class TrainerCallback[ConfigType: TrainerCallbackConfig](Configurable[ConfigType
         update_successful: bool,
         train_metrics: dict[str, typing.Any] | None,
         documents_seen: int,
-    ):
-        pass
+    ) -> dict[str, typing.Any] | None:
+        """Optionally return a dict of scalar metrics to merge into the step's training logs."""
+        return None
 
     def train_end(self, step: int):
         pass

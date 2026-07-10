@@ -39,6 +39,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     _wandb: Wandb
     _optimizer: Optimizer | None
     _completed_steps: int
+    _documents_seen: int
     _schedule: Schedule
 
     def __init__(self, config: TrainerConfig):
@@ -220,12 +221,14 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
                 # TODO: Data loader hates getting all micro-batches at once.
                 #   (Also preprocessing adds overhead)
-                reduced_losses, update_successful, train_metrics = self._runner.run_step(
+                reduced_losses, update_successful, train_metrics, step_num_documents = self._runner.run_step(
                     train_iterator,
                     self._schedule,
                     iteration=self._completed_steps,
                     return_metrics=is_logging,
                 )
+
+                self._documents_seen += step_num_documents
 
                 # Advanced, skipped, and Nan iterations.
                 if update_successful:
@@ -236,14 +239,17 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     skipped_iters += 1
                     nan_iters += not all(math.isfinite(loss) for loss in reduced_losses.values())
 
+                callback_metrics = {}
                 for callback in self._callbacks.values():
-                    callback.step_end(
+                    returned_metrics = callback.step_end(
                         self._completed_steps,
                         reduced_losses,
                         update_successful,
                         train_metrics,
                         self._documents_seen,
                     )
+                    if returned_metrics:
+                        callback_metrics.update(returned_metrics)
                 # Logging.
                 metrics = {}
                 if is_logging:
@@ -263,6 +269,8 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         metrics_key = PhaseType.training
                         metrics[metrics_key] = {
                             "batch_size": self._batch_size,
+                            "num_documents": step_num_documents,
+                            "documents_seen": self._documents_seen,
                             **{
                                 name: (value / advanced_iters if advanced_iters > 0 else float("nan"))
                                 for name, value in total_losses.items()
@@ -280,6 +288,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                             ),
                             "run": self._run.index,
                             **train_metrics,
+                            **callback_metrics,
                             **get_and_reset_memory_usage_mib(),
                         }
 
@@ -356,6 +365,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             if self._do_train:
                 self._optimizer.reset_state()
             self._completed_steps = 0
+            self._documents_seen = 0
         else:
             log_main_rank(lambda: f"Loading checkpoint from iteration {last_iteration}...")
             self._load_checkpoint(self._config.training.checkpoint, last_iteration)
@@ -393,6 +403,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         metadata = {
             "optimizer": self._optimizer.save(),
             "completed_steps": self._completed_steps,
+            "documents_seen": self._documents_seen,
         }
         if metrics is not None:
             metadata["metrics"] = metrics
@@ -436,6 +447,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             self._completed_steps = metadata["schedules"][PhaseType.training]["completed_steps"]
         else:
             self._completed_steps = metadata["completed_steps"]
+        self._documents_seen = metadata.get("documents_seen", 0)
         # TODO: Move barrier, ok file to FastLLMModel
         safe_barrier(
             self._distributed.world_group,
