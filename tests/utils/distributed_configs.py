@@ -192,6 +192,18 @@ _SINGLE_GPU_TESTING_CONFIGS = [
         num_gpus=1,
         compare_config=_compare_layer_match,
     ),
+    # Gradient accumulation with grad buffers shared across stages.
+    DistributedTestingConfig(
+        name="df4_z2",
+        compare="df4",
+        config_args=[
+            "schedule.depth_first_micro_batches=4",
+            "model.multi_stage.zero_stage=2",
+            "data.micro_batch_size=1024",
+        ],
+        num_gpus=1,
+        compare_config=_compare_layer_match_duplicate_gradients,
+    ),
 ]
 
 SINGLE_GPU_TESTING_CONFIGS = {config.name: config for config in _SINGLE_GPU_TESTING_CONFIGS}
