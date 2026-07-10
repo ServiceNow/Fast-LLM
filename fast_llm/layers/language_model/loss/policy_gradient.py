@@ -149,8 +149,8 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
         # are the natural summaries.
         num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
         loss_mask = None
-        for metric_name, key, reference_key in self._DATA_METRIC_FIELDS:
-            targets = kwargs[key]
+        for metric_name, data_key, reference_key in self._DATA_METRIC_FIELDS:
+            targets = kwargs[data_key]
             if targets[self._prediction_distance - 1] is None:
                 continue
             values = self._prepare_target(targets, split_index).float()
@@ -159,10 +159,12 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             if loss_mask is None:
                 loss_mask = self._get_labels(kwargs, split_index) >= 0
                 label_counts = self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
-                masked = loss_mask.float() / label_counts.float().clamp(min=1)
+                document_weight = loss_mask.float() / label_counts.float().clamp(min=1)
                 neg_inf = values.new_full((), float("-inf"))
                 pos_inf = values.new_full((), float("inf"))
-            self._register_loss(f"{self._name}_{metric_name}", (values * masked).sum() / num_documents, losses)
+            self._register_loss(
+                f"{self._name}_{metric_name}", (values * document_weight).sum() / num_documents, losses
+            )
             self._register_loss(
                 f"{self._name}_max_{metric_name}",
                 torch.where(loss_mask, values, neg_inf).max(),
