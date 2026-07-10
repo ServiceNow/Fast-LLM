@@ -1,0 +1,71 @@
+# Fast-LLM training overrides for GSPO reinforcement learning on Qwen2.5-7B.
+#
+# This is NOT a standalone training config. Reinforcement learning is driven by an
+# external async-RL orchestrator that generates rollouts with vLLM samplers and
+# broadcasts the trainer weights back to the samplers over NCCL each step. The
+# orchestrator builds the base model config by importing the Qwen2.5-7B checkpoint
+# (architecture, vocab, RoPE, tokenizer) and supplies the rollout data stream
+# (packed sequences carrying advantages, sampling log-probabilities and per-document
+# lengths). The keys below are the RL-relevant overrides layered on top of that base
+# config. See `docs/recipes/reinforcement-learning.md` for the full recipe and rationale.
+#
+# Reference run: Qwen2.5-7B (untied head), seed 43, trainer sharded across 4 replicas
+# (ZeRO-3, FSDP size 4). Same recipe as the 0.5B config; the differences are the
+# ZeRO stage and MLP recompute, both to fit the 7B trainer in memory.
+
+model:
+  distributed:
+    # bfloat16 is the default. For a fp16 or fp32 run, set this AND the sampler dtype
+    # to the same value — a trainer/sampler precision mismatch corrupts the importance
+    # ratios and collapses reward. See the "Precision matching" section in the recipe.
+    compute_dtype: bfloat16
+    sequence_data_parallel: 1
+    timeout: 3600
+  multi_stage:
+    # Shard weights, gradients and optimizer state across the trainer replicas.
+    zero_stage: 3
+  base_model:
+    decoder:
+      block:
+        mlp:
+          # Recompute MLP activations in the backward pass to save trainer memory.
+          recompute_level: full
+    head:
+      # Qwen2.5-7B has an untied head; the sampler's fp32-logit path binds here, so
+      # keep the trainer head in fp32 to match it.
+      fp32_lm_head: true
+      losses:
+        # The dict key is a free label; `type` selects the loss. Use `grpo` for GRPO.
+        gspo:
+          type: gspo
+          epsilon_low: 0.003
+          epsilon_high: 0.004
+          # = 1 / sampling_temperature (temperature 0.7).
+          logits_scale_factor: 1.4285714
+
+data:
+  # Token budget per micro-batch. Must be >= the longest packed sequence, so it tracks
+  # the orchestrator's sequence length (10000 here); it cannot be smaller.
+  micro_batch_size: 10000
+
+schedule:
+  depth_first_micro_batches: 48
+  # Accumulate gradients until this many documents (rollouts) are seen, then step.
+  docs_per_step: 256
+
+optimizer:
+  learning_rate:
+    base: 5.0e-7
+    warmup_iterations: 0
+    decay_style: constant
+    decay_iterations: 400
+  # Adjusted for the effective batch multiplier (sqrt-rule, m=4): beta = beta_default**(1/m).
+  beta_1: 0.974004
+  beta_2: 0.999750
+  # 0.3 * docs_per_step.
+  gradient_norm_clipping: 76.8
+
+training:
+  train_iters: 2000
+  checkpoint:
+    interval: 100
