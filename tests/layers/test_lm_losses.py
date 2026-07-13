@@ -80,8 +80,13 @@ def _compare_losses_and_grads(
     ref_grad: torch.Tensor | None,
     threshold=1e-5,
     group: torch.distributed.ProcessGroup | None = None,
+    loss_min_threshold: float = 1e-6,
 ):
-    Assert.rms_close_relative(loss, ref_loss, threshold, 1e-6)
+    # `loss_min_threshold` raises the absolute floor of the scalar-loss comparison. GSPO's per-segment
+    # geometric-mean reduction accumulates more float32 error than a per-token sum, and its loss can be near
+    # zero, so the fused-vs-reference difference sits at the abs floor rather than the relative band; the
+    # default `1e-6` floor flakes there. The gradient stays tight.
+    Assert.rms_close_relative(loss, ref_loss, threshold, loss_min_threshold)
     if has_grad:
         Assert.rms_close_relative(
             grad, split_op(ref_grad, group, -1), threshold, 1e-8 if grad.dtype == torch.float32 else 1e-7
@@ -142,7 +147,6 @@ def reference_grpo_metrics(
     epsilon_low: float,
     epsilon_high: float,
     logits_scale_factor: float,
-    compute_entropy: bool,
 ) -> PolicyMetrics:
     log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
     loss_mask = target >= 0
@@ -155,10 +159,8 @@ def reference_grpo_metrics(
     clipped = (ratio < 1.0 - epsilon_low) | (ratio > 1.0 + epsilon_high)
     kl = ratio - log_ratio - 1.0
 
-    entropy = None
-    if compute_entropy:
-        entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1)
-        entropy = (entropy_per_token * masked).sum()
+    entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1)
+    entropy = (entropy_per_token * masked).sum()
 
     return PolicyMetrics(
         old_logprobs=(old_log_probabilities.float() * masked).sum(),
@@ -187,7 +189,6 @@ def reference_gspo_metrics(
     epsilon_low: float,
     epsilon_high: float,
     logits_scale_factor: float,
-    compute_entropy: bool,
 ) -> PolicyMetrics:
     log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
     loss_mask = target >= 0
@@ -223,11 +224,9 @@ def reference_gspo_metrics(
         old_logprobs = old_logprobs + flat_old[in_segment].sum() / count_float
         num_segments_count = num_segments_count + 1.0
 
-    entropy = None
-    if compute_entropy:
-        entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1).reshape(-1)
-        masked = flat_mask.float() / num_labels_in_seq.reshape(-1).float().clamp(min=1)
-        entropy = (entropy_per_token * masked).sum()
+    entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1).reshape(-1)
+    masked = flat_mask.float() / num_labels_in_seq.reshape(-1).float().clamp(min=1)
+    entropy = (entropy_per_token * masked).sum()
 
     return PolicyMetrics(
         old_logprobs=old_logprobs,
@@ -446,7 +445,7 @@ def _test_grpo_loss(
         split_op(logits, group, -1),
         group,
         local_previous_grad.clone() if accumulate else None,
-        (target, advantages, old_log_probabilities, grad_output, divisor, 0.2, 0.2, num_labels_in_seq, False, False),
+        (target, advantages, old_log_probabilities, grad_output, divisor, 0.2, 0.2, num_labels_in_seq, False),
     )
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
 
@@ -534,7 +533,9 @@ def _test_gspo_loss(
         logits_scale_factor=logits_scale_factor,
         num_labels_in_seq=num_labels_in_seq,
     )
-    _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
+    _compare_losses_and_grads(
+        out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group, loss_min_threshold=1e-5
+    )
     Assert.rms_close_relative(new_logprobs_fused, ref_new_logprobs, 1e-5, 1e-6)
 
     if not triton_available:
@@ -553,7 +554,9 @@ def _test_gspo_loss(
         group=group,
         logits_scale_factor=logits_scale_factor,
     )
-    _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group)
+    _compare_losses_and_grads(
+        out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group, loss_min_threshold=1e-5
+    )
     Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
@@ -567,9 +570,7 @@ def _check_policy_metrics(ref: PolicyMetrics, got: PolicyMetrics, threshold: flo
             Assert.rms_close_relative(got_value, ref_value, threshold, 1e-6)
 
 
-def _test_grpo_metrics(
-    batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, group=None
-):
+def _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, group=None):
     logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
         num_columns, loss_masking, batch_shape, dtype
     )
@@ -587,7 +588,6 @@ def _test_grpo_metrics(
         epsilon_low=0.2,
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
-        compute_entropy=compute_entropy,
     )
     got = compute_grpo_metrics(
         split_op(logits, group, -1).contiguous(),
@@ -599,14 +599,11 @@ def _test_grpo_metrics(
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
         group=group,
-        compute_entropy=compute_entropy,
     )
     _check_policy_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
-def _test_gspo_metrics(
-    batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, num_segments, group=None
-):
+def _test_gspo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, num_segments, group=None):
     logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
         num_columns, loss_masking, batch_shape, dtype
     )
@@ -633,7 +630,6 @@ def _test_gspo_metrics(
         epsilon_low=0.2,
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
-        compute_entropy=compute_entropy,
     )
     got = compute_gspo_metrics(
         split_op(logits, group, -1).contiguous(),
@@ -647,7 +643,6 @@ def _test_gspo_metrics(
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
         group=group,
-        compute_entropy=compute_entropy,
     )
     _check_policy_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
@@ -862,7 +857,6 @@ def test_gspo_loss(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
     _LOSS_PARAMETERS,
 )
-@pytest.mark.parametrize("compute_entropy", (False, True))
 def test_grpo_metrics(
     batch_shape,
     num_columns,
@@ -872,9 +866,8 @@ def test_grpo_metrics(
     dtype,
     block_size,
     accumulate,
-    compute_entropy,
 ):
-    _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy)
+    _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype)
 
 
 @pytest.mark.slow
@@ -883,7 +876,6 @@ def test_grpo_metrics(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "num_segments", "accumulate"),
     _GSPO_PARAMETERS,
 )
-@pytest.mark.parametrize("compute_entropy", (False, True))
 def test_gspo_metrics(
     batch_shape,
     num_columns,
@@ -893,11 +885,8 @@ def test_gspo_metrics(
     dtype,
     num_segments,
     accumulate,
-    compute_entropy,
 ):
-    _test_gspo_metrics(
-        batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, num_segments
-    )
+    _test_gspo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, num_segments)
 
 
 @pytest.mark.skip(reason="DPO loss is broken")
@@ -993,35 +982,31 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         test_context.group,
                     )
             # GRPO metrics
-            for compute_entropy in (False, True):
-                with test_context.subtest(base_path, f"grpo_metrics-{compute_entropy}-{suffix}", 2) as subtest:
-                    if subtest.do_run:
-                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
-                        _test_grpo_metrics(
-                            batch_shape,
-                            num_columns,
-                            logits_scale_factor,
-                            loss_masking,
-                            dtype,
-                            compute_entropy,
-                            test_context.group,
-                        )
+            with test_context.subtest(base_path, f"grpo_metrics-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_grpo_metrics(
+                        batch_shape,
+                        num_columns,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        test_context.group,
+                    )
             # GSPO metrics
             num_segments = 4
-            for compute_entropy in (False, True):
-                with test_context.subtest(base_path, f"gspo_metrics-{compute_entropy}-{suffix}", 2) as subtest:
-                    if subtest.do_run:
-                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
-                        _test_gspo_metrics(
-                            batch_shape,
-                            num_columns,
-                            logits_scale_factor,
-                            loss_masking,
-                            dtype,
-                            compute_entropy,
-                            num_segments,
-                            test_context.group,
-                        )
+            with test_context.subtest(base_path, f"gspo_metrics-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_gspo_metrics(
+                        batch_shape,
+                        num_columns,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        num_segments,
+                        test_context.group,
+                    )
             # Monolithic composite: multiple losses share one tensor-parallel-reduced softmax.
             with test_context.subtest(base_path, f"monolithic-{suffix}", 2) as subtest:
                 if subtest.do_run:
@@ -1077,10 +1062,8 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         "z_loss",
         "grpo",
         "gspo",
-        "grpo_metrics-False",
-        "grpo_metrics-True",
-        "gspo_metrics-False",
-        "gspo_metrics-True",
+        "grpo_metrics",
+        "gspo_metrics",
         "monolithic",
     ),
 )

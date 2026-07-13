@@ -211,7 +211,7 @@ class LanguageModelZLossConfig(CombinableLossConfig):
 class PolicyMetricsLevel(enum.StrEnum):
     none = "none"
     basic = "basic"
-    with_entropy = "with_entropy"
+    auto = "auto"
 
 
 @config_class()
@@ -223,12 +223,13 @@ class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
     metrics: PolicyMetricsLevel = Field(
-        default=PolicyMetricsLevel.none,
+        default=PolicyMetricsLevel.auto,
         desc=(
-            "Additional diagnostic metrics to log. "
-            "`basic`: importance-ratio, KL and advantage statistics. "
-            "`with_entropy`: also log the policy entropy. "
-            "Not supported with pipeline_parallel > 1."
+            "Diagnostic metrics to log. "
+            "`basic`: importance-ratio, KL, advantage statistics and the policy entropy. "
+            "`auto`: `basic` when `pipeline_parallel == 1`, else `none`. "
+            "`none`: disable, adding no cost. "
+            "`basic` is not supported with `pipeline_parallel > 1`."
         ),
         hint=FieldHint.feature,
     )
@@ -286,10 +287,6 @@ class MonolithicLossConfig(LanguageModelLossConfig):
                 )
             if loss.use_triton is not None:
                 raise ValueError(f"Loss `{name}` sets `use_triton`, which has no effect on a fused child loss.")
-            # GSPO's per-segment metrics need the eager segment aggregation, which the shared-softmax path
-            # defers to the backward seam; the composite emits only its loss, so metrics would be dropped.
-            if isinstance(loss, LanguageModelGSPOLossConfig) and loss.metrics != PolicyMetricsLevel.none:
-                raise ValueError(f"Loss `{name}` requests GSPO metrics, which are unavailable in a monolithic loss.")
         # A single softmax serves one effective scale (stacked with the common model scale).
         Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
 

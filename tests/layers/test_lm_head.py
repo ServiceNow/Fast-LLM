@@ -13,7 +13,12 @@ from fast_llm.layers.language_model.head import LanguageModelHead
 from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
-from tests.layers.test_lm_losses import reference_grpo_loss, reference_grpo_metrics, reference_gspo_loss
+from tests.layers.test_lm_losses import (
+    reference_grpo_loss,
+    reference_grpo_metrics,
+    reference_gspo_loss,
+    reference_gspo_metrics,
+)
 from tests.utils.utils import get_base_model, get_stage
 
 NUM_TOKENS = 200
@@ -42,6 +47,7 @@ class LMHeadTestConfig:
     gspo_document_lengths: tuple[int, ...] | None = None
     loss_implementation: str = "per_loss"
     grpo_metrics: str | None = None
+    gspo_metrics: str | None = None
 
     @property
     def actual_label_loss(self):
@@ -80,13 +86,13 @@ class LMHeadTestConfig:
             if isinstance(self.z_loss, float):
                 losses["z_loss"]["weight"] = self.z_loss
         if self.grpo_loss is not False:
-            losses["grpo_loss"] = {"type": "grpo"}
+            # Metrics default to `auto` (→ `basic` at `pipeline_parallel == 1`), so pin `none` explicitly
+            # unless the test exercises them.
+            losses["grpo_loss"] = {"type": "grpo", "metrics": self.grpo_metrics or "none"}
             if isinstance(self.grpo_loss, float):
                 losses["grpo_loss"]["weight"] = self.grpo_loss
-            if self.grpo_metrics is not None:
-                losses["grpo_loss"]["metrics"] = self.grpo_metrics
         if self.gspo_loss is not False:
-            losses["gspo_loss"] = {"type": "gspo"}
+            losses["gspo_loss"] = {"type": "gspo", "metrics": self.gspo_metrics or "none"}
             if isinstance(self.gspo_loss, float):
                 losses["gspo_loss"]["weight"] = self.gspo_loss
         if self.loss_implementation == "fused" and losses:
@@ -297,7 +303,6 @@ class LMHeadTestConfig:
                     epsilon_low=0.2,
                     epsilon_high=0.2,
                     logits_scale_factor=1.0,
-                    compute_entropy=self.grpo_metrics == "with_entropy",
                 )
                 num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
                 for attr in ("old_logprobs", "ratio_new_old", "kl_new_old", "clipped_ratio_fraction", "advantage"):
@@ -306,8 +311,7 @@ class LMHeadTestConfig:
                     names_losses_weights.append((f"grpo_loss_{attr}", getattr(metrics, attr), 0.0))
                 names_losses_weights.append(("grpo_loss_max_advantage", metrics.max_advantage, 0.0))
                 names_losses_weights.append(("grpo_loss_min_advantage", metrics.min_advantage, 0.0))
-                if metrics.entropy is not None:
-                    names_losses_weights.append(("grpo_loss_entropy", metrics.entropy / num_documents, 0.0))
+                names_losses_weights.append(("grpo_loss_entropy", metrics.entropy / num_documents, 0.0))
 
         if self.gspo_loss is not False:
             gspo_loss, _ = reference_gspo_loss(
@@ -338,6 +342,30 @@ class LMHeadTestConfig:
             new_logprobs = torch.stack(document_means).mean()
             names_losses_weights.append(("gspo_loss", gspo_loss, float(self.gspo_loss)))
             names_losses_weights.append(("gspo_loss_new_logprobs", new_logprobs, 0.0))
+
+            if self.gspo_metrics is not None:
+                # `logits` is already scaled above, so pass logits_scale_factor=1.0.
+                metrics = reference_gspo_metrics(
+                    logits,
+                    labels,
+                    kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
+                    kwargs[BlockKwargs.global_document_index_q].long() - 1,
+                    kwargs[BlockKwargs.num_documents_in_sequence],
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    epsilon_low=0.2,
+                    epsilon_high=0.2,
+                    logits_scale_factor=1.0,
+                )
+                num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
+                for attr in ("old_logprobs", "ratio_new_old", "kl_new_old", "clipped_ratio_fraction", "advantage"):
+                    names_losses_weights.append((f"gspo_loss_{attr}", getattr(metrics, attr) / num_documents, 0.0))
+                for attr in ("ratio_new_old_sum", "ratio_new_old_squared_sum", "num_tokens"):
+                    names_losses_weights.append((f"gspo_loss_{attr}", getattr(metrics, attr), 0.0))
+                names_losses_weights.append(("gspo_loss_max_advantage", metrics.max_advantage, 0.0))
+                names_losses_weights.append(("gspo_loss_min_advantage", metrics.min_advantage, 0.0))
+                names_losses_weights.append(("gspo_loss_num_segments", metrics.num_segments, 0.0))
+                names_losses_weights.append(("gspo_loss_entropy", metrics.entropy / num_documents, 0.0))
 
         actual_losses = [loss * weight for _, loss, weight in names_losses_weights if weight != 0.0]
         total_loss = sum(actual_losses)
@@ -456,22 +484,31 @@ for _loss_masking in (False, True):
             loss_implementation="fused",
         )
     )
-# GRPO metric family. Single-split only: per-split metric partials reduce across splits, which the
-# whole-sequence reference doesn't model.
+# GRPO/GSPO metric families (`basic` includes entropy) on the standalone and compiled shared-softmax paths.
+# Single-split only: per-split metric partials reduce across splits, which the whole-sequence reference
+# doesn't model.
 for _loss_implementation in ("per_loss", "fused"):
     _prefix = "" if _loss_implementation == "per_loss" else "fused_"
-    for _metrics in ("basic", "with_entropy"):
-        _suffix = "metrics" if _metrics == "basic" else "entropy"
-        for _loss_masking in (False, True):
-            _lm_head_test_configs.append(
-                LMHeadTestConfig(
-                    f"{_prefix}grpo_loss_{_suffix}{'_masked' if _loss_masking else ''}",
-                    grpo_loss=True,
-                    grpo_metrics=_metrics,
-                    loss_masking=_loss_masking,
-                    loss_implementation=_loss_implementation,
-                )
+    for _loss_masking in (False, True):
+        _mask_suffix = "_masked" if _loss_masking else ""
+        _lm_head_test_configs.append(
+            LMHeadTestConfig(
+                f"{_prefix}grpo_loss_metrics{_mask_suffix}",
+                grpo_loss=True,
+                grpo_metrics="basic",
+                loss_masking=_loss_masking,
+                loss_implementation=_loss_implementation,
             )
+        )
+        _lm_head_test_configs.append(
+            LMHeadTestConfig(
+                f"{_prefix}gspo_loss_metrics{_mask_suffix}",
+                gspo_loss=True,
+                gspo_metrics="basic",
+                loss_masking=_loss_masking,
+                loss_implementation=_loss_implementation,
+            )
+        )
 # The metric family co-resides with z-loss in the shared softmax pass. Single-split (metrics can't be split).
 for _loss_masking in (False, True):
     _lm_head_test_configs.append(
@@ -484,6 +521,9 @@ for _loss_masking in (False, True):
             loss_implementation="fused",
         )
     )
+# `auto` metrics resolve to `basic` when pipeline_parallel == 1 (all head tests), covering the default path.
+_lm_head_test_configs.append(LMHeadTestConfig("grpo_loss_metrics_auto", grpo_loss=True, grpo_metrics="auto"))
+_lm_head_test_configs.append(LMHeadTestConfig("gspo_loss_metrics_auto", gspo_loss=True, gspo_metrics="auto"))
 
 
 @pytest.mark.slow
