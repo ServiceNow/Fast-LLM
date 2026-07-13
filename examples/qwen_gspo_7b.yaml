@@ -25,10 +25,11 @@ model:
     sequence_data_parallel: 1
     timeout: 3600
   multi_stage:
-    # ZeRO-2 shards optimizer state + gradients across the 4-GPU trainer (parameters stay
-    # replicated). Sufficient here and avoids ZeRO-3's per-step parameter all-gather. Bump
-    # to 3 only if the trainer OOMs — the fp32 lm-head logits are the large transient.
-    zero_stage: 2
+    # ZeRO-3 shards parameters too (on top of optimizer state + gradients). With MLP
+    # recompute already on, the 4-GPU trainer runs near its memory limit, so ZeRO-2's
+    # replicated parameters may not fit — stage 3 is the safe default. Drop to 2 only if
+    # there is headroom (2 avoids the per-step parameter all-gather).
+    zero_stage: 3
   base_model:
     decoder:
       block:
