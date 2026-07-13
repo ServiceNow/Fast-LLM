@@ -21,7 +21,9 @@ model:
     sequence_data_parallel: 1
     timeout: 3600
   multi_stage:
-    zero_stage: 2
+    # Single trainer GPU (FSDP size 1) — ZeRO shards across nothing, so the stage is a
+    # no-op; 1 is the minimal choice. Raise only if the trainer is sharded over >1 GPU.
+    zero_stage: 1
   base_model:
     head:
       # Keep the LM head in fp32 to match the sampler's fp32-logit path (cross-engine

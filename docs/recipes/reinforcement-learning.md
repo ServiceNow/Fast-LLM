@@ -92,9 +92,14 @@ Per-size differences:
 | | Qwen2.5-0.5B | Qwen2.5-7B |
 | --- | --- | --- |
 | Head | tied | untied |
-| `zero_stage` | `2` | `3` |
+| `zero_stage` | `1` | `2` |
 | `mlp.recompute_level` | — | `full` |
 | Trainer sharding | 1 replica (FSDP size 1) | 4 replicas (FSDP size 4) |
+
+At FSDP size 1 (the 0.5B trainer) ZeRO shards across nothing, so the stage is a no-op —
+`1` is simply the minimal setting. On the 4-GPU 7B trainer, ZeRO-2 shards optimizer state
+and gradients (enough) and avoids ZeRO-3's per-step parameter all-gather; go to `3` only if
+it OOMs (the fp32 lm-head logits are the large transient).
 
 Each size was run in three precision arms — **bf16** (default), **fp16-matched**, and
 **fp32-matched** — alongside a **DeepSpeed** parity baseline (see
@@ -135,7 +140,7 @@ GSPO epsilon.
 
 ## 🧮 DeepSpeed parity baseline
 
-For A/B comparison against a DeepSpeed ZeRO-3 trainer, match these on the DeepSpeed side:
+For A/B comparison against a DeepSpeed trainer, match these on the DeepSpeed side:
 
 | Fast-LLM | DeepSpeed equivalent |
 | --- | --- |
@@ -145,9 +150,15 @@ For A/B comparison against a DeepSpeed ZeRO-3 trainer, match these on the DeepSp
 | `schedule.docs_per_step: 256` | `gradient_accumulation_passes: 256` |
 | `optimizer.beta_1/beta_2` | Adam `beta1/beta2` (same values) |
 | `fp32_lm_head: true` | fp32 LM head (matched) |
+| `multi_stage.zero_stage: 1 / 2` | `deepspeed_config: deepspeed_stage{1,2}_bf16` |
 
-DeepSpeed runs ZeRO-3 bf16 with gradient checkpointing. The samplers, temperature,
-`epsilon`, seed, and sequence shape are identical across both trainers.
+The orchestrator's DeepSpeed trainer picks its ZeRO stage from its own DeepSpeed config
+(a `deepspeed_config` selecting a stage JSON), independently of the Fast-LLM `zero_stage`.
+The ZeRO stage is a memory/sharding choice and is mathematically equivalent across stages,
+so it does **not** affect the reward comparison and the two trainers need not match — pick
+the lowest stage that fits (stage 1 for a single-GPU trainer, stage 2 for the 4-GPU 7B
+trainer). The samplers, temperature, `epsilon`, seed, and sequence shape are identical
+across both trainers.
 
 ## 📊 Measuring lag and instability
 

@@ -22,8 +22,10 @@ model:
     sequence_data_parallel: 1
     timeout: 3600
   multi_stage:
-    # Shard weights, gradients and optimizer state across the trainer replicas.
-    zero_stage: 3
+    # ZeRO-2 shards optimizer state + gradients across the 4-GPU trainer (parameters stay
+    # replicated). Sufficient here and avoids ZeRO-3's per-step parameter all-gather. Bump
+    # to 3 only if the trainer OOMs — the fp32 lm-head logits are the large transient.
+    zero_stage: 2
   base_model:
     decoder:
       block:
