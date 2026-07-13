@@ -59,7 +59,24 @@ def triton_monolithic_loss_forward_backward_kernel(
         label_valid = label_idx >= 0
         label_idx -= col_min
 
-    if max_logits_ptr is None or sum_exp_logits_ptr is None:
+    # A masked row of a single label-based loss (nothing else needs the softmax on a label-less row) contributes
+    # only zeros. The active-loss *set* is compile-time; only the per-token mask is runtime. Skip such a row's
+    # softmax and backward `exp` — but via a branch, not an early `return` (a mid-kernel return compiles into
+    # heavy register spills in this large kernel), so the masked-row work drops without hurting the valid path.
+    row_inactive = (
+        (not label_valid)
+        and z_losses_ptr is None
+        and gspo_coeff_ptr is None
+        and weighted_logits_sum_ptr is None
+        and (ce_losses_ptr is not None or grpo_losses_ptr is not None)
+    )
+    # Defaults keep the softmax outputs defined on the inactive path (whose backward branch never reads them).
+    exp_logits = tl.zeros([block_size], tl.float32)
+    max_logits = 0.0
+    sum_exp_logits = 1.0
+    if row_inactive:
+        pass
+    elif max_logits_ptr is None or sum_exp_logits_ptr is None:
         exp_logits, sum_exp_logits, max_logits, col_offsets, mask = triton_fused_softmax_base(
             logits_ptr, n_cols=n_cols, block_size=block_size, logits_scale_factor=logits_scale_factor
         )
@@ -136,22 +153,26 @@ def triton_monolithic_loss_forward_backward_kernel(
         weighted_logits_sum = 0.0
         col_offset_start: tl.constexpr = (n_cols - 1) // block_size * block_size
         for col_offset in tl.static_range(col_offset_start, -1, -block_size):
-            if max_logits_ptr is not None or sum_exp_logits_ptr is not None or col_offset != col_offset_start:
-                col_offsets = tl_arange(col_offset, col_offset + block_size)
-                mask = col_offsets < n_cols
-                logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
-                if logits_scale_factor != 1.0:
-                    logits *= logits_scale_factor
-                exp_logits = tl.exp(logits - max_logits)
-                if weighted_logits_sum_ptr is not None:
-                    # Local (per-rank) Σ exp·logits_norm feeding the policy entropy; the caller all-reduces
-                    # over the vocab group. Zero `logits_norm` on masked columns first (they load as -inf),
-                    # so the product is 0 there rather than 0·-inf = nan. `max_logits` is final here (this is
-                    # the backward re-stream), so the accumulation needs no online rescaling.
-                    weighted_logits_sum += tl.sum(exp_logits * tl.where(mask, logits - max_logits, 0.0), 0)
-            grad_logits = prob_coeff * (exp_logits / sum_exp_logits)
-            if label_valid:
-                grad_logits = tl.where(col_offsets == label_idx, grad_logits - label_coeff, grad_logits)
+            col_offsets = tl_arange(col_offset, col_offset + block_size)
+            mask = col_offsets < n_cols
+            if row_inactive:
+                # No softmax was computed for this row; its gradient is exactly zero.
+                grad_logits = col_offsets * 0.0
+            else:
+                if max_logits_ptr is not None or sum_exp_logits_ptr is not None or col_offset != col_offset_start:
+                    logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
+                    if logits_scale_factor != 1.0:
+                        logits *= logits_scale_factor
+                    exp_logits = tl.exp(logits - max_logits)
+                    if weighted_logits_sum_ptr is not None:
+                        # Local (per-rank) Σ exp·logits_norm feeding the policy entropy; the caller all-reduces
+                        # over the vocab group. Zero `logits_norm` on masked columns first (they load as -inf),
+                        # so the product is 0 there rather than 0·-inf = nan. `max_logits` is final here (this is
+                        # the backward re-stream), so the accumulation needs no online rescaling.
+                        weighted_logits_sum += tl.sum(exp_logits * tl.where(mask, logits - max_logits, 0.0), 0)
+                grad_logits = prob_coeff * (exp_logits / sum_exp_logits)
+                if label_valid:
+                    grad_logits = tl.where(col_offsets == label_idx, grad_logits - label_coeff, grad_logits)
             grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
             if accumulate:
                 grad_logits += tl.load(grad_logits_col_ptr, mask=mask)

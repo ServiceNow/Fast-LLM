@@ -505,6 +505,11 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
             logits_norm, target, loss_mask, group
         )
         new_log_probs = predicted_logits - sum_exp_logits.log()
+        # Reduce the vocab-wide entropy here, inside the compiled boundary, rather than holding `logits_norm`
+        # (a full-vocab tensor) across the eager seam for `finish` to reduce eagerly.
+        entropy_per_token = (
+            _policy_entropy_per_token(logits_norm, exp_logits, sum_exp_logits, group) if compute_metrics else None
+        )
         return (
             None,
             None,
@@ -515,7 +520,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
                 sum_exp_logits,
                 target_masked,
                 target_mask,
-                logits_norm,
+                entropy_per_token,
                 compute_metrics,
             ),
         )
@@ -562,7 +567,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
             sum_exp_logits,
             target_masked,
             target_mask,
-            logits_norm,
+            entropy_per_token,
             compute_metrics,
         ) = extra
         loss, new_logprobs_mean, effective_grad = self._run_segment_seam(new_log_probs, loss_mask, kwargs, split_index)
@@ -588,12 +593,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
                 self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index),
                 self._config.epsilon_low,
                 self._config.epsilon_high,
-                _policy_entropy_per_token(
-                    logits_norm,
-                    exp_logits,
-                    sum_exp_logits,
-                    self._parallel_dim.group if self._vocab_parallel else None,
-                ),
+                entropy_per_token,
                 self._sequence_data_dim.group if self._sequence_data_active else None,
                 self._parallel_dim.group if self._sequence_parallel else None,
             )
@@ -826,6 +826,24 @@ def gspo_metrics_core(
     )
 
 
+@torch.compile
+def _gspo_metrics_forward(
+    logits: torch.Tensor,  # (*batch, vocab_local)
+    target: torch.Tensor,  # (*batch,)
+    loss_mask: torch.Tensor,  # (*batch,) bool
+    logits_scale_factor: float,
+    group: torch.distributed.ProcessGroup | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Vocab-wide part of the standalone GSPO metrics, fused in one compiled pass: softmax, predicted logits
+    and per-token entropy. The segment `index_add_` keeps `gspo_metrics_core` eager (unlike the fully-compiled
+    `compute_grpo_metrics`), so this pulls the vocab pass into one boundary rather than leaving the entropy as
+    an eager reduction over a vocab-wide temporary."""
+    logits_norm, exp_logits, sum_exp_logits, _ = softmax_base(logits, logits_scale_factor, group)
+    predicted_logits, _, _ = predicted_logits_from_labels(logits_norm, target, loss_mask, group)
+    new_log_probs = predicted_logits - sum_exp_logits.log()
+    return new_log_probs, _policy_entropy_per_token(logits_norm, exp_logits, sum_exp_logits, group)
+
+
 def compute_gspo_metrics(
     logits: torch.Tensor,  # (*batch, vocab_local)
     target: torch.Tensor,  # (*batch,)
@@ -841,11 +859,9 @@ def compute_gspo_metrics(
     sdp_group: torch.distributed.ProcessGroup | None = None,
     sp_group: torch.distributed.ProcessGroup | None = None,
 ) -> PolicyMetrics:
-    """Standalone segment-level diagnostics: one softmax over the logits, then the shared `gspo_metrics_core`."""
+    """Standalone segment-level diagnostics: a fused softmax + entropy pass, then the shared `gspo_metrics_core`."""
     loss_mask = target >= 0
-    logits_norm, exp_logits, sum_exp_logits, _ = fused_softmax_base(logits, logits_scale_factor, group)
-    predicted_logits, _, _ = fused_predicted_logits_from_labels(logits_norm, target, loss_mask, group)
-    new_log_probs = predicted_logits - sum_exp_logits.log()
+    new_log_probs, entropy_per_token = _gspo_metrics_forward(logits, target, loss_mask, logits_scale_factor, group)
     return gspo_metrics_core(
         new_log_probs,
         advantages,
@@ -856,7 +872,7 @@ def compute_gspo_metrics(
         label_counts,
         epsilon_low,
         epsilon_high,
-        _policy_entropy_per_token(logits_norm, exp_logits, sum_exp_logits, group),
+        entropy_per_token,
         sdp_group,
         sp_group,
     )

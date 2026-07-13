@@ -810,6 +810,49 @@ def _test_monolithic_loss_triton(
         Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
 
 
+def _test_monolithic_single_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
+):
+    # A single cross-entropy loss through the monolithic kernel. With masking this exercises the masked-row
+    # early-return (no z-loss / GSPO / metrics need the softmax on such a row), which must match the standalone
+    # triton cross-entropy exactly — the skip only avoids work that would have summed to zero.
+    if not triton_available:
+        return
+    logits, target, _ = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    divisor = max(int((target >= 0).sum().item()), 1)
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    ce_ref, grad_ref = triton_entropy_loss_forward_backward(
+        local_logits,
+        target,
+        None,
+        grad_logits=previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        target_format=TargetFormat.labels,
+        divisor=divisor,
+        block_size=block_size,
+    )
+    ce_fused, _, _, _, grad_fused, _, _ = triton_monolithic_loss_forward_backward(
+        local_logits,
+        target.contiguous(),
+        previous_grad.clone() if accumulate else None,
+        logits_scale_factor,
+        group,
+        divisor,
+        ce=(grad_output,),
+        block_size=block_size,
+    )
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(ce_fused, ce_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-7)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
 @pytest.mark.parametrize(
@@ -880,6 +923,20 @@ def test_monolithic_loss_triton(
     batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
 ):
     _test_monolithic_loss_triton(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_single_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_single_loss_triton(
         batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
     )
 
