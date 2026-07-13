@@ -1,4 +1,7 @@
-# Fast-LLM training overrides for GSPO reinforcement learning on Qwen2.5-7B.
+# ILLUSTRATIVE EXCERPT of the Fast-LLM knobs for GSPO RL on Qwen2.5-7B — NOT the operative
+# config and NOT standalone-runnable. A run is driven by a single committed hydra config in
+# the RL orchestrator; this file is a readable reference for the fast_llm.* values only. To
+# change a run, edit that hydra config, not this file.
 #
 # This is NOT a standalone training config. Reinforcement learning is driven by an
 # external async-RL orchestrator that generates rollouts with vLLM samplers and

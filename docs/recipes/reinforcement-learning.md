@@ -16,14 +16,20 @@ Qwen2.5 experiments, and the reasoning behind each setting. The orchestration la
 rollout data pipeline, and the reward model are out of scope — this page is about how to
 configure the Fast-LLM trainer.
 
-Two ready-to-adapt override fragments accompany this page:
+The **operative config is a single committed file on the orchestrator side** — one hydra
+config that pins every hyperparameter for the run (both the orchestrator/DeepSpeed settings
+and the Fast-LLM `fast_llm:` subtree) and is what the launcher composes; the launch command
+itself carries no hyperparameters, only environment (paths, W&B identity). That file is the
+source of truth for a run.
+
+Two illustrative excerpts accompany this page as a readable reference for the Fast-LLM half
+of that config — they are **not** the operative source and **not** standalone-runnable (the
+model architecture is imported from the Qwen2.5 checkpoint and the data comes from the
+stream); treat them as documentation of the knobs, and edit the orchestrator hydra config to
+actually change a run:
 
 - [`examples/qwen_gspo_0.5b.yaml`](https://github.com/ServiceNow/Fast-LLM/blob/main/examples/qwen_gspo_0.5b.yaml)
 - [`examples/qwen_gspo_7b.yaml`](https://github.com/ServiceNow/Fast-LLM/blob/main/examples/qwen_gspo_7b.yaml)
-
-They contain only the RL-relevant overrides; the base model config (architecture, vocab,
-tokenizer, RoPE) is imported from the Qwen2.5 checkpoint by the orchestrator, and the
-data stream is supplied at run time.
 
 ## 🎯 The policy-gradient loss
 
