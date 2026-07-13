@@ -16,10 +16,11 @@ Qwen2.5 experiments, and the reasoning behind each setting. The orchestration la
 rollout data pipeline, and the reward model are out of scope — this page is about how to
 configure the Fast-LLM trainer.
 
-The **operative config is a single committed file on the orchestrator side** — one hydra
-config that pins every hyperparameter for the run (both the orchestrator/DeepSpeed settings
-and the Fast-LLM `fast_llm:` subtree) and is what the launcher composes; the launch command
-itself carries no hyperparameters, only environment (paths, W&B identity). That file is the
+The **operative config is committed on the orchestrator side** — a shared hydra base plus one
+config per trainer backend (Fast-LLM / DeepSpeed) that together pin every hyperparameter for
+the run (the orchestrator/preprocessor settings, and the trainer's — the Fast-LLM `fast_llm:`
+subtree or the DeepSpeed `finetune:` optimizer). The launcher composes those; the launch command
+itself carries no hyperparameters, only environment (paths, W&B identity). Those configs are the
 source of truth for a run.
 
 Two illustrative excerpts accompany this page as a readable reference for the Fast-LLM half
