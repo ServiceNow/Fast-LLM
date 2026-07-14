@@ -534,7 +534,7 @@ _lm_head_test_configs.append(LMHeadTestConfig("grpo_loss_metrics_auto", grpo_los
 _lm_head_test_configs.append(LMHeadTestConfig("gspo_loss_metrics_auto", gspo_loss=True, gspo_metrics="auto"))
 
 # Triton monolithic kernel (`use_triton=True`): the label-based objective set over the shared softmax.
-# Distillation has no triton fused kernel, so it stays on the compiled `fused` configs (policy metrics do).
+# Distillation uses the distribution-family triton kernel (added below); policy metrics stay on compiled `fused`.
 _add_configs("fused_triton", loss_implementation="fused_triton")
 _add_configs("fused_triton_z_loss", loss_implementation="fused_triton", z_loss=True)
 _add_configs("fused_triton_bfloat16", loss_implementation="fused_triton", compute_dtype=DataType.bfloat16)
@@ -543,6 +543,18 @@ _add_configs("fused_triton_final_logit_softcap", loss_implementation="fused_trit
 _add_configs("fused_triton_label_and_z_loss_weighted", loss_implementation="fused_triton", label_loss=True, z_loss=0.5)
 _add_configs("fused_triton_grpo_loss", loss_implementation="fused_triton", grpo_loss=True)
 _add_configs("fused_triton_grpo_and_z_loss", loss_implementation="fused_triton", grpo_loss=True, z_loss=0.5)
+# Distillation on the triton path (the distribution-family kernel): alone, fused with z-loss over the shared
+# student softmax, and with a non-unit teacher temperature. Label-CE and policy losses can't share this kernel.
+_add_configs("fused_triton_distillation_loss", loss_implementation="fused_triton", distillation_loss=True)
+_add_configs(
+    "fused_triton_distillation_and_z_loss", loss_implementation="fused_triton", distillation_loss=True, z_loss=0.5
+)
+_add_configs(
+    "fused_triton_distillation_loss_temperature",
+    loss_implementation="fused_triton",
+    distillation_loss=True,
+    distillation_temperature=2.0,
+)
 # GSPO on the triton path (its eager segment seam brackets the triton forward and backward). Single-split
 # only; alone and sharing the softmax with z-loss.
 for _loss_masking in (False, True):

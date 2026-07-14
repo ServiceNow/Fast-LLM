@@ -27,6 +27,8 @@ class _TritonContext:
     z: tuple | None = None
     grpo: tuple | None = None
     gspo_coeff: torch.Tensor | None = None
+    # Distribution-kernel slot (distillation): `(target, loss_mask, grad_output, loss_type, temperature)`.
+    distillation: tuple | None = None
     # Per-slot kernel outputs; GSPO's loss / new-log-probs instead come from its eager seam.
     ce_loss: torch.Tensor | None = None
     z_loss: torch.Tensor | None = None
@@ -34,6 +36,7 @@ class _TritonContext:
     grpo_new_logprobs: torch.Tensor | None = None
     gspo_loss: torch.Tensor | None = None
     gspo_new_logprobs: torch.Tensor | None = None
+    dist_loss: torch.Tensor | None = None
     # Shared metrics precursors from the kernel's softmax + `Σ exp·logits_norm` (set only when metrics are on).
     new_log_probs: torch.Tensor | None = None
     entropy_per_token: torch.Tensor | None = None
@@ -121,9 +124,16 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
         )
         # The shared softmax serves one effective scale; the config validates the children agree on it.
         self._softmax_scale_factor = self._children[0]._logits_scale_factor
-        # The triton kernel fuses at most one loss per kind; anything else falls back to the compiled path.
+        # Two fused triton kernels: a label-family kernel (ce/z/grpo/gspo) and a distribution kernel
+        # (distillation + optional z-loss). Pick by whether a distribution-target child is present; a set that
+        # fits neither kernel (e.g. distillation mixed with grpo, or a duplicate kind) falls back to compiled.
         triton_kinds = [child._config.triton_kind for child in self._children]
-        self._triton_valid = None not in triton_kinds and len(set(triton_kinds)) == len(triton_kinds)
+        self._triton_distribution = "distillation" in triton_kinds
+        no_duplicate_kinds = len(triton_kinds) == len(set(triton_kinds))
+        if self._triton_distribution:
+            self._triton_valid = set(triton_kinds) <= {"distillation", "z"} and no_duplicate_kinds
+        else:
+            self._triton_valid = None not in triton_kinds and no_duplicate_kinds
 
     def forward_backward(
         self,
@@ -134,6 +144,8 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor | None, torch.Tensor | None]":
         if self._triton_valid and TritonConfig.enabled(logits.device, self._config.use_triton):
+            if self._triton_distribution:
+                return self._triton_distribution_forward_backward(logits, kwargs, losses, split_index, grad_logits)
             return self._triton_forward_backward(logits, kwargs, losses, split_index, grad_logits)
         register = losses is not None
         arguments = tuple(child.get_inputs(kwargs, split_index, register) for child in self._children)
@@ -215,6 +227,52 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             log_sum_exp_logits = sum_exp_logits.log()
             context.new_log_probs = predicted_logits - max_logits - log_sum_exp_logits
             context.entropy_per_token = log_sum_exp_logits - weighted_logits_sum / sum_exp_logits
+
+        total_loss = None
+        for child in self._children:
+            loss, extra = child.triton_finish(context, kwargs, split_index, register)
+            if child._do_register_loss:
+                child._register_loss(child.name, loss, losses)
+            child.register_combinable_extras(extra, kwargs, losses)
+            weighted = loss if child.weight == 1 else loss * child.weight
+            total_loss = weighted if total_loss is None else total_loss + weighted
+        return total_loss, grad_logits
+
+    def _triton_distribution_forward_backward(
+        self,
+        logits: torch.Tensor,
+        kwargs: dict[str, typing.Any],
+        losses: dict | None,
+        split_index: int,
+        grad_logits: torch.Tensor | None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        # Distribution-target family: distillation (the general full-distribution loss) with an optional z-loss
+        # superposed onto the same student softmax. No metrics or eager seam — neither child has them.
+        from fast_llm.functional.config import TargetFormat
+        from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
+
+        register = losses is not None
+        group = self._parallel_dim.group if self._vocab_parallel else None
+
+        context = _TritonContext()
+        for child in self._children:
+            child.triton_add_inputs(context, kwargs, split_index, register)
+        target, loss_mask, grad_output, entropy_loss_type, temperature = context.distillation
+        # z-loss shares distillation's mask and divisor; the driver takes only its weighted `grad_output`.
+        context.dist_loss, context.z_loss, grad_logits = triton_entropy_loss_forward_backward(
+            logits,
+            target,
+            loss_mask,
+            grad_logits=grad_logits,
+            grad_output=grad_output,
+            group=group,
+            logits_scale_factor=self._softmax_scale_factor,
+            temperature=temperature,
+            target_format=TargetFormat.logits,
+            entropy_loss_type=entropy_loss_type,
+            z=None if context.z is None else (context.z[1],),
+            divisor=context.divisor,
+        )
 
         total_loss = None
         for child in self._children:
