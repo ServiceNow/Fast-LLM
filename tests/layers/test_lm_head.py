@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.functional.triton import triton_available
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
@@ -95,9 +96,10 @@ class LMHeadTestConfig:
             losses["gspo_loss"] = {"type": "gspo", "metrics": self.gspo_metrics or "none"}
             if isinstance(self.gspo_loss, float):
                 losses["gspo_loss"]["weight"] = self.gspo_loss
-        if self.loss_implementation == "fused" and losses:
+        if self.loss_implementation in ("fused", "fused_triton") and losses:
             # Wrap the combinable losses in a single `monolithic` loss that shares one softmax; keep the
-            # child keys so the registered metric names match the per-loss configuration.
+            # child keys so the registered metric names match the per-loss configuration. `fused` pins the
+            # compiled path and `fused_triton` the triton path, so both are exercised in every environment.
             combinable = {
                 name: loss
                 for name, loss in losses.items()
@@ -105,7 +107,11 @@ class LMHeadTestConfig:
             }
             if combinable:
                 losses = {name: loss for name, loss in losses.items() if name not in combinable}
-                losses["monolithic"] = {"type": "monolithic", "losses": combinable}
+                losses["monolithic"] = {
+                    "type": "monolithic",
+                    "losses": combinable,
+                    "use_triton": self.loss_implementation == "fused_triton",
+                }
         if losses:
             head_config["losses"] = losses
 
@@ -484,11 +490,11 @@ for _loss_masking in (False, True):
             loss_implementation="fused",
         )
     )
-# GRPO/GSPO metric families (`basic` includes entropy) on the standalone and compiled shared-softmax paths.
-# Single-split only: per-split metric partials reduce across splits, which the whole-sequence reference
-# doesn't model.
-for _loss_implementation in ("per_loss", "fused"):
-    _prefix = "" if _loss_implementation == "per_loss" else "fused_"
+# GRPO/GSPO metric families (`basic` includes entropy) across all three paths — standalone, the compiled
+# shared softmax, and the triton kernel. Single-split only: per-split metric partials reduce across splits,
+# which the whole-sequence reference doesn't model.
+for _loss_implementation in ("per_loss", "fused", "fused_triton"):
+    _prefix = "" if _loss_implementation == "per_loss" else f"{_loss_implementation}_"
     for _loss_masking in (False, True):
         _mask_suffix = "_masked" if _loss_masking else ""
         _lm_head_test_configs.append(
@@ -509,21 +515,55 @@ for _loss_implementation in ("per_loss", "fused"):
                 loss_implementation=_loss_implementation,
             )
         )
-# The metric family co-resides with z-loss in the shared softmax pass. Single-split (metrics can't be split).
-for _loss_masking in (False, True):
-    _lm_head_test_configs.append(
-        LMHeadTestConfig(
-            f"fused_grpo_and_z_loss_metrics{'_masked' if _loss_masking else ''}",
-            grpo_loss=True,
-            z_loss=0.5,
-            grpo_metrics="basic",
-            loss_masking=_loss_masking,
-            loss_implementation="fused",
+# The metric family co-resides with z-loss in the shared softmax pass, on both fused paths. Single-split
+# (metrics can't be split).
+for _loss_implementation in ("fused", "fused_triton"):
+    for _loss_masking in (False, True):
+        _lm_head_test_configs.append(
+            LMHeadTestConfig(
+                f"{_loss_implementation}_grpo_and_z_loss_metrics{'_masked' if _loss_masking else ''}",
+                grpo_loss=True,
+                z_loss=0.5,
+                grpo_metrics="basic",
+                loss_masking=_loss_masking,
+                loss_implementation=_loss_implementation,
+            )
         )
-    )
 # `auto` metrics resolve to `basic` when pipeline_parallel == 1 (all head tests), covering the default path.
 _lm_head_test_configs.append(LMHeadTestConfig("grpo_loss_metrics_auto", grpo_loss=True, grpo_metrics="auto"))
 _lm_head_test_configs.append(LMHeadTestConfig("gspo_loss_metrics_auto", gspo_loss=True, gspo_metrics="auto"))
+
+# Triton monolithic kernel (`use_triton=True`): the label-based objective set over the shared softmax.
+# Distillation has no triton fused kernel, so it stays on the compiled `fused` configs (policy metrics do).
+_add_configs("fused_triton", loss_implementation="fused_triton")
+_add_configs("fused_triton_z_loss", loss_implementation="fused_triton", z_loss=True)
+_add_configs("fused_triton_bfloat16", loss_implementation="fused_triton", compute_dtype=DataType.bfloat16)
+_add_configs("fused_triton_logit_scaling", loss_implementation="fused_triton", logits_scale_factor=5.0)
+_add_configs("fused_triton_final_logit_softcap", loss_implementation="fused_triton", final_logit_softcap=2.0)
+_add_configs("fused_triton_label_and_z_loss_weighted", loss_implementation="fused_triton", label_loss=True, z_loss=0.5)
+_add_configs("fused_triton_grpo_loss", loss_implementation="fused_triton", grpo_loss=True)
+_add_configs("fused_triton_grpo_and_z_loss", loss_implementation="fused_triton", grpo_loss=True, z_loss=0.5)
+# GSPO on the triton path (its eager segment seam brackets the triton forward and backward). Single-split
+# only; alone and sharing the softmax with z-loss.
+for _loss_masking in (False, True):
+    _suffix = "_masked" if _loss_masking else ""
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_triton_gspo_loss{_suffix}",
+            gspo_loss=True,
+            loss_masking=_loss_masking,
+            loss_implementation="fused_triton",
+        )
+    )
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_triton_gspo_and_z_loss{_suffix}",
+            gspo_loss=True,
+            z_loss=0.5,
+            loss_masking=_loss_masking,
+            loss_implementation="fused_triton",
+        )
+    )
 
 
 @pytest.mark.slow
@@ -535,6 +575,8 @@ _lm_head_test_configs.append(LMHeadTestConfig("gspo_loss_metrics_auto", gspo_los
     ],
 )
 def test_lm_head(test_config: LMHeadTestConfig):
+    if test_config.loss_implementation == "fused_triton" and not triton_available:
+        pytest.skip("Triton is not available (build the extension or set TRITON_INTERPRET=1).")
     model_config = test_config.get_config()
     model, distributed = get_base_model(model_config)
     input_, kwargs = test_config.get_inputs()

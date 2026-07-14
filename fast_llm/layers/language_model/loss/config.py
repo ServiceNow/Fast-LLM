@@ -92,6 +92,9 @@ class CombinableLossConfig(LanguageModelLossConfig):
 
     _abstract: typing.ClassVar[bool] = True
 
+    # Slot this loss occupies in the triton monolithic kernel; `None` when it has no triton implementation.
+    triton_kind: typing.ClassVar[str | None] = None
+
     use_triton: bool | None = Field(
         default=None,
         desc="Enable triton implementation. Default: use if available.",
@@ -102,6 +105,7 @@ class CombinableLossConfig(LanguageModelLossConfig):
 @config_class(dynamic_type={LanguageModelLossConfig: "label"})
 class LanguageModelLabelEntropyLossConfig(CombinableLossConfig):
     _abstract: typing.ClassVar[bool] = False
+    triton_kind: typing.ClassVar[str | None] = "ce"
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
@@ -200,6 +204,7 @@ class LanguageModelZLossConfig(CombinableLossConfig):
     """Z-loss regularization to prevent overconfidence."""
 
     _abstract: typing.ClassVar[bool] = False
+    triton_kind: typing.ClassVar[str | None] = "z"
 
     @property
     def loss_class(self) -> "type[LanguageModelZLoss]":
@@ -244,6 +249,7 @@ class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig, Combina
     """Group-Relative Policy Optimization: per-token IS-ratio clipping."""
 
     _abstract: typing.ClassVar[bool] = False
+    triton_kind: typing.ClassVar[str | None] = "grpo"
 
     @property
     def loss_class(self) -> "type[LanguageModelGRPOLoss]":
@@ -257,6 +263,7 @@ class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig, Combina
     """Group Sequence Policy Optimization: sequence-level geometric-mean IS-ratio clipping."""
 
     _abstract: typing.ClassVar[bool] = False
+    triton_kind: typing.ClassVar[str | None] = "gspo"
 
     @property
     def loss_class(self) -> "type[LanguageModelGSPOLoss]":
@@ -276,6 +283,11 @@ class MonolithicLossConfig(LanguageModelLossConfig):
         desc="The combinable losses sharing a single softmax pass. They must agree on `logits_scale_factor`.",
         hint=FieldHint.core,
     )
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable the triton implementation of the shared-softmax kernel. Default: use if available.",
+        hint=FieldHint.expert,
+    )
 
     def _validate(self) -> None:
         super()._validate()
@@ -289,6 +301,17 @@ class MonolithicLossConfig(LanguageModelLossConfig):
                 raise ValueError(f"Loss `{name}` sets `use_triton`, which has no effect on a fused child loss.")
         # A single softmax serves one effective scale (stacked with the common model scale).
         Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
+        if self.use_triton:
+            # The triton kernel has one slot per loss kind, so it fuses at most one of each.
+            seen_kinds = set()
+            for name, loss in self.losses.items():
+                if loss.triton_kind is None:
+                    raise ValueError(f"Loss `{name}` (`{type(loss).__name__}`) has no triton fused implementation.")
+                if loss.triton_kind in seen_kinds:
+                    raise ValueError(
+                        f"The triton path fuses at most one `{loss.triton_kind}` loss; `{name}` is a duplicate."
+                    )
+                seen_kinds.add(loss.triton_kind)
 
     @property
     def loss_class(self) -> "type[LanguageModelLoss]":

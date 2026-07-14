@@ -9,6 +9,9 @@ from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
 from fast_llm.layers.language_model.loss.loss import CombinableLoss, SingleLoss
 
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.language_model.loss.monolithic import _TritonContext
+
 
 class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](CombinableLoss, SingleLoss[ConfigType]):
     def _forward_backward(
@@ -57,6 +60,19 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](CombinableLoss, S
         if grad is not None and loss_mask is not None:
             grad = grad * loss_mask.unsqueeze(-1)
         return loss, grad, None
+
+    def triton_add_inputs(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> None:
+        loss_mask, grad_output, divisor = self.get_inputs(kwargs, split_index, register)
+        if context.divisor is None:
+            context.divisor = divisor
+        context.z = (loss_mask, grad_output)
+
+    def triton_finish(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> tuple[torch.Tensor, None]:
+        return context.z_loss, None
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return {"return_prediction_mask": True}
