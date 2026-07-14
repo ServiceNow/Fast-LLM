@@ -980,6 +980,51 @@ def _test_monolithic_gspo_loss_triton(
     )
 
 
+def _test_monolithic_metrics_without_grad_triton(batch_shape, num_columns, loss_masking, dtype, group=None):
+    # A zero-weight policy loss (grad_output=None) that still logs metrics: `compute_metrics=True` with no
+    # gradient must emit the same forward loss / new-log-probs / Σ exp·logits_norm as the with-gradient call,
+    # not crash or skip. The kernel runs the backward re-stream for the metrics alone.
+    if not triton_available:
+        return
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    num_labels = int((target >= 0).sum().item())
+    num_labels_in_seq = torch.where(
+        target >= 0,
+        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
+        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    )
+    local_logits = split_op(logits, group, -1).contiguous()
+
+    def run(grad_output):
+        return triton_monolithic_loss_forward_backward(
+            local_logits,
+            target.contiguous(),
+            None,
+            1.0,
+            group,
+            max(num_labels, 1),
+            grpo=(advantages, old_log_probabilities, grad_output, 0.2, 0.2, num_labels_in_seq),
+            compute_metrics=True,
+        )
+
+    _, _, loss_grad, new_logprobs_grad, grad_grad, _, weighted_grad = run(1.0)
+    _, _, loss_nograd, new_logprobs_nograd, grad_nograd, _, weighted_nograd = run(None)
+
+    assert grad_grad is not None and grad_nograd is None
+    Assert.rms_close_relative(loss_nograd, loss_grad, 1e-5, 1e-6)
+    Assert.rms_close_relative(new_logprobs_nograd, new_logprobs_grad, 1e-5, 1e-6)
+    Assert.rms_close_relative(weighted_nograd, weighted_grad, 1e-5, 1e-6)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize("loss_masking", (False, True))
+def test_monolithic_metrics_without_grad_triton(batch_shape, loss_masking):
+    _test_monolithic_metrics_without_grad_triton(batch_shape, 500, loss_masking, DataType.float32)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
 @pytest.mark.parametrize(

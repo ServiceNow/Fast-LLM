@@ -149,7 +149,10 @@ def triton_monolithic_loss_forward_backward_kernel(
         prob_coeff += coeff
         label_coeff += coeff
 
-    if grad_logits_ptr is not None:
+    # The backward re-stream both writes the combined gradient and accumulates the entropy's Σ exp·logits_norm,
+    # so it runs when either is requested — metrics without a gradient (e.g. a zero-weight policy loss) still
+    # emit `weighted_logits_sum`; the gradient store itself is gated on `grad_logits_ptr`.
+    if grad_logits_ptr is not None or weighted_logits_sum_ptr is not None:
         weighted_logits_sum = 0.0
         col_offset_start: tl.constexpr = (n_cols - 1) // block_size * block_size
         for col_offset in tl.static_range(col_offset_start, -1, -block_size):
@@ -173,10 +176,11 @@ def triton_monolithic_loss_forward_backward_kernel(
                 grad_logits = prob_coeff * (exp_logits / sum_exp_logits)
                 if label_valid:
                     grad_logits = tl.where(col_offsets == label_idx, grad_logits - label_coeff, grad_logits)
-            grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
-            if accumulate:
-                grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
-            tl.store(grad_logits_col_ptr, grad_logits, mask=mask)
+            if grad_logits_ptr is not None:
+                grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
+                if accumulate:
+                    grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
+                tl.store(grad_logits_col_ptr, grad_logits, mask=mask)
         if weighted_logits_sum_ptr is not None:
             tl.store(weighted_logits_sum_ptr + block_idx, weighted_logits_sum)
 
@@ -293,23 +297,23 @@ def triton_monolithic_loss_forward_backward(
         or grpo_grad_output is not None
         or gspo_coeff is not None
     )
-    # The entropy's `Σ exp·logits_norm` is accumulated for free in the backward pass, so metrics need it.
-    assert has_grad or not compute_metrics
+    # The entropy's `Σ exp·logits_norm` is accumulated in the backward re-stream, which the kernel runs for the
+    # metrics alone when no gradient is requested (e.g. a zero-weight policy loss logging its diagnostics).
     weighted_logits_sum = torch.empty(n_rows, dtype=torch.float, device=logits.device) if compute_metrics else None
+    backward_kwargs = {}
+    if compute_metrics:
+        backward_kwargs["weighted_logits_sum_ptr"] = weighted_logits_sum
     if has_grad:
         accumulate = grad_logits is not None
         grad_logits = torch.empty_like(logits) if grad_logits is None else grad_logits
-        backward_kwargs = {
-            "grad_logits_ptr": grad_logits,
-            "grad_logits_stride_0": grad_logits.stride(-2),
-            "accumulate": accumulate,
-            "grad_losses_ce": 0.0 if ce_grad_output is None else ce_grad_output / divisor,
-            "grad_losses_z": 0.0 if z_grad_output is None else z_grad_output / divisor,
-            "grad_losses_grpo": 0.0 if grpo_grad_output is None else grpo_grad_output / divisor,
-            "weighted_logits_sum_ptr": weighted_logits_sum,
-        }
-    else:
-        backward_kwargs = {}
+        backward_kwargs.update(
+            grad_logits_ptr=grad_logits,
+            grad_logits_stride_0=grad_logits.stride(-2),
+            accumulate=accumulate,
+            grad_losses_ce=0.0 if ce_grad_output is None else ce_grad_output / divisor,
+            grad_losses_z=0.0 if z_grad_output is None else z_grad_output / divisor,
+            grad_losses_grpo=0.0 if grpo_grad_output is None else grpo_grad_output / divisor,
+        )
 
     triton_monolithic_loss_forward_backward_kernel[(n_rows,)](
         logits,
