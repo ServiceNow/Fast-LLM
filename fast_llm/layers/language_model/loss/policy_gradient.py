@@ -26,6 +26,9 @@ from fast_llm.layers.language_model.loss.config import (
 from fast_llm.layers.language_model.loss.loss import CombinableLoss, SingleLoss
 from fast_llm.utils import Assert
 
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.language_model.loss.monolithic import _TritonContext
+
 
 class PolicyMetrics(typing.NamedTuple):
     # Weighted sums for the policy-gradient diagnostics, shared by the per-token (GRPO) and per-segment
@@ -356,6 +359,39 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
             entropy_per_token.reshape(target.shape),
         )
 
+    def triton_add_inputs(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> None:
+        (
+            target,
+            advantages,
+            old_log_probabilities,
+            grad_output,
+            divisor,
+            epsilon_low,
+            epsilon_high,
+            num_labels_in_seq,
+            _,
+        ) = self.get_inputs(kwargs, split_index, register)
+        if context.labels is None:
+            context.labels = target
+        if context.divisor is None:
+            context.divisor = divisor
+        context.grpo = (advantages, old_log_probabilities, grad_output, epsilon_low, epsilon_high, num_labels_in_seq)
+
+    def triton_metrics_enabled(self, register: bool) -> bool:
+        return register and self._metrics_level != PolicyMetricsLevel.none
+
+    def triton_finish(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> tuple[torch.Tensor, tuple]:
+        metrics = (
+            self.triton_metrics(context.new_log_probs, context.entropy_per_token, kwargs, split_index)
+            if self.triton_metrics_enabled(register)
+            else None
+        )
+        return context.grpo_loss, (context.grpo_new_logprobs, metrics)
+
     def get_loss_definitions(self) -> list[LossDef]:
         return super().get_loss_definitions() + self._policy_metric_definitions()
 
@@ -369,6 +405,9 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
     its Triton twin). Fused into a shared softmax, `fused_core` runs only the forward on that softmax and the
     segment seam + backward are deferred to `finish`, since the eager `index_add_` segment aggregation can't
     run inside the compiled boundary."""
+
+    # GSPO's gradient needs the shared softmax before the kernel, so the driver runs the reduced forward first.
+    triton_needs_forward: typing.ClassVar[bool] = True
 
     def __init__(
         self,
@@ -643,6 +682,37 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
             self._sequence_data_dim.group if self._sequence_data_active else None,
             self._parallel_dim.group if self._sequence_parallel else None,
         )
+
+    def triton_add_inputs(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> None:
+        target, _ = self.get_inputs(kwargs, split_index, register)
+        if context.labels is None:
+            context.labels = target
+
+    def triton_seam(
+        self,
+        context: "_TritonContext",
+        softmax: tuple[torch.Tensor, torch.Tensor, torch.Tensor | None],
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+    ) -> None:
+        context.gspo_loss, context.gspo_new_logprobs, context.gspo_coeff = self.compute_triton_seam(
+            kwargs, split_index, *softmax
+        )
+
+    def triton_metrics_enabled(self, register: bool) -> bool:
+        return register and self._metrics_level != PolicyMetricsLevel.none
+
+    def triton_finish(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> tuple[torch.Tensor, tuple]:
+        metrics = (
+            self.triton_metrics(context.new_log_probs, context.entropy_per_token, kwargs, split_index)
+            if self.triton_metrics_enabled(register)
+            else None
+        )
+        return context.gspo_loss, (context.gspo_new_logprobs, metrics)
 
     def register_combinable_extras(self, extra: tuple, kwargs: dict[str, typing.Any], losses: dict | None) -> None:
         new_logprobs_mean, metrics = extra

@@ -12,6 +12,9 @@ from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
 from fast_llm.utils import Assert
 
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.language_model.loss.monolithic import _TritonContext
+
 
 class LanguageModelLoss[ConfigType: LanguageModelLossConfig](Configurable[ConfigType], torch.nn.Module):
     def __init__(
@@ -236,6 +239,36 @@ class CombinableLoss:
         gradient into `grad_logits` and returning `(loss, extra, grad_logits)`. A passthrough by default; a
         loss with an eager seam runs it here from the forward state its `fused_core` returned as `extra`."""
         return loss, extra, grad_logits
+
+    # The triton monolithic kernel has a fixed per-slot signature, so instead of the compiled loop each loss
+    # fills its slot in a shared `_TritonContext`: `triton_add_inputs` packs its kernel inputs (reusing the
+    # eager `get_inputs`) and `triton_finish` reads its `(loss, extra)` back from the kernel outputs. A loss
+    # whose gradient can't be produced in one kernel launch (an eager seam) sets `triton_needs_forward` and
+    # runs the seam in `triton_seam` over the pre-computed shared softmax.
+    triton_needs_forward: typing.ClassVar[bool] = False
+
+    def triton_add_inputs(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> None:
+        raise NotImplementedError()
+
+    def triton_seam(
+        self,
+        context: "_TritonContext",
+        softmax: tuple[torch.Tensor, torch.Tensor, torch.Tensor | None],
+        kwargs: dict[str, typing.Any],
+        split_index: int,
+    ) -> None:
+        """Run the eager pre-kernel seam over the shared softmax. No-op unless `triton_needs_forward`."""
+
+    def triton_finish(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> tuple[torch.Tensor, typing.Any]:
+        raise NotImplementedError()
+
+    def triton_metrics_enabled(self, register: bool) -> bool:
+        """Whether this loss emits diagnostic metrics from the kernel's shared softmax this step."""
+        return False
 
 
 def loss_forward_backward(

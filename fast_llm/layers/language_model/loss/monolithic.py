@@ -1,3 +1,4 @@
+import dataclasses
 import typing
 
 import torch
@@ -10,6 +11,32 @@ from fast_llm.functional.entropy_loss import softmax_base
 from fast_llm.layers.language_model.loss.config import MonolithicLossConfig
 from fast_llm.layers.language_model.loss.loss import CombinableLoss, LanguageModelLoss
 from fast_llm.utils import safe_merge_dicts
+
+
+@dataclasses.dataclass
+class _TritonContext:
+    """Scratch threaded through the triton monolithic path. Each child packs its kernel-slot inputs (and the
+    shared labels / divisor) in `triton_add_inputs`, and reads its outputs back in `triton_finish`, so the
+    driver iterates children with no per-kind branching. The single `@triton.jit` kernel keeps its fixed
+    per-slot signature — that boundary is the one place the loss kinds are still named."""
+
+    # Shared inputs (first non-`None` child wins) and per-slot kernel inputs.
+    labels: torch.Tensor | None = None
+    divisor: float | None = None
+    ce: tuple | None = None
+    z: tuple | None = None
+    grpo: tuple | None = None
+    gspo_coeff: torch.Tensor | None = None
+    # Per-slot kernel outputs; GSPO's loss / new-log-probs instead come from its eager seam.
+    ce_loss: torch.Tensor | None = None
+    z_loss: torch.Tensor | None = None
+    grpo_loss: torch.Tensor | None = None
+    grpo_new_logprobs: torch.Tensor | None = None
+    gspo_loss: torch.Tensor | None = None
+    gspo_new_logprobs: torch.Tensor | None = None
+    # Shared metrics precursors from the kernel's softmax + `Σ exp·logits_norm` (set only when metrics are on).
+    new_log_probs: torch.Tensor | None = None
+    entropy_per_token: torch.Tensor | None = None
 
 
 @torch.compile
@@ -94,35 +121,9 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
         )
         # The shared softmax serves one effective scale; the config validates the children agree on it.
         self._softmax_scale_factor = self._children[0]._logits_scale_factor
-        # `(cross_entropy, z, grpo, gspo)` children when every child has a triton fused kernel, else `None`.
-        self._triton_children = self._classify_triton_children()
-
-    def _classify_triton_children(self) -> tuple | None:
-        from fast_llm.layers.language_model.loss.entropy_loss import LanguageModelLabelEntropyLoss
-        from fast_llm.layers.language_model.loss.policy_gradient import LanguageModelGRPOLoss, LanguageModelGSPOLoss
-        from fast_llm.layers.language_model.loss.z_loss import LanguageModelZLoss
-
-        ce = z = grpo = gspo = None
-        for child in self._children:
-            if isinstance(child, LanguageModelGSPOLoss):
-                if gspo is not None:
-                    return None
-                gspo = child
-            elif isinstance(child, LanguageModelGRPOLoss):
-                if grpo is not None:
-                    return None
-                grpo = child
-            elif isinstance(child, LanguageModelZLoss):
-                if z is not None:
-                    return None
-                z = child
-            elif isinstance(child, LanguageModelLabelEntropyLoss):
-                if ce is not None:
-                    return None
-                ce = child
-            else:
-                return None
-        return ce, z, grpo, gspo
+        # The triton kernel fuses at most one loss per kind; anything else falls back to the compiled path.
+        triton_kinds = [child._config.triton_kind for child in self._children]
+        self._triton_valid = None not in triton_kinds and len(set(triton_kinds)) == len(triton_kinds)
 
     def forward_backward(
         self,
@@ -132,7 +133,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor | None, torch.Tensor | None]":
-        if self._triton_children is not None and TritonConfig.enabled(logits.device, self._config.use_triton):
+        if self._triton_valid and TritonConfig.enabled(logits.device, self._config.use_triton):
             return self._triton_forward_backward(logits, kwargs, losses, split_index, grad_logits)
         register = losses is not None
         arguments = tuple(child.get_inputs(kwargs, split_index, register) for child in self._children)
@@ -165,92 +166,59 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             _monolithic_forward_reduce,
             triton_monolithic_loss_forward_backward,
         )
-        from fast_llm.layers.language_model.loss.config import PolicyMetricsLevel
 
         register = losses is not None
-        ce, z, grpo, gspo = self._triton_children
         group = self._parallel_dim.group if self._vocab_parallel else None
 
-        labels = divisor = ce_arg = z_arg = grpo_arg = None
-        if ce is not None:
-            labels, ce_grad_output, divisor = ce.get_inputs(kwargs, split_index, register)
-            ce_arg = (ce_grad_output,)
-        if z is not None:
-            z_loss_mask, z_grad_output, z_divisor = z.get_inputs(kwargs, split_index, register)
-            z_arg = (z_loss_mask, z_grad_output)
-            divisor = z_divisor if divisor is None else divisor
-        if grpo is not None:
-            grpo_target, advantages, old_log_probabilities, grpo_grad_output, grpo_divisor, *grpo_tail = (
-                grpo.get_inputs(kwargs, split_index, register)
-            )
-            epsilon_low, epsilon_high, num_labels_in_seq = grpo_tail[:3]
-            labels = grpo_target if labels is None else labels
-            grpo_arg = (
-                advantages,
-                old_log_probabilities,
-                grpo_grad_output,
-                epsilon_low,
-                epsilon_high,
-                num_labels_in_seq,
-            )
-            divisor = grpo_divisor if divisor is None else divisor
+        # Each child packs its own kernel slot (and the shared labels / divisor) — no per-kind branching.
+        context = _TritonContext()
+        for child in self._children:
+            child.triton_add_inputs(context, kwargs, split_index, register)
+        compute_metrics = any(child.triton_metrics_enabled(register) for child in self._children)
 
-        grpo_metrics_on = grpo is not None and register and grpo._metrics_level != PolicyMetricsLevel.none
-        gspo_metrics_on = gspo is not None and register and gspo._metrics_level != PolicyMetricsLevel.none
-        compute_metrics = grpo_metrics_on or gspo_metrics_on
+        # A child with an eager segment seam (GSPO) can't produce its gradient in one kernel launch: it needs
+        # the shared softmax first, so run the reduced forward once, then let each such child add its
+        # per-token backward coefficient the kernel superposes with the in-kernel losses.
+        softmax = None
+        if any(child.triton_needs_forward for child in self._children):
+            softmax = _monolithic_forward_reduce(logits, context.labels, group, self._softmax_scale_factor)
+            for child in self._children:
+                child.triton_seam(context, softmax, kwargs, split_index)
 
-        # GSPO runs its forward and eager segment seam here, then hands its per-token backward coefficient
-        # (and its already-reduced softmax) to the kernel, which superposes it with the in-kernel losses.
-        gspo_coeff = softmax = gspo_loss = gspo_new_logprobs = None
-        if gspo is not None:
-            gspo_target, _ = gspo.get_inputs(kwargs, split_index, register)
-            labels = gspo_target if labels is None else labels
-            softmax = _monolithic_forward_reduce(logits, labels, group, self._softmax_scale_factor)
-            gspo_loss, gspo_new_logprobs, gspo_coeff = gspo.compute_triton_seam(kwargs, split_index, *softmax)
-
-        ce_loss, z_loss, grpo_loss, grpo_new_logprobs, grad_logits, softmax, weighted_logits_sum = (
-            triton_monolithic_loss_forward_backward(
-                logits,
-                None if labels is None else labels.contiguous(),
-                grad_logits,
-                self._softmax_scale_factor,
-                group,
-                1.0 if divisor is None else divisor,
-                ce=ce_arg,
-                z=z_arg,
-                grpo=grpo_arg,
-                gspo_coeff=gspo_coeff,
-                softmax=softmax,
-                compute_metrics=compute_metrics,
-            )
+        (
+            context.ce_loss,
+            context.z_loss,
+            context.grpo_loss,
+            context.grpo_new_logprobs,
+            grad_logits,
+            softmax,
+            weighted_logits_sum,
+        ) = triton_monolithic_loss_forward_backward(
+            logits,
+            None if context.labels is None else context.labels.contiguous(),
+            grad_logits,
+            self._softmax_scale_factor,
+            group,
+            1.0 if context.divisor is None else context.divisor,
+            ce=context.ce,
+            z=context.z,
+            grpo=context.grpo,
+            gspo_coeff=context.gspo_coeff,
+            softmax=softmax,
+            compute_metrics=compute_metrics,
         )
 
-        # Metrics reuse the kernel's shared softmax: per-token new log-probs and the entropy from the
-        # kernel's `Σ exp·logits_norm`, so no second softmax pass.
-        grpo_metrics = gspo_metrics = None
+        # Metrics reuse the kernel's shared softmax: per-token new log-probs and the entropy from the kernel's
+        # `Σ exp·logits_norm`, so no second softmax pass. Derived once here and shared by each metric loss.
         if compute_metrics:
             max_logits, sum_exp_logits, predicted_logits = softmax
             log_sum_exp_logits = sum_exp_logits.log()
-            new_log_probs = predicted_logits - max_logits - log_sum_exp_logits
-            entropy_per_token = log_sum_exp_logits - weighted_logits_sum / sum_exp_logits
-            if grpo_metrics_on:
-                grpo_metrics = grpo.triton_metrics(new_log_probs, entropy_per_token, kwargs, split_index)
-            if gspo_metrics_on:
-                gspo_metrics = gspo.triton_metrics(new_log_probs, entropy_per_token, kwargs, split_index)
-
-        results = {}
-        if ce is not None:
-            results[ce] = (ce_loss, None)
-        if z is not None:
-            results[z] = (z_loss, None)
-        if grpo is not None:
-            results[grpo] = (grpo_loss, (grpo_new_logprobs, grpo_metrics))
-        if gspo is not None:
-            results[gspo] = (gspo_loss, (gspo_new_logprobs, gspo_metrics))
+            context.new_log_probs = predicted_logits - max_logits - log_sum_exp_logits
+            context.entropy_per_token = log_sum_exp_logits - weighted_logits_sum / sum_exp_logits
 
         total_loss = None
         for child in self._children:
-            loss, extra = results[child]
+            loss, extra = child.triton_finish(context, kwargs, split_index, register)
             if child._do_register_loss:
                 child._register_loss(child.name, loss, losses)
             child.register_combinable_extras(extra, kwargs, losses)
