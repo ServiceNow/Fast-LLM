@@ -96,8 +96,6 @@ def triton_monolithic_loss_forward_backward_kernel(
             predicted_logit = tl.load(logits_ptr + label_idx).to(tl.float32)
             if logits_scale_factor != 1.0:
                 predicted_logit *= logits_scale_factor
-        else:
-            predicted_logit = 0.0
         new_log_prob = predicted_logit - log_sum_exp_logits
 
     prob_coeff = 0.0
