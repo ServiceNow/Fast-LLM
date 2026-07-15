@@ -1,7 +1,6 @@
 import collections
 import contextlib
 import dataclasses
-import logging
 import time
 import typing
 
@@ -21,8 +20,6 @@ from fast_llm.engine.schedule.config import EventType, MockEvent, MockStream, Sc
 from fast_llm.engine.schedule.schedule import Schedule, Step
 from fast_llm.logging import log_memory_usage
 from fast_llm.utils import Assert
-
-logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass()
@@ -331,7 +328,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         # Time blocked on the data loader (input starvation), kept separate from the CPU
         # preprocessing below. Preprocessing runs interleaved with the schedule's compute, so its
         # clock is paused across each yield to exclude the compute happening between micro-batches.
-        wait_start = time.perf_counter() if measure_time else 0.0
+        if measure_time:
+            wait_start = time.perf_counter()
         model_inputs = [next(data_iterator) for _ in range(self._config.sequential_micro_batches)]
         if measure_time:
             context.metrics["data_wait_time_ms"] += (time.perf_counter() - wait_start) * 1000
