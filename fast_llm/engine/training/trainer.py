@@ -157,13 +157,18 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             )
         return self._schedule_cache[n_microbatches]
 
-    def _prefetch_to_doc_target(self, data_iterator) -> list:
+    def _prefetch_to_doc_target(self, data_iterator) -> tuple[list, float]:
         target = self._config.schedule.docs_per_step
         bfmb = self._config.schedule.breadth_first_micro_batches
         buffer = []
         total_docs = 0
+        # Time blocked pulling micro-batches from the stream — the real input-starvation wait, which
+        # the schedule runner can't measure because it receives an already-prefetched buffer.
+        data_wait_time_ms = 0.0
         while total_docs < target:
+            wait_start = time.perf_counter()
             mb = next(data_iterator)
+            data_wait_time_ms += (time.perf_counter() - wait_start) * 1000
             mb[0].share_batch_data(mb, self._distributed)
             total_docs += mb[0].num_documents_in_batch
             buffer.append(mb)
@@ -176,7 +181,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         for mb in buffer:
             for mi in mb:
                 mi.num_documents_in_batch = total_docs
-        return buffer
+        return buffer, data_wait_time_ms
 
     @abc.abstractmethod
     def _get_data(self) -> Data:
@@ -259,7 +264,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                 # TODO: Data loader hates getting all micro-batches at once.
                 #   (Also preprocessing adds overhead)
                 if self._config.schedule.docs_per_step > 0:
-                    buffer = self._prefetch_to_doc_target(train_iterator)
+                    buffer, data_wait_time_ms = self._prefetch_to_doc_target(train_iterator)
                     step_schedule = self._get_or_build_schedule(len(buffer))
                     reduced_losses, update_successful, train_metrics, step_num_documents = self._runner.run_step(
                         iter(buffer),
@@ -268,6 +273,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         documents_seen=self._documents_seen,
                         return_metrics=is_logging,
                     )
+                    if is_logging:
+                        # run_step sees the prefetched buffer, so its own data-wait timer reads ~0;
+                        # replace it with the real stream-pull wait measured during prefetch.
+                        train_metrics["data_wait_time_ms"] = data_wait_time_ms
                 else:
                     reduced_losses, update_successful, train_metrics, step_num_documents = self._runner.run_step(
                         train_iterator,
