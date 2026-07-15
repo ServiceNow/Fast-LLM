@@ -136,6 +136,7 @@ class LanguageModelLabelEntropyLossConfig(CombinableLossConfig):
 @config_class(dynamic_type={LanguageModelLossConfig: "distillation"})
 class LanguageModelDistillationLossConfig(CombinableLossConfig):
     _abstract: typing.ClassVar[bool] = False
+    triton_kind: typing.ClassVar[str | None] = "distillation"
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
@@ -302,14 +303,21 @@ class MonolithicLossConfig(LanguageModelLossConfig):
         # A single softmax serves one effective scale (stacked with the common model scale).
         Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
         if self.use_triton:
-            # The triton kernel has one slot per loss kind, so it fuses at most one of each.
+            # Two fused kernels, one slot per loss kind: a label-family kernel (ce/z/grpo/gspo) and a
+            # distribution kernel (distillation + optional z-loss). Distillation can't share the label kernel.
             seen_kinds = set()
+            has_distillation = any(loss.triton_kind == "distillation" for loss in self.losses.values())
             for name, loss in self.losses.items():
                 if loss.triton_kind is None:
                     raise ValueError(f"Loss `{name}` (`{type(loss).__name__}`) has no triton fused implementation.")
                 if loss.triton_kind in seen_kinds:
                     raise ValueError(
                         f"The triton path fuses at most one `{loss.triton_kind}` loss; `{name}` is a duplicate."
+                    )
+                if has_distillation and loss.triton_kind not in ("distillation", "z"):
+                    raise ValueError(
+                        f"The triton path fuses distillation only with z-loss; `{name}` (`{loss.triton_kind}`)"
+                        " must use the compiled path."
                     )
                 seen_kinds.add(loss.triton_kind)
 

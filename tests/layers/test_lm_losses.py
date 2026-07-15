@@ -396,7 +396,7 @@ def _test_entropy_loss(
 
     if not triton_available:
         return
-    out_triton, grad_triton = triton_entropy_loss_forward_backward(
+    out_triton, _, grad_triton = triton_entropy_loss_forward_backward(
         logits=local_logits,
         target=local_target,
         loss_mask=loss_mask,
@@ -768,7 +768,7 @@ def _test_monolithic_loss_triton(
 
     # Reference: standalone triton cross-entropy then z-loss, accumulating into one gradient buffer.
     grad_ref = previous_grad.clone() if accumulate else None
-    ce_ref, grad_ref = triton_entropy_loss_forward_backward(
+    ce_ref, _, grad_ref = triton_entropy_loss_forward_backward(
         local_logits,
         target,
         None,
@@ -827,7 +827,7 @@ def _test_monolithic_single_loss_triton(
     divisor = max(int((target >= 0).sum().item()), 1)
     previous_grad = torch.randn_like(local_logits) if accumulate else None
 
-    ce_ref, grad_ref = triton_entropy_loss_forward_backward(
+    ce_ref, _, grad_ref = triton_entropy_loss_forward_backward(
         local_logits,
         target,
         None,
@@ -1018,6 +1018,86 @@ def _test_monolithic_metrics_without_grad_triton(batch_shape, num_columns, loss_
     Assert.rms_close_relative(weighted_nograd, weighted_grad, 1e-5, 1e-6)
 
 
+def _test_monolithic_distillation_loss_triton(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    entropy_loss_type,
+    block_size,
+    accumulate,
+    group=None,
+):
+    # Distillation (from a teacher distribution) fused with z-loss over one shared student softmax — the
+    # distribution-family kernel — against the sum of the standalone triton distillation and z-loss kernels
+    # accumulating into one gradient buffer. Covers each KL direction. Distillation and z-loss share the loss
+    # mask and the divisor (both are threaded identically by the head), and a non-unit temperature checks that
+    # it stays confined to the teacher term (z-loss is on the student softmax, so it must be temperature-free).
+    if not triton_available:
+        return
+    temperature = 1.5
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.logits, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    local_target = split_op(target, group, -1).contiguous()
+    divisor = local_logits.shape[:-1].numel()
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    # Reference: standalone triton distillation then z-loss, accumulating into one gradient buffer.
+    grad_ref = previous_grad.clone() if accumulate else None
+    dist_ref, _, grad_ref = triton_entropy_loss_forward_backward(
+        local_logits,
+        local_target,
+        loss_mask,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        temperature=temperature,
+        target_format=TargetFormat.logits,
+        entropy_loss_type=entropy_loss_type,
+        divisor=divisor,
+        block_size=block_size,
+    )
+    z_ref, grad_ref = triton_z_loss_forward_backward(
+        local_logits,
+        loss_mask,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        divisor=divisor,
+        block_size=block_size,
+    )
+
+    dist_fused, z_fused, grad_fused = triton_entropy_loss_forward_backward(
+        local_logits,
+        local_target,
+        loss_mask,
+        grad_logits=previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        temperature=temperature,
+        target_format=TargetFormat.logits,
+        entropy_loss_type=entropy_loss_type,
+        z=(grad_output,),
+        divisor=divisor,
+        block_size=block_size,
+    )
+
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(dist_fused, dist_ref, threshold, 1e-6)
+    Assert.rms_close_relative(z_fused, z_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        # The kernel superposes both losses' gradients in fp32 before the single cast; the standalone path
+        # rounds distillation's gradient before z-loss adds to it, so the two differ by up to a rounding step.
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
 @pytest.mark.parametrize("loss_masking", (False, True))
@@ -1096,6 +1176,37 @@ def test_monolithic_loss_triton(
 ):
     _test_monolithic_loss_triton(
         batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+@pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
+def test_monolithic_distillation_loss_triton(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    block_size,
+    accumulate,
+    entropy_loss_type,
+):
+    _test_monolithic_distillation_loss_triton(
+        batch_shape,
+        num_columns,
+        grad_output,
+        logits_scale_factor,
+        loss_masking,
+        dtype,
+        entropy_loss_type,
+        block_size,
+        accumulate,
     )
 
 
@@ -1398,6 +1509,25 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         accumulate,
                         test_context.group,
                     )
+            # Triton monolithic distribution family: distillation fused with z-loss over one softmax.
+            for entropy_loss_type in EntropyLossType:
+                with test_context.subtest(
+                    base_path, f"monolithic-distillation-{entropy_loss_type}-triton-{suffix}", 2
+                ) as subtest:
+                    if subtest.do_run:
+                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                        _test_monolithic_distillation_loss_triton(
+                            batch_shape,
+                            num_columns,
+                            grad_output,
+                            logits_scale_factor,
+                            loss_masking,
+                            dtype,
+                            entropy_loss_type,
+                            block_size,
+                            accumulate,
+                            test_context.group,
+                        )
 
 
 @pytest.mark.slow

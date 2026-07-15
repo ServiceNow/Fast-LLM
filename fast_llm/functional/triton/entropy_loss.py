@@ -362,12 +362,14 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     loss_mask_ptr=None,
     partial_losses_ptr=None,
     losses_ptr=None,
+    z_losses_ptr=None,
     max_logits_ptr=None,
     sum_exp_logits_ptr=None,
     target_max_logits_ptr=None,
     target_sum_exp_logits_ptr=None,
     from_logits: tl_constexpr = True,
     grad_losses=None,
+    grad_losses_z=0.0,
     grad_logits_ptr=None,
     grad_logits_stride_0: tl_constexpr = None,
     logits_scale_factor: tl_constexpr = 1.0,
@@ -381,9 +383,11 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     target_ptr = target_ptr + block_idx * target_stride_0
 
     if loss_mask_ptr is not None and tl.load(loss_mask_ptr + block_idx) == 0:
-        # This entry is masked, ignore.
+        # This entry is masked, ignore; z-loss shares the mask, so it drops too.
         if losses_ptr is not None:
             tl.store(losses_ptr + block_idx, 0)
+        if z_losses_ptr is not None:
+            tl.store(z_losses_ptr + block_idx, 0)
         if grad_losses is not None and not accumulate:
             for col_offset in tl.static_range(0, n_cols, block_size):
                 col_offsets = tl_arange(int(col_offset), int(col_offset + block_size))
@@ -428,10 +432,20 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
         loss = tl.log(sum_exp_logits) + max_logits - predicted_logits
         tl.store(losses_ptr + block_idx, loss)
 
+    if z_losses_ptr is not None:
+        log_sum_exp_logits = tl.log(sum_exp_logits) + max_logits
+        tl.store(z_losses_ptr + block_idx, log_sum_exp_logits * log_sum_exp_logits)
+
     if grad_losses is not None:
         if logits_scale_factor != 1.0:
             grad_losses *= logits_scale_factor
-        # grad / grad_output = exp_logits / sum_exp_logits - target_probabilities.
+            grad_losses_z *= logits_scale_factor
+        # A fused z-loss superposes onto the student-probability coefficient (it has no target term). Gated on
+        # its output pointer so the extra term is dead-code-eliminated when no z-loss shares the kernel.
+        student_coeff = grad_losses
+        if z_losses_ptr is not None:
+            student_coeff += 2.0 * grad_losses_z * (tl.log(sum_exp_logits) + max_logits)
+        # grad / grad_output = student_coeff * exp_logits / sum_exp_logits - grad_losses * target_probabilities.
         col_offset_start: tl.constexpr = (n_cols - 1) // block_size * block_size
         for col_offset in tl.static_range(col_offset_start, -1, -block_size):
             col_offsets = tl_arange(col_offset, col_offset + block_size)
@@ -449,7 +463,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
                 else:
                     target = tl.load(target_ptr + col_offsets, mask=mask, other=-float("inf")).to(tl.float32)
 
-            grad_logits = grad_losses * (exp_logits / sum_exp_logits - target)
+            grad_logits = student_coeff * (exp_logits / sum_exp_logits) - grad_losses * target
             grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
             if accumulate:
                 grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
@@ -593,12 +607,14 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
     loss_mask_ptr=None,
     partial_losses_ptr=None,
     losses_ptr=None,
+    z_losses_ptr=None,
     max_logits_ptr=None,
     sum_exp_logits_ptr=None,
     target_max_logits_ptr=None,
     target_sum_exp_logits_ptr=None,
     from_logits: tl_constexpr = True,
     grad_losses=None,
+    grad_losses_z=0.0,
     grad_logits_ptr=None,
     grad_logits_stride_0: tl_constexpr = None,
     logits_scale_factor: tl_constexpr = 1.0,
@@ -611,9 +627,11 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
     target_ptr = target_ptr + block_idx * target_stride_0
 
     if loss_mask_ptr is not None and tl.load(loss_mask_ptr + block_idx) == 0:
-        # This entry is masked, ignore.
+        # This entry is masked, ignore; z-loss shares the mask, so it drops too.
         if losses_ptr is not None:
             tl.store(losses_ptr + block_idx, 0)
+        if z_losses_ptr is not None:
+            tl.store(z_losses_ptr + block_idx, 0)
         if grad_losses is not None and not accumulate:
             for col_offset in tl.static_range(0, n_cols, block_size):
                 col_offsets = tl_arange(int(col_offset), int(col_offset + block_size))
@@ -649,9 +667,19 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
                 loss = loss + tl.log(target_sum_exp_logits) + target_max_logits
         tl.store(losses_ptr + block_idx, loss)
 
+    if z_losses_ptr is not None:
+        log_sum_exp_logits = tl.log(sum_exp_logits) + max_logits
+        tl.store(z_losses_ptr + block_idx, log_sum_exp_logits * log_sum_exp_logits)
+
     if grad_losses is not None:
         if logits_scale_factor != 1.0:
             grad_losses *= logits_scale_factor
+            grad_losses_z *= logits_scale_factor
+        # A fused z-loss superposes onto the student-probability coefficient (it has no target term). Gated on
+        # its output pointer so the extra term is dead-code-eliminated when no z-loss shares the kernel.
+        z_coeff = 0.0
+        if z_losses_ptr is not None:
+            z_coeff = 2.0 * grad_losses_z * (tl.log(sum_exp_logits) + max_logits)
         col_offset_start: tl.constexpr = (n_cols - 1) // block_size * block_size
         for col_offset in tl.static_range(col_offset_start, -1, -block_size):
             col_offsets = tl_arange(col_offset, col_offset + block_size)
@@ -671,8 +699,8 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
             predicted_probability = tl.exp(logits - max_logits) / sum_exp_logits
             predicted_log_probability = logits - max_logits - tl.log(sum_exp_logits)
             grad_logits = (
-                grad_losses * (predicted_log_probability - target_log_probability - loss) * predicted_probability
-            )
+                grad_losses * (predicted_log_probability - target_log_probability - loss) + z_coeff
+            ) * predicted_probability
             grad_logits_col_ptr = grad_logits_ptr + block_idx * grad_logits_stride_0 + col_offsets
             if accumulate:
                 grad_logits += tl.load(grad_logits_col_ptr, mask=mask)
@@ -749,14 +777,17 @@ def triton_entropy_loss_forward_backward(
     temperature: float = 1.0,
     target_format: TargetFormat = TargetFormat.labels,
     entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
+    z: tuple[float | None] | None = None,
     block_size: int | None = None,
     num_warps: int | None = None,
     divisor: float | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
     all in a single kernel.
      Compared to a standard pytorch implementation, this reduces memory usage (of logits) by 3x and memory I/O by 5x.
+    `z` fuses a z-loss over the same (distribution-target) softmax: `(z_grad_output,)`, sharing this loss's mask
+    and divisor. Returns `(loss, z_loss, grad_logits)`, with `z_loss` `None` when `z` is absent.
     TODO: Better handling of `grad_output = None`
     """
     # TODO: Improve assumptions.
@@ -777,19 +808,22 @@ def triton_entropy_loss_forward_backward(
         "logits_scale_factor": logits_scale_factor,
         "block_size": block_size,
     }
-    if grad_output is None:
+    z_grad_output = None if z is None else z[0]
+    has_grad = grad_output is not None or z_grad_output is not None
+    if not has_grad:
         backward_kwargs = {}
     else:
         accumulate = grad_logits is not None
         grad_logits = torch.empty_like(logits) if grad_logits is None else grad_logits
         backward_kwargs = {
             "grad_logits_ptr": grad_logits,
-            "grad_losses": grad_output / divisor,
+            "grad_losses": 0.0 if grad_output is None else grad_output / divisor,
             "grad_logits_stride_0": grad_logits.stride(-2),
             "accumulate": accumulate,
         }
     if target_format == TargetFormat.labels:
         assert entropy_loss_type != EntropyLossType.reverse_kl
+        assert z is None
         if num_warps is None:
             num_warps = 4 if block_size < 2048 else (8 if block_size < 8192 else 16)
         kwargs["num_warps"] = num_warps
@@ -831,6 +865,9 @@ def triton_entropy_loss_forward_backward(
     else:
         if loss_mask is not None:
             assert loss_mask.is_contiguous()
+        z_losses = torch.empty(n_rows, dtype=torch.float, device=logits.device) if z is not None else None
+        if has_grad and z is not None:
+            backward_kwargs["grad_losses_z"] = 0.0 if z_grad_output is None else z_grad_output / divisor
         if entropy_loss_type == EntropyLossType.reverse_kl:
             kernel = triton_reverse_kl_forward_backward_kernel_from_distribution
         else:
@@ -844,6 +881,7 @@ def triton_entropy_loss_forward_backward(
                 target,
                 loss_mask_ptr=loss_mask,
                 losses_ptr=losses,
+                z_losses_ptr=z_losses,
                 max_logits_ptr=None,
                 sum_exp_logits_ptr=None,
                 target_max_logits_ptr=None,
@@ -907,6 +945,7 @@ def triton_entropy_loss_forward_backward(
                 target_sum_exp_logits_ptr=target_sum_exp_logits,
                 partial_losses_ptr=losses,
                 losses_ptr=losses,
+                z_losses_ptr=z_losses,
                 target_stride_0=target.stride(-2),
                 target_logits_scale_factor=logits_scale_factor / temperature,
                 from_logits=target_format == TargetFormat.logits,
@@ -914,4 +953,5 @@ def triton_entropy_loss_forward_backward(
                 **backward_kwargs,
             )
     loss = reduce_losses(losses, divisor)
-    return loss, grad_logits
+    z_loss = None if z is None else reduce_losses(z_losses, divisor)
+    return loss, z_loss, grad_logits

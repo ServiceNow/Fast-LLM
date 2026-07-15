@@ -35,7 +35,7 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
         group = self._parallel_dim.group if self._vocab_parallel else None
         if TritonConfig.enabled(logits.device, self._config.use_triton):
             target, grad_output, divisor = arguments
-            return triton_entropy_loss_forward_backward(
+            loss, _, grad_logits = triton_entropy_loss_forward_backward(
                 logits,
                 target,
                 None,  # Labels are already masked
@@ -47,6 +47,7 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
                 entropy_loss_type=self._config.loss_type,
                 divisor=divisor,
             )
+            return loss, grad_logits
         loss, grad_logits, _ = self.combinable_forward_backward(logits, group, grad_logits, arguments)
         return loss, grad_logits
 
@@ -108,7 +109,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
         group = self._parallel_dim.group if self._vocab_parallel else None
         if TritonConfig.enabled(logits.device, self._config.use_triton):
             target, loss_mask, grad_output, divisor, entropy_loss_type, temperature = arguments
-            return triton_entropy_loss_forward_backward(
+            loss, _, grad_logits = triton_entropy_loss_forward_backward(
                 logits,
                 target,
                 loss_mask,
@@ -121,6 +122,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
                 entropy_loss_type=entropy_loss_type,
                 divisor=divisor,
             )
+            return loss, grad_logits
         loss, grad_logits, _ = self.combinable_forward_backward(logits, group, grad_logits, arguments)
         return loss, grad_logits
 
@@ -178,6 +180,21 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
         if grad is not None and loss_mask is not None:
             grad = grad * loss_mask.unsqueeze(-1)
         return loss, grad, None
+
+    def triton_add_inputs(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> None:
+        target, loss_mask, grad_output, divisor, loss_type, temperature = self.get_inputs(
+            kwargs, split_index, register
+        )
+        if context.divisor is None:
+            context.divisor = divisor
+        context.distillation = (target, loss_mask, grad_output, loss_type, temperature)
+
+    def triton_finish(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> tuple[torch.Tensor, None]:
+        return context.dist_loss, None
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return {"return_prediction_mask": True}
