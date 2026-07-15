@@ -383,7 +383,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     target_ptr = target_ptr + block_idx * target_stride_0
 
     if loss_mask_ptr is not None and tl.load(loss_mask_ptr + block_idx) == 0:
-        # This entry is masked, ignore. z-loss shares this mask (both use the loss mask), so it drops too.
+        # This entry is masked, ignore; z-loss shares the mask, so it drops too.
         if losses_ptr is not None:
             tl.store(losses_ptr + block_idx, 0)
         if z_losses_ptr is not None:
@@ -627,7 +627,7 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
     target_ptr = target_ptr + block_idx * target_stride_0
 
     if loss_mask_ptr is not None and tl.load(loss_mask_ptr + block_idx) == 0:
-        # This entry is masked, ignore. z-loss shares this mask (both use the loss mask), so it drops too.
+        # This entry is masked, ignore; z-loss shares the mask, so it drops too.
         if losses_ptr is not None:
             tl.store(losses_ptr + block_idx, 0)
         if z_losses_ptr is not None:

@@ -228,15 +228,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             context.new_log_probs = predicted_logits - max_logits - log_sum_exp_logits
             context.entropy_per_token = log_sum_exp_logits - weighted_logits_sum / sum_exp_logits
 
-        total_loss = None
-        for child in self._children:
-            loss, extra = child.triton_finish(context, kwargs, split_index, register)
-            if child._do_register_loss:
-                child._register_loss(child.name, loss, losses)
-            child.register_combinable_extras(extra, kwargs, losses)
-            weighted = loss if child.weight == 1 else loss * child.weight
-            total_loss = weighted if total_loss is None else total_loss + weighted
-        return total_loss, grad_logits
+        return self._triton_finish_children(context, kwargs, losses, split_index, register), grad_logits
 
     def _triton_distribution_forward_backward(
         self,
@@ -274,6 +266,16 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             divisor=context.divisor,
         )
 
+        return self._triton_finish_children(context, kwargs, losses, split_index, register), grad_logits
+
+    def _triton_finish_children(
+        self,
+        context: _TritonContext,
+        kwargs: dict[str, typing.Any],
+        losses: dict | None,
+        split_index: int,
+        register: bool,
+    ) -> torch.Tensor | None:
         total_loss = None
         for child in self._children:
             loss, extra = child.triton_finish(context, kwargs, split_index, register)
@@ -282,7 +284,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             child.register_combinable_extras(extra, kwargs, losses)
             weighted = loss if child.weight == 1 else loss * child.weight
             total_loss = weighted if total_loss is None else total_loss + weighted
-        return total_loss, grad_logits
+        return total_loss
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return safe_merge_dicts(*(child.get_preprocessing_config() for child in self._children))
