@@ -39,12 +39,6 @@ class ScheduleConfig(Config):
     data_overlap: bool = Field(
         default=True, desc="Overlap the data-parallel network communication.", hint=FieldHint.testing
     )
-    data_batch_warn_time_ms: float = Field(
-        default=1000.0,
-        desc="Warn if a batch takes too long to load.",
-        hint=FieldHint.optional,
-        valid=check_field(Assert.gt, 0),
-    )
     # Enable cpu throttling to avoid lag spikes, see https://arxiv.org/pdf/2211.05953.pdf, appendix D.2.
     throttle_cpu: bool = Field(
         default=True,
