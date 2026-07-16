@@ -395,7 +395,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         )
         self._register_policy_metrics(metrics, kwargs, losses)
 
-    def triton_metrics(
+    def _triton_metrics(
         self,
         new_log_probs: torch.Tensor,  # flat, from the kernel's shared softmax
         entropy_per_token: torch.Tensor,  # flat, from the kernel's `Σ exp·logits_norm`
@@ -443,7 +443,7 @@ class LanguageModelGRPOLoss[ConfigType: LanguageModelGRPOLossConfig](
         self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
     ) -> tuple[torch.Tensor, tuple]:
         metrics = (
-            self.triton_metrics(context.new_log_probs, context.entropy_per_token, kwargs, split_index)
+            self._triton_metrics(context.new_log_probs, context.entropy_per_token, kwargs, split_index)
             if self.triton_metrics_enabled(register)
             else None
         )
@@ -699,7 +699,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
         )
         return loss, (new_logprobs_mean, metrics), grad_logits
 
-    def compute_triton_seam(
+    def _compute_triton_seam(
         self,
         kwargs: dict[str, typing.Any],
         split_index: int,
@@ -716,7 +716,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
         loss, new_logprobs_mean, effective_grad = self._run_segment_seam(new_log_probs, loss_mask, kwargs, split_index)
         return loss, new_logprobs_mean, None if effective_grad is None else effective_grad.reshape(-1).contiguous()
 
-    def triton_metrics(
+    def _triton_metrics(
         self,
         new_log_probs: torch.Tensor,  # flat, from the kernel's shared softmax
         entropy_per_token: torch.Tensor,  # flat, from the kernel's `Σ exp·logits_norm`
@@ -755,7 +755,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
         kwargs: dict[str, typing.Any],
         split_index: int,
     ) -> None:
-        context.gspo_loss, context.gspo_new_logprobs, context.gspo_coeff = self.compute_triton_seam(
+        context.gspo_loss, context.gspo_new_logprobs, context.gspo_coeff = self._compute_triton_seam(
             kwargs, split_index, *softmax
         )
 
@@ -766,7 +766,7 @@ class LanguageModelGSPOLoss[ConfigType: LanguageModelGSPOLossConfig](
         self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
     ) -> tuple[torch.Tensor, tuple]:
         metrics = (
-            self.triton_metrics(context.new_log_probs, context.entropy_per_token, kwargs, split_index)
+            self._triton_metrics(context.new_log_probs, context.entropy_per_token, kwargs, split_index)
             if self.triton_metrics_enabled(register)
             else None
         )

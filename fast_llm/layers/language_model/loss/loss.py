@@ -187,7 +187,7 @@ class CombinableLoss:
         group: "torch.distributed.ProcessGroup | None",
         logits_scale_factor: float,
         arguments: tuple,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, typing.Any]:
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, typing.Any]:
         raise NotImplementedError()
 
     @torch.compile

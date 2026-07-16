@@ -304,24 +304,29 @@ class MonolithicLossConfig(LanguageModelLossConfig):
                 raise ValueError(f"Loss `{name}` sets `use_triton`, which has no effect on a fused child loss.")
         # A single softmax serves one effective scale (stacked with the common model scale).
         Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
-        if self.use_triton:
-            # Two fused kernels, one slot per loss kind: a label-family kernel (ce/z/grpo/gspo) and a
-            # distribution kernel (distillation + optional z-loss). Distillation can't share the label kernel.
-            seen_kinds = set()
-            has_distillation = any(loss.triton_kind == "distillation" for loss in self.losses.values())
-            for name, loss in self.losses.items():
-                if loss.triton_kind is None:
-                    raise ValueError(f"Loss `{name}` (`{type(loss).__name__}`) has no triton fused implementation.")
-                if loss.triton_kind in seen_kinds:
-                    raise ValueError(
-                        f"The triton path fuses at most one `{loss.triton_kind}` loss; `{name}` is a duplicate."
-                    )
-                if has_distillation and loss.triton_kind not in ("distillation", "z"):
-                    raise ValueError(
-                        f"The triton path fuses distillation only with z-loss; `{name}` (`{loss.triton_kind}`)"
-                        " must use the compiled path."
-                    )
-                seen_kinds.add(loss.triton_kind)
+        if self.use_triton and (incompatibility := self._triton_plan()[1]) is not None:
+            raise ValueError(f"The child loss set has no fused triton implementation: {incompatibility}.")
+
+    def _triton_plan(self) -> tuple[bool, str | None]:
+        # The fused triton path has two kernels, one slot per loss kind: a label-family kernel (ce/z/grpo/gspo)
+        # and a distribution kernel (distillation + optional z-loss). Returns whether the distribution kernel
+        # applies and, when the child set fits neither kernel, the reason it can't (else `None`). Single source
+        # for the rule so the explicit-`use_triton` validation and the `use_triton=None` fallback can't disagree.
+        is_distribution = any(loss.triton_kind == "distillation" for loss in self.losses.values())
+        seen_kinds = set()
+        for name, loss in self.losses.items():
+            kind = loss.triton_kind
+            if kind is None:
+                reason = f"loss `{name}` (`{type(loss).__name__}`) has no triton fused implementation"
+            elif kind in seen_kinds:
+                reason = f"the triton path fuses at most one `{kind}` loss (`{name}` is a duplicate)"
+            elif is_distribution and kind not in ("distillation", "z"):
+                reason = f"the triton path fuses distillation only with z-loss (`{name}` is `{kind}`)"
+            else:
+                seen_kinds.add(kind)
+                continue
+            return is_distribution, reason
+        return is_distribution, None
 
     @property
     def loss_class(self) -> "type[LanguageModelLoss]":

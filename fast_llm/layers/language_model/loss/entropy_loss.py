@@ -194,7 +194,7 @@ class LanguageModelDistillationLoss[ConfigType: LanguageModelDistillationLossCon
     def triton_finish(
         self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
     ) -> tuple[torch.Tensor, None]:
-        return context.dist_loss, None
+        return context.distillation_loss, None
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return {"return_prediction_mask": True}

@@ -36,7 +36,7 @@ class _TritonContext:
     grpo_new_logprobs: torch.Tensor | None = None
     gspo_loss: torch.Tensor | None = None
     gspo_new_logprobs: torch.Tensor | None = None
-    dist_loss: torch.Tensor | None = None
+    distillation_loss: torch.Tensor | None = None
     # Shared metrics precursors from the kernel's softmax + `Σ exp·logits_norm` (set only when metrics are on).
     new_log_probs: torch.Tensor | None = None
     entropy_per_token: torch.Tensor | None = None
@@ -50,7 +50,7 @@ def _monolithic_core(
     logits_scale_factor: float,
     grad_logits: torch.Tensor | None,
     arguments: tuple[tuple, ...],
-) -> tuple[list[tuple[torch.Tensor, typing.Any]], torch.Tensor | None]:
+) -> tuple[list[tuple[torch.Tensor | None, typing.Any]], torch.Tensor | None]:
     """
     One shared softmax over the logits, then each child loss's `fused_core` consuming it. The child
     list is fixed per config, so the loop unrolls inside this single `@torch.compile` boundary and each
@@ -124,16 +124,10 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
         )
         # The shared softmax serves one effective scale; the config validates the children agree on it.
         self._softmax_scale_factor = self._children[0]._logits_scale_factor
-        # Two fused triton kernels: a label-family kernel (ce/z/grpo/gspo) and a distribution kernel
-        # (distillation + optional z-loss). Pick by whether a distribution-target child is present; a set that
-        # fits neither kernel (e.g. distillation mixed with grpo, or a duplicate kind) falls back to compiled.
-        triton_kinds = [child._config.triton_kind for child in self._children]
-        self._triton_distribution = "distillation" in triton_kinds
-        no_duplicate_kinds = len(triton_kinds) == len(set(triton_kinds))
-        if self._triton_distribution:
-            self._triton_valid = set(triton_kinds) <= {"distillation", "z"} and no_duplicate_kinds
-        else:
-            self._triton_valid = None not in triton_kinds and no_duplicate_kinds
+        # The kernel choice and triton-eligibility live in the config, so the explicit-`use_triton` validation
+        # and this `use_triton=None` fallback share one rule and can't disagree.
+        self._triton_distribution, triton_incompatibility = self._config._triton_plan()
+        self._triton_valid = triton_incompatibility is None
 
     def forward_backward(
         self,
@@ -251,7 +245,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             child.triton_add_inputs(context, kwargs, split_index, register)
         target, loss_mask, grad_output, entropy_loss_type, temperature = context.distillation
         # z-loss shares distillation's mask and divisor; the driver takes only its weighted `grad_output`.
-        context.dist_loss, context.z_loss, grad_logits = triton_entropy_loss_forward_backward(
+        context.distillation_loss, context.z_loss, grad_logits = triton_entropy_loss_forward_backward(
             logits,
             target,
             loss_mask,
