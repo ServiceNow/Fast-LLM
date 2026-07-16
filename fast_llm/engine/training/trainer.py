@@ -225,6 +225,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                     train_iterator,
                     self._schedule,
                     iteration=self._completed_steps,
+                    documents_seen=self._documents_seen,
                     return_metrics=is_logging,
                 )
 

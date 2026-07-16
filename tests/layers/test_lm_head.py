@@ -28,6 +28,28 @@ VOCAB_SIZE = 500
 GSPO_NUM_DOCUMENTS = 4
 
 
+def reference_data_metrics(
+    prefix: str,
+    labels: torch.Tensor,
+    label_counts: torch.Tensor,
+    reward: torch.Tensor,
+    model_version: torch.Tensor,
+    documents_seen: int,
+    num_documents: int,
+) -> list[tuple[str, torch.Tensor]]:
+    # Independent reference for `_register_data_metrics`: document-weighted mean and masked max/min of
+    # reward and staleness (documents_seen - model_version).
+    loss_mask = labels >= 0
+    document_weight = loss_mask.float() / label_counts.float().clamp(min=1)
+    metrics = []
+    for name, values in (("train_samples_reward", reward), ("staleness", documents_seen - model_version)):
+        values = values.float()
+        metrics.append((f"{prefix}_{name}", (values * document_weight).sum() / num_documents))
+        metrics.append((f"{prefix}_max_{name}", values[loss_mask].max()))
+        metrics.append((f"{prefix}_min_{name}", values[loss_mask].min()))
+    return metrics
+
+
 @dataclasses.dataclass
 class LMHeadTestConfig:
     name: str
@@ -201,6 +223,15 @@ class LMHeadTestConfig:
             kwargs[LanguageModelKwargs.num_documents_in_batch] = (
                 len(self.actual_gspo_document_lengths) if self.gspo_loss is not False else 1
             )
+            kwargs[LanguageModelLossKwargs.reward] = [
+                torch.randn(input_.shape[:-1], dtype=torch.float32, device=device)
+                for _ in range(self.prediction_heads)
+            ]
+            kwargs[LanguageModelLossKwargs.model_version] = [
+                torch.randint(0, 50, input_.shape[:-1], dtype=torch.int64, device=device)
+                for _ in range(self.prediction_heads)
+            ]
+            kwargs[LanguageModelKwargs.documents_seen] = 100
         if self.gspo_loss is not False:
             document_lengths = self.actual_gspo_document_lengths
             document_length_repeats = torch.tensor(document_lengths, dtype=torch.int64, device=device)
@@ -318,6 +349,16 @@ class LMHeadTestConfig:
                 names_losses_weights.append(("grpo_loss_max_advantage", metrics.max_advantage, 0.0))
                 names_losses_weights.append(("grpo_loss_min_advantage", metrics.min_advantage, 0.0))
                 names_losses_weights.append(("grpo_loss_entropy", metrics.entropy / num_documents, 0.0))
+                for name, value in reference_data_metrics(
+                    "grpo_loss",
+                    labels,
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.reward][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.model_version][head._prediction_distance - 1],
+                    kwargs[LanguageModelKwargs.documents_seen],
+                    num_documents,
+                ):
+                    names_losses_weights.append((name, value, 0.0))
 
         if self.gspo_loss is not False:
             gspo_loss, _ = reference_gspo_loss(
@@ -372,6 +413,16 @@ class LMHeadTestConfig:
                 names_losses_weights.append(("gspo_loss_min_advantage", metrics.min_advantage, 0.0))
                 names_losses_weights.append(("gspo_loss_num_segments", metrics.num_segments, 0.0))
                 names_losses_weights.append(("gspo_loss_entropy", metrics.entropy / num_documents, 0.0))
+                for name, value in reference_data_metrics(
+                    "gspo_loss",
+                    labels,
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.reward][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.model_version][head._prediction_distance - 1],
+                    kwargs[LanguageModelKwargs.documents_seen],
+                    num_documents,
+                ):
+                    names_losses_weights.append((name, value, 0.0))
 
         actual_losses = [loss * weight for _, loss, weight in names_losses_weights if weight != 0.0]
         total_loss = sum(actual_losses)

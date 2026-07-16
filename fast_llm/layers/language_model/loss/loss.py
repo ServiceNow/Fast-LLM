@@ -222,7 +222,7 @@ class CombinableLoss:
         return grad_logits
 
     def register_combinable_extras(
-        self, extra: typing.Any, kwargs: dict[str, typing.Any], losses: dict | None
+        self, extra: typing.Any, kwargs: dict[str, typing.Any], losses: dict | None, split_index: int
     ) -> None:
         """Register per-loss outputs beyond the loss scalar (produced by `fused_core`). No-op by default."""
 

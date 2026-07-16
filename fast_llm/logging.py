@@ -65,6 +65,8 @@ _TRAINING_METRIC_FORMAT_KEYS = _VALIDATION_METRIC_FORMAT_KEYS | {
     "skipped_iters",
     "nan_iters",
     "step_time_average_ms",
+    "data_wait_time_ms",
+    "data_preprocessing_time_ms",
     "remaining_time",
     "completion_time",
     "percent_done",
@@ -77,6 +79,8 @@ _TRAINING_METRIC_FORMATS = _VALIDATION_METRIC_FORMATS + (
     " | skipped iterations: {skipped_iters:3.0f}"
     " | nan iterations: {nan_iters:3.0f}"
     " | average step time {step_time_average_ms:.2f} ms"
+    " | data wait: {data_wait_time_ms:.2f} ms"
+    " | data preprocessing: {data_preprocessing_time_ms:.2f} ms"
     " | remaining {remaining_time} "
     " | completion {completion_time} ({percent_done:.2f} %)"
 )

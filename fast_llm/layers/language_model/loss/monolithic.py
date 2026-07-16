@@ -161,7 +161,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             loss, extra, grad_logits = child.finish(loss, extra, kwargs, split_index, grad_logits, logits.dtype)
             if child._do_register_loss:
                 child._register_loss(child.name, loss, losses)
-            child.register_combinable_extras(extra, kwargs, losses)
+            child.register_combinable_extras(extra, kwargs, losses, split_index)
             weighted = loss if child.weight == 1 else loss * child.weight
             total_loss = weighted if total_loss is None else total_loss + weighted
         return total_loss, grad_logits
@@ -281,7 +281,7 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
             loss, extra = child.triton_finish(context, kwargs, split_index, register)
             if child._do_register_loss:
                 child._register_loss(child.name, loss, losses)
-            child.register_combinable_extras(extra, kwargs, losses)
+            child.register_combinable_extras(extra, kwargs, losses, split_index)
             weighted = loss if child.weight == 1 else loss * child.weight
             total_loss = weighted if total_loss is None else total_loss + weighted
         return total_loss

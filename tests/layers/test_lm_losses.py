@@ -19,10 +19,12 @@ from fast_llm.functional.triton.monolithic_loss import (
     triton_monolithic_loss_forward_backward,
 )
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import (
     LanguageModelDistillationLossConfig,
     LanguageModelGRPOLossConfig,
     LanguageModelLabelEntropyLossConfig,
+    LanguageModelLossKwargs,
     LanguageModelZLossConfig,
 )
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
@@ -1331,6 +1333,43 @@ def test_gspo_metrics(
     accumulate,
 ):
     _test_gspo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, num_segments)
+
+
+def test_policy_data_metrics():
+    """`_register_data_metrics` logs reward and staleness (documents_seen - model_version) mean/max/min."""
+    config = LanguageModelGRPOLossConfig.from_dict({"metrics": "basic"})
+    loss = config.get_layer(DistributedConfig.from_dict({}), name="grpo", prediction_distance=1, prediction_heads=1)
+
+    # 6 tokens, 2 documents (3 each), token 2 masked. reward is constant per document.
+    labels = torch.tensor([1, 2, -100, 3, 4, 5])
+    loss_mask = labels >= 0
+    reward = torch.tensor([1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+    model_version = torch.tensor([5, 5, 5, 7, 8, 9], dtype=torch.int64)
+    label_counts = torch.tensor([2, 2, 2, 3, 3, 3], dtype=torch.int32)
+    num_documents = 2
+    documents_seen = 100
+
+    kwargs = {
+        LanguageModelLossKwargs.labels: [labels],
+        LanguageModelLossKwargs.reward: [reward],
+        LanguageModelLossKwargs.model_version: [model_version],
+        LanguageModelLossKwargs.label_counts: [label_counts],
+        LanguageModelKwargs.num_documents_in_batch: num_documents,
+        LanguageModelKwargs.documents_seen: documents_seen,
+    }
+    losses = {loss_def.name: [] for loss_def in loss.get_loss_definitions()}
+    loss._register_data_metrics(kwargs, losses, 0)
+
+    def reference(values: torch.Tensor) -> tuple[float, float, float]:
+        masked = loss_mask.float() / label_counts.float().clamp(min=1)
+        values = values.float()
+        return (values * masked).sum() / num_documents, values[loss_mask].max(), values[loss_mask].min()
+
+    for name, values in (("train_samples_reward", reward), ("staleness", documents_seen - model_version)):
+        mean, maximum, minimum = reference(values)
+        Assert.rms_close_relative(losses[f"grpo_{name}"][0], mean, 1e-6)
+        Assert.rms_close_relative(losses[f"grpo_max_{name}"][0], maximum, 1e-6)
+        Assert.rms_close_relative(losses[f"grpo_min_{name}"][0], minimum, 1e-6)
 
 
 @pytest.mark.skip(reason="DPO loss is broken")

@@ -1,7 +1,6 @@
 import collections
 import contextlib
 import dataclasses
-import logging
 import time
 import typing
 
@@ -22,13 +21,12 @@ from fast_llm.engine.schedule.schedule import Schedule, Step
 from fast_llm.logging import log_memory_usage
 from fast_llm.utils import Assert
 
-logger = logging.getLogger(__name__)
-
 
 @dataclasses.dataclass()
 class BatchContext:
     iteration: int
     schedule: Schedule
+    documents_seen: int = 0
     # Index and data: (iteration, data_index, input, kwargs)
     data_iterator: typing.Iterator[tuple[int, torch.Tensor, dict]] = None
     inputs: dict[int, torch.Tensor] = dataclasses.field(default_factory=dict)
@@ -149,6 +147,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         schedule: Schedule,
         *,
         iteration: int = 1,
+        documents_seen: int = 0,
         return_metrics: bool = False,
     ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None, int]:
         assert self._is_setup
@@ -157,10 +156,15 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             assert self._support_training
 
         metrics = {} if return_metrics else None
+        if metrics is not None:
+            # Always present on logging steps so "no wait" shows as 0 rather than a gap.
+            metrics["data_wait_time_ms"] = 0.0
+            metrics["data_preprocessing_time_ms"] = 0.0
         # Set the context.
         context = BatchContext(
             iteration=iteration,
             schedule=schedule,
+            documents_seen=documents_seen,
             losses={loss_def: [] for loss_def in self._loss_definitions},
             metrics=metrics,
         )
@@ -320,7 +324,16 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
             if context.schedule.phase.is_training
             else None
         )
+        measure_time = context.metrics is not None
+        # Time blocked on the data loader (input starvation), kept separate from the CPU
+        # preprocessing below. Preprocessing runs interleaved with the schedule's compute, so its
+        # clock is paused across each yield to exclude the compute happening between micro-batches.
+        if measure_time:
+            wait_start = time.perf_counter()
         model_inputs = [next(data_iterator) for _ in range(self._config.sequential_micro_batches)]
+        if measure_time:
+            context.metrics["data_wait_time_ms"] += (time.perf_counter() - wait_start) * 1000
+            preprocess_start = time.perf_counter()
         model_inputs[0][0].share_batch_data(
             [model_input for model_inputs_ in model_inputs for model_input in model_inputs_], self._distributed
         )
@@ -336,6 +349,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                     metrics=context.metrics,
                     extra_kwargs={
                         "grad_output": grad_output,
+                        "documents_seen": context.documents_seen,
                         "micro_batch": micro_batch,
                         "num_micro_batches": self._config.sequential_micro_batches,
                         "micro_batch_splits": self._config.micro_batch_splits,
@@ -353,7 +367,11 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                         device=self._distributed.device if self._stages_owned[-1] else "meta",
                     )
                 context.batch[data_index] = kwargs
+                if measure_time:
+                    context.metrics["data_preprocessing_time_ms"] += (time.perf_counter() - preprocess_start) * 1000
                 yield
+                if measure_time:
+                    preprocess_start = time.perf_counter()
 
     def _restore(self, context: BatchContext, step: Step) -> None:
         if step.restore_launch:
@@ -422,15 +440,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         return input_grad
 
     def _get_forward_input(self, context: BatchContext, step: Step) -> torch.Tensor:
-        if step.index not in context.batch:
-            start_time = time.perf_counter()
-
-            while step.index not in context.batch:
-                next(context.data_iterator)
-
-            data_time = (time.perf_counter() - start_time) * 1000
-            if data_time > self._config.data_batch_warn_time_ms:
-                logger.warning(f"Data loading took {data_time:,.2f} ms")
+        while step.index not in context.batch:
+            next(context.data_iterator)
         return context.inputs.pop(step.global_index).detach().requires_grad_(step.stage != 0)
 
     def _send(self, context: BatchContext, step: Step, output: torch.Tensor) -> None:
