@@ -20,7 +20,6 @@ from fast_llm.layers.language_model.config import (
     LanguageModelHeadConfig,
     LanguageModelKwargs,
 )
-from fast_llm.layers.language_model.loss.config import LanguageModelLabelEntropyLossConfig
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 from fast_llm.tensor import TensorMeta
 from fast_llm.utils import Assert, safe_merge_dicts
@@ -93,9 +92,7 @@ class LanguageModelHead[ConfigType: LanguageModelHeadConfig](Block[ConfigType]):
             lr_scale=self._lr_scale,
             peft=self._peft,
         )
-        loss_configs = (
-            self._config.losses if self._config.losses else {"cross_entropy": LanguageModelLabelEntropyLossConfig()}
-        )
+        loss_configs = self._config.get_effective_losses()
         loss_coefficient = (
             1.0
             if self._config.prediction_loss_coefficient is None

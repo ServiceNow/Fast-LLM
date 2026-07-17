@@ -222,6 +222,18 @@ class PolicyMetricsLevel(enum.StrEnum):
     auto = "auto"
 
 
+class LossImplementation(enum.StrEnum):
+    # Fuse combinable losses over one shared softmax, using triton when the group is triton-eligible and
+    # triton is available, else the compiled path.
+    auto = "auto"
+    # Fuse combinable losses, forcing the `torch.compile` path.
+    compiled = "compiled"
+    # Fuse combinable losses, forcing triton (errors if a group has no triton kernel).
+    triton = "triton"
+    # No fusion: each loss runs its own softmax, honoring its own `use_triton`.
+    per_loss = "per_loss"
+
+
 @config_class()
 class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
     """Shared base for policy-gradient losses (GRPO, GSPO)."""
@@ -275,9 +287,12 @@ class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig, Combina
         return LanguageModelGSPOLoss
 
 
-@config_class(dynamic_type={LanguageModelLossConfig: "monolithic"})
+@config_class()
 class MonolithicLossConfig(LanguageModelLossConfig):
-    """A composite loss that runs one vocabulary softmax and shares it across its combinable child losses."""
+    """A composite loss that runs one vocabulary softmax and shares it across its combinable child losses.
+
+    Not user-selectable: the head synthesizes it internally from a flat loss set (see
+    `LanguageModelHeadConfig.get_effective_losses`), so it is not registered as a dynamic `type`."""
 
     _abstract: typing.ClassVar[bool] = False
 

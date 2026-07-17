@@ -8,7 +8,14 @@ from fast_llm.layers.block.config import BlockConfig, BlockSequenceConfig
 from fast_llm.layers.common.normalization.config import NormalizationConfig
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.config import DecoderBlockConfig
-from fast_llm.layers.language_model.loss.config import LanguageModelLossConfig, LanguageModelLossKwargs
+from fast_llm.layers.language_model.loss.config import (
+    CombinableLossConfig,
+    LanguageModelLabelEntropyLossConfig,
+    LanguageModelLossConfig,
+    LanguageModelLossKwargs,
+    LossImplementation,
+    MonolithicLossConfig,
+)
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
@@ -108,6 +115,13 @@ class LanguageModelHeadConfig(BlockConfig):
         "If not specified, a cross-entropy loss with respect to the targets will be used.",
         hint=FieldHint.core,
     )
+    loss_implementation: LossImplementation = Field(
+        default=LossImplementation.auto,
+        desc="How to realize the losses. `auto`/`compiled`/`triton` fuse the combinable losses into a single"
+        " shared-softmax kernel (`auto` picks triton when available and eligible, else compiled); `per_loss`"
+        " runs each loss on its own softmax.",
+        hint=FieldHint.expert,
+    )
     # TODO: Cleanup
     output_weight: ParameterConfig = Field(
         desc="Configuration for the LM output layer (weight). Ignored for tied embeddings",
@@ -179,6 +193,42 @@ class LanguageModelHeadConfig(BlockConfig):
     def _validate(self) -> None:
         super()._validate()
         assert LM_HEAD_LOSS_NAME not in self.losses
+        # Surface fusion/grouping errors (e.g. an ineligible `triton` set) at config time, incl. `--validate`.
+        self.get_effective_losses()
+
+    def get_effective_losses(self) -> dict[str, LanguageModelLossConfig]:
+        # The top-level losses the head builds. Combinable losses are fused into a shared-softmax
+        # `MonolithicLoss` unless `loss_implementation` is `per_loss`; a single softmax serves one effective
+        # scale, so they are grouped by `logits_scale_factor` (the common head scale applies to all). Each
+        # group takes the slot of its first member; non-combinable losses (e.g. DPO) stay standalone.
+        losses = self.losses or {"cross_entropy": LanguageModelLabelEntropyLossConfig()}
+        if self.loss_implementation == LossImplementation.per_loss:
+            return dict(losses)
+        use_triton = {
+            LossImplementation.auto: None,
+            LossImplementation.compiled: False,
+            LossImplementation.triton: True,
+        }[self.loss_implementation]
+        scale_groups: dict[float, dict[str, LanguageModelLossConfig]] = {}
+        slots: list[float | tuple[str, LanguageModelLossConfig]] = []
+        for name, loss in losses.items():
+            if isinstance(loss, CombinableLossConfig):
+                if loss.logits_scale_factor not in scale_groups:
+                    scale_groups[loss.logits_scale_factor] = {}
+                    slots.append(loss.logits_scale_factor)
+                scale_groups[loss.logits_scale_factor][name] = loss
+            else:
+                slots.append((name, loss))
+        named = len(scale_groups) > 1
+        effective, group_index = {}, 0
+        for slot in slots:
+            if isinstance(slot, tuple):
+                effective[slot[0]] = slot[1]
+            else:
+                name = f"monolithic_{group_index}" if named else "monolithic"
+                effective[name] = MonolithicLossConfig(losses=scale_groups[slot], use_triton=use_triton)
+                group_index += 1
+        return effective
 
     def get_reference_models(self) -> set[str]:
         return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}
