@@ -6,14 +6,20 @@ import pytest
 import torch
 
 from fast_llm.engine.config_utils.data_type import DataType
+from fast_llm.functional.triton import triton_available
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
+from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelHeadConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
-from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs
+from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs, MonolithicLossConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
-from tests.layers.test_lm_losses import reference_grpo_loss, reference_gspo_loss
+from tests.layers.test_lm_losses import (
+    reference_grpo_loss,
+    reference_grpo_metrics,
+    reference_gspo_loss,
+    reference_gspo_metrics,
+)
 from tests.utils.utils import get_base_model, get_stage
 
 NUM_TOKENS = 200
@@ -22,11 +28,34 @@ VOCAB_SIZE = 500
 GSPO_NUM_DOCUMENTS = 4
 
 
+def reference_data_metrics(
+    prefix: str,
+    labels: torch.Tensor,
+    label_counts: torch.Tensor,
+    reward: torch.Tensor,
+    model_version: torch.Tensor,
+    documents_seen: int,
+    num_documents: int,
+) -> list[tuple[str, torch.Tensor]]:
+    # Independent reference for `_register_data_metrics`: document-weighted mean and masked max/min of
+    # reward and staleness (documents_seen - model_version).
+    loss_mask = labels >= 0
+    document_weight = loss_mask.float() / label_counts.float().clamp(min=1)
+    metrics = []
+    for name, values in (("train_samples_reward", reward), ("staleness", documents_seen - model_version)):
+        values = values.float()
+        metrics.append((f"{prefix}_{name}", (values * document_weight).sum() / num_documents))
+        metrics.append((f"{prefix}_max_{name}", values[loss_mask].max()))
+        metrics.append((f"{prefix}_min_{name}", values[loss_mask].min()))
+    return metrics
+
+
 @dataclasses.dataclass
 class LMHeadTestConfig:
     name: str
     label_loss: bool | float = False
     distillation_loss: bool | float = False
+    distillation_temperature: float = 1.0
     z_loss: bool | float = False
     grpo_loss: bool | float = False
     gspo_loss: bool | float = False
@@ -39,6 +68,9 @@ class LMHeadTestConfig:
     tied_embedding_weight: bool = False
     num_splits: int = 1
     gspo_document_lengths: tuple[int, ...] | None = None
+    loss_implementation: str = "per_loss"
+    grpo_metrics: str | None = None
+    gspo_metrics: str | None = None
 
     @property
     def actual_label_loss(self):
@@ -68,6 +100,8 @@ class LMHeadTestConfig:
                 losses["label"]["weight"] = self.label_loss
         if self.distillation_loss is not False:
             losses["distillation"] = {"type": "distillation", "reference_model": "distillation"}
+            if self.distillation_temperature != 1.0:
+                losses["distillation"]["temperature"] = self.distillation_temperature
             if isinstance(self.distillation_loss, float):
                 losses["distillation"]["weight"] = self.distillation_loss
         if self.z_loss is not False:
@@ -75,15 +109,25 @@ class LMHeadTestConfig:
             if isinstance(self.z_loss, float):
                 losses["z_loss"]["weight"] = self.z_loss
         if self.grpo_loss is not False:
-            losses["grpo_loss"] = {"type": "grpo"}
+            # Metrics default to `auto` (→ `basic` at `pipeline_parallel == 1`), so pin `none` explicitly
+            # unless the test exercises them.
+            losses["grpo_loss"] = {"type": "grpo", "metrics": self.grpo_metrics or "none"}
             if isinstance(self.grpo_loss, float):
                 losses["grpo_loss"]["weight"] = self.grpo_loss
         if self.gspo_loss is not False:
-            losses["gspo_loss"] = {"type": "gspo"}
+            losses["gspo_loss"] = {"type": "gspo", "metrics": self.gspo_metrics or "none"}
             if isinstance(self.gspo_loss, float):
                 losses["gspo_loss"]["weight"] = self.gspo_loss
         if losses:
             head_config["losses"] = losses
+        # The head auto-groups the combinable losses into one shared-softmax kernel; the test's implementation
+        # label maps onto the real selector (`fused` forces the compiled backend, `fused_triton` the triton one).
+        head_config["loss_implementation"] = {
+            "per_loss": "per_loss",
+            "fused": "compiled",
+            "fused_triton": "triton",
+            "auto": "auto",
+        }[self.loss_implementation]
 
         return GPTModelConfig.from_dict(
             {
@@ -171,6 +215,15 @@ class LMHeadTestConfig:
             kwargs[LanguageModelKwargs.num_documents_in_batch] = (
                 len(self.actual_gspo_document_lengths) if self.gspo_loss is not False else 1
             )
+            kwargs[LanguageModelLossKwargs.reward] = [
+                torch.randn(input_.shape[:-1], dtype=torch.float32, device=device)
+                for _ in range(self.prediction_heads)
+            ]
+            kwargs[LanguageModelLossKwargs.model_version] = [
+                torch.randint(0, 50, input_.shape[:-1], dtype=torch.int64, device=device)
+                for _ in range(self.prediction_heads)
+            ]
+            kwargs[LanguageModelKwargs.documents_seen] = 100
         if self.gspo_loss is not False:
             document_lengths = self.actual_gspo_document_lengths
             document_length_repeats = torch.tensor(document_lengths, dtype=torch.int64, device=device)
@@ -239,9 +292,12 @@ class LMHeadTestConfig:
             names_losses_weights.append(("label", label_loss, float(self.actual_label_loss)))
 
         if self.distillation_loss is not False:
+            # Teacher logits are scaled by `logits_scale_factor / temperature` before the softmax, matching the kernel.
+            teacher_logits = kwargs[f"reference_distillation_hidden_states"]["head.logits"].float()
+            teacher_logits = teacher_logits * (self.logits_scale_factor / self.distillation_temperature)
             distillation_loss = torch.nn.functional.cross_entropy(
                 logits,
-                torch.softmax(kwargs[f"reference_distillation_hidden_states"]["head.logits"], -1),
+                torch.softmax(teacher_logits, -1),
                 reduction="mean" if loss_mask is None else "none",
             )
             if loss_mask is not None:
@@ -264,6 +320,37 @@ class LMHeadTestConfig:
             )
             names_losses_weights.append(("grpo_loss", grpo_loss, float(self.grpo_loss)))
             names_losses_weights.append(("grpo_loss_new_logprobs", new_logprobs, 0.0))
+
+            if self.grpo_metrics is not None:
+                # `logits` is already scaled above, so pass logits_scale_factor=1.0.
+                metrics = reference_grpo_metrics(
+                    logits,
+                    labels,
+                    kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    epsilon_low=0.2,
+                    epsilon_high=0.2,
+                    logits_scale_factor=1.0,
+                )
+                num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
+                for attr in ("old_logprobs", "ratio_new_old", "kl_new_old", "clipped_ratio_fraction", "advantage"):
+                    names_losses_weights.append((f"grpo_loss_{attr}", getattr(metrics, attr) / num_documents, 0.0))
+                for attr in ("ratio_new_old_sum", "ratio_new_old_squared_sum", "num_tokens"):
+                    names_losses_weights.append((f"grpo_loss_{attr}", getattr(metrics, attr), 0.0))
+                names_losses_weights.append(("grpo_loss_max_advantage", metrics.max_advantage, 0.0))
+                names_losses_weights.append(("grpo_loss_min_advantage", metrics.min_advantage, 0.0))
+                names_losses_weights.append(("grpo_loss_entropy", metrics.entropy / num_documents, 0.0))
+                for name, value in reference_data_metrics(
+                    "grpo_loss",
+                    labels,
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.reward][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.model_version][head._prediction_distance - 1],
+                    kwargs[LanguageModelKwargs.documents_seen],
+                    num_documents,
+                ):
+                    names_losses_weights.append((name, value, 0.0))
 
         if self.gspo_loss is not False:
             gspo_loss, _ = reference_gspo_loss(
@@ -294,6 +381,40 @@ class LMHeadTestConfig:
             new_logprobs = torch.stack(document_means).mean()
             names_losses_weights.append(("gspo_loss", gspo_loss, float(self.gspo_loss)))
             names_losses_weights.append(("gspo_loss_new_logprobs", new_logprobs, 0.0))
+
+            if self.gspo_metrics is not None:
+                # `logits` is already scaled above, so pass logits_scale_factor=1.0.
+                metrics = reference_gspo_metrics(
+                    logits,
+                    labels,
+                    kwargs[LanguageModelLossKwargs.advantages][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.old_log_probabilities][head._prediction_distance - 1],
+                    kwargs[BlockKwargs.global_document_index_q].long() - 1,
+                    kwargs[BlockKwargs.num_documents_in_sequence],
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    epsilon_low=0.2,
+                    epsilon_high=0.2,
+                    logits_scale_factor=1.0,
+                )
+                num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]
+                for attr in ("old_logprobs", "ratio_new_old", "kl_new_old", "clipped_ratio_fraction", "advantage"):
+                    names_losses_weights.append((f"gspo_loss_{attr}", getattr(metrics, attr) / num_documents, 0.0))
+                for attr in ("ratio_new_old_sum", "ratio_new_old_squared_sum", "num_tokens"):
+                    names_losses_weights.append((f"gspo_loss_{attr}", getattr(metrics, attr), 0.0))
+                names_losses_weights.append(("gspo_loss_max_advantage", metrics.max_advantage, 0.0))
+                names_losses_weights.append(("gspo_loss_min_advantage", metrics.min_advantage, 0.0))
+                names_losses_weights.append(("gspo_loss_num_segments", metrics.num_segments, 0.0))
+                names_losses_weights.append(("gspo_loss_entropy", metrics.entropy / num_documents, 0.0))
+                for name, value in reference_data_metrics(
+                    "gspo_loss",
+                    labels,
+                    kwargs[LanguageModelLossKwargs.label_counts][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.reward][head._prediction_distance - 1],
+                    kwargs[LanguageModelLossKwargs.model_version][head._prediction_distance - 1],
+                    kwargs[LanguageModelKwargs.documents_seen],
+                    num_documents,
+                ):
+                    names_losses_weights.append((name, value, 0.0))
 
         actual_losses = [loss * weight for _, loss, weight in names_losses_weights if weight != 0.0]
         total_loss = sum(actual_losses)
@@ -359,6 +480,151 @@ _lm_head_test_configs.append(
 _add_configs("label_and_distillation_loss", label_loss=True, distillation_loss=True)
 _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
+_add_configs("distillation_loss_temperature", distillation_loss=True, distillation_temperature=2.0)
+
+# Fused paths: the head auto-groups the combinable losses into one shared-softmax kernel (`fused` forces the
+# compiled backend, `fused_triton` the triton one). These configs must match their per-loss equivalents above
+# (validated against the same independent reference).
+_add_configs("fused", loss_implementation="fused")
+_add_configs("fused_bfloat16", loss_implementation="fused", compute_dtype=DataType.bfloat16)
+_add_configs("fused_logit_scaling", loss_implementation="fused", logits_scale_factor=5.0)
+_add_configs("fused_final_logit_softcap", loss_implementation="fused", final_logit_softcap=2.0)
+_add_configs("fused_tied_embedding_weight", loss_implementation="fused", tied_embedding_weight=True)
+_add_configs("fused_multi_token_prediction", loss_implementation="fused", prediction_heads=2)
+_add_configs("fused_label_and_z_loss_weighted", loss_implementation="fused", label_loss=True, z_loss=0.5)
+_add_configs("fused_distillation_loss", loss_implementation="fused", distillation_loss=True)
+_add_configs("fused_label_and_distillation_loss", loss_implementation="fused", label_loss=True, distillation_loss=True)
+_add_configs(
+    "fused_distillation_loss_temperature",
+    loss_implementation="fused",
+    distillation_loss=True,
+    distillation_temperature=2.0,
+)
+_add_configs("fused_grpo_loss", loss_implementation="fused", grpo_loss=True)
+# Multi-loss combos sharing one softmax pass: a three-way distillation combo and an RL + regularizer combo.
+_add_configs(
+    "fused_label_distillation_z_loss",
+    loss_implementation="fused",
+    label_loss=True,
+    distillation_loss=True,
+    z_loss=0.5,
+)
+_add_configs("fused_grpo_and_z_loss", loss_implementation="fused", grpo_loss=True, z_loss=0.5)
+# GSPO fused into the shared softmax: its eager segment seam runs between the compiled forward and backward,
+# so it defers to `finish` rather than a single-pass `fused_core`. Single-split only (GSPO can't be split);
+# added explicitly since `_add_configs` also emits a split variant. Alone (wrapper only) and sharing the
+# softmax with z-loss (the RL + regularizer combo).
+for _loss_masking in (False, True):
+    _suffix = "_masked" if _loss_masking else ""
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_gspo_loss{_suffix}",
+            gspo_loss=True,
+            loss_masking=_loss_masking,
+            loss_implementation="fused",
+        )
+    )
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_gspo_and_z_loss{_suffix}",
+            gspo_loss=True,
+            z_loss=0.5,
+            loss_masking=_loss_masking,
+            loss_implementation="fused",
+        )
+    )
+# GRPO/GSPO metric families (`basic` includes entropy) across all three paths — standalone, the compiled
+# shared softmax, and the triton kernel. Single-split only: per-split metric partials reduce across splits,
+# which the whole-sequence reference doesn't model.
+for _loss_implementation in ("per_loss", "fused", "fused_triton"):
+    _prefix = "" if _loss_implementation == "per_loss" else f"{_loss_implementation}_"
+    for _loss_masking in (False, True):
+        _mask_suffix = "_masked" if _loss_masking else ""
+        _lm_head_test_configs.append(
+            LMHeadTestConfig(
+                f"{_prefix}grpo_loss_metrics{_mask_suffix}",
+                grpo_loss=True,
+                grpo_metrics="basic",
+                loss_masking=_loss_masking,
+                loss_implementation=_loss_implementation,
+            )
+        )
+        _lm_head_test_configs.append(
+            LMHeadTestConfig(
+                f"{_prefix}gspo_loss_metrics{_mask_suffix}",
+                gspo_loss=True,
+                gspo_metrics="basic",
+                loss_masking=_loss_masking,
+                loss_implementation=_loss_implementation,
+            )
+        )
+# The metric family co-resides with z-loss in the shared softmax pass, on both fused paths. Single-split
+# (metrics can't be split).
+for _loss_implementation in ("fused", "fused_triton"):
+    for _loss_masking in (False, True):
+        _lm_head_test_configs.append(
+            LMHeadTestConfig(
+                f"{_loss_implementation}_grpo_and_z_loss_metrics{'_masked' if _loss_masking else ''}",
+                grpo_loss=True,
+                z_loss=0.5,
+                grpo_metrics="basic",
+                loss_masking=_loss_masking,
+                loss_implementation=_loss_implementation,
+            )
+        )
+# `auto` metrics resolve to `basic` when pipeline_parallel == 1 (all head tests), covering the default path.
+_lm_head_test_configs.append(LMHeadTestConfig("grpo_loss_metrics_auto", grpo_loss=True, grpo_metrics="auto"))
+_lm_head_test_configs.append(LMHeadTestConfig("gspo_loss_metrics_auto", gspo_loss=True, gspo_metrics="auto"))
+
+# Triton monolithic kernel (`use_triton=True`): the label-based objective set over the shared softmax.
+# Distillation uses the distribution-family triton kernel (added below); policy metrics stay on compiled `fused`.
+_add_configs("fused_triton", loss_implementation="fused_triton")
+_add_configs("fused_triton_z_loss", loss_implementation="fused_triton", z_loss=True)
+_add_configs("fused_triton_bfloat16", loss_implementation="fused_triton", compute_dtype=DataType.bfloat16)
+_add_configs("fused_triton_logit_scaling", loss_implementation="fused_triton", logits_scale_factor=5.0)
+_add_configs("fused_triton_final_logit_softcap", loss_implementation="fused_triton", final_logit_softcap=2.0)
+_add_configs("fused_triton_label_and_z_loss_weighted", loss_implementation="fused_triton", label_loss=True, z_loss=0.5)
+_add_configs("fused_triton_grpo_loss", loss_implementation="fused_triton", grpo_loss=True)
+_add_configs("fused_triton_grpo_and_z_loss", loss_implementation="fused_triton", grpo_loss=True, z_loss=0.5)
+# Distillation on the triton path (the distribution-family kernel): alone, fused with z-loss over the shared
+# student softmax, and with a non-unit teacher temperature. Label-CE and policy losses can't share this kernel.
+_add_configs("fused_triton_distillation_loss", loss_implementation="fused_triton", distillation_loss=True)
+_add_configs(
+    "fused_triton_distillation_and_z_loss", loss_implementation="fused_triton", distillation_loss=True, z_loss=0.5
+)
+_add_configs(
+    "fused_triton_distillation_loss_temperature",
+    loss_implementation="fused_triton",
+    distillation_loss=True,
+    distillation_temperature=2.0,
+)
+# GSPO on the triton path (its eager segment seam brackets the triton forward and backward). Single-split
+# only; alone and sharing the softmax with z-loss.
+for _loss_masking in (False, True):
+    _suffix = "_masked" if _loss_masking else ""
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_triton_gspo_loss{_suffix}",
+            gspo_loss=True,
+            loss_masking=_loss_masking,
+            loss_implementation="fused_triton",
+        )
+    )
+    _lm_head_test_configs.append(
+        LMHeadTestConfig(
+            f"fused_triton_gspo_and_z_loss{_suffix}",
+            gspo_loss=True,
+            z_loss=0.5,
+            loss_masking=_loss_masking,
+            loss_implementation="fused_triton",
+        )
+    )
+
+# `auto` backend selection: triton when available and eligible, else compiled. Exercised over the
+# interpreter-safe distribution kernel (distillation, alone and with z-loss); label-family `auto` resolves to
+# the explicit compiled/triton cases above.
+_add_configs("auto_distillation_loss", loss_implementation="auto", distillation_loss=True)
+_add_configs("auto_distillation_and_z_loss", loss_implementation="auto", distillation_loss=True, z_loss=0.5)
 
 
 @pytest.mark.slow
@@ -370,6 +636,8 @@ _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distill
     ],
 )
 def test_lm_head(test_config: LMHeadTestConfig):
+    if test_config.loss_implementation == "fused_triton" and not triton_available:
+        pytest.skip("Triton is not available (build the extension or set TRITON_INTERPRET=1).")
     model_config = test_config.get_config()
     model, distributed = get_base_model(model_config)
     input_, kwargs = test_config.get_inputs()
@@ -459,3 +727,46 @@ def test_lm_head(test_config: LMHeadTestConfig):
             head.final_norm.weight.grad_buffer, ref_normalization_weight_grad, threshold, min_threshold
         )
         Assert.rms_close_relative(logit_weight.grad_buffer, ref_logit_weight_grad, threshold, min_threshold)
+
+
+def _head_config(losses: dict, loss_implementation: str | None = None) -> LanguageModelHeadConfig:
+    config = {"normalization": {"type": "rms_norm"}, "losses": losses}
+    if loss_implementation is not None:
+        config["loss_implementation"] = loss_implementation
+    return LanguageModelHeadConfig.from_dict(config)
+
+
+def test_get_effective_losses():
+    # `auto` (default): combinable losses sharing one scale fuse into a single monolithic group, backend unset.
+    effective = _head_config({"ce": {"type": "label"}, "z": {"type": "z_loss"}}).get_effective_losses()
+    Assert.eq(list(effective), ["monolithic"])
+    Assert.custom(isinstance, effective["monolithic"], MonolithicLossConfig)
+    Assert.eq(list(effective["monolithic"].losses), ["ce", "z"])
+    Assert.eq(effective["monolithic"].use_triton, None)
+
+    # `per_loss`: unchanged flat set, no grouping.
+    effective = _head_config({"ce": {"type": "label"}, "z": {"type": "z_loss"}}, "per_loss").get_effective_losses()
+    Assert.eq(list(effective), ["ce", "z"])
+
+    # Distinct effective scales can't share one softmax, so they land in separate groups.
+    effective = _head_config(
+        {"ce": {"type": "label"}, "z": {"type": "z_loss", "logits_scale_factor": 2.0}}
+    ).get_effective_losses()
+    Assert.eq(list(effective), ["monolithic_0", "monolithic_1"])
+
+    # Non-combinable losses (DPO) stay standalone alongside a fused group.
+    effective = _head_config(
+        {"ce": {"type": "label"}, "dpo": {"type": "dpo", "reference_model": "ref"}}
+    ).get_effective_losses()
+    Assert.eq(set(effective), {"monolithic", "dpo"})
+    Assert.custom(isinstance, effective["monolithic"], MonolithicLossConfig)
+
+    # `compiled` / `triton` map to the explicit backend on every group.
+    Assert.eq(
+        _head_config({"ce": {"type": "label"}}, "compiled").get_effective_losses()["monolithic"].use_triton, False
+    )
+    Assert.eq(_head_config({"ce": {"type": "label"}}, "triton").get_effective_losses()["monolithic"].use_triton, True)
+
+    # `triton` on a set with no shared triton kernel is rejected at config time.
+    with pytest.raises(ValueError):
+        _head_config({"ce": {"type": "label"}, "d": {"type": "distillation", "reference_model": "t"}}, "triton")

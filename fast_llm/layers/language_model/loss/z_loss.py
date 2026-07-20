@@ -3,14 +3,17 @@ import typing
 import torch
 
 from fast_llm.functional.config import TritonConfig
-from fast_llm.functional.entropy_loss import fused_softmax_base
+from fast_llm.functional.entropy_loss import z_loss_core
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.functional.utils import reduce_losses
 from fast_llm.layers.language_model.loss.config import LanguageModelZLossConfig
-from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
+from fast_llm.layers.language_model.loss.loss import CombinableLoss, SingleLoss
+
+if typing.TYPE_CHECKING:
+    from fast_llm.layers.language_model.loss.monolithic import _TritonContext
 
 
-class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss[ConfigType]):
+class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](CombinableLoss, SingleLoss[ConfigType]):
     def _forward_backward(
         self,
         logits: "torch.Tensor",
@@ -19,19 +22,57 @@ class LanguageModelZLoss[ConfigType: LanguageModelZLossConfig](LanguageModelLoss
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
-        return (
-            triton_z_loss_forward_backward
-            if TritonConfig.enabled(logits.device, self._config.use_triton)
-            else fused_z_loss_forward_backward
-        )(
-            logits,
-            self._get_loss_mask(kwargs, split_index),
-            grad_output=self._get_grad_output(kwargs),
-            group=self._parallel_dim.group if self._vocab_parallel else None,
-            logits_scale_factor=self._logits_scale_factor,
-            grad_logits=grad_logits,
-            divisor=self._get_label_count(kwargs),
-        )
+        arguments = self.get_inputs(kwargs, split_index, losses is not None)
+        group = self._parallel_dim.group if self._vocab_parallel else None
+        if TritonConfig.enabled(logits.device, self._config.use_triton):
+            loss_mask, grad_output, divisor = arguments
+            return triton_z_loss_forward_backward(
+                logits,
+                loss_mask,
+                grad_output=grad_output,
+                group=group,
+                logits_scale_factor=self._logits_scale_factor,
+                grad_logits=grad_logits,
+                divisor=divisor,
+            )
+        loss, grad_logits, _ = self.combinable_forward_backward(logits, group, grad_logits, arguments)
+        return loss, grad_logits
+
+    def get_inputs(self, kwargs: dict[str, typing.Any], split_index: int, register: bool) -> tuple:
+        return self._get_loss_mask(kwargs, split_index), self._get_grad_output(kwargs), self._get_label_count(kwargs)
+
+    @staticmethod
+    def fused_core(
+        logits_norm: torch.Tensor,
+        exp_logits: torch.Tensor,
+        sum_exp_logits: torch.Tensor,
+        logits_max: torch.Tensor,
+        group: "torch.distributed.ProcessGroup | None",
+        logits_scale_factor: float,
+        arguments: tuple,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, None]:
+        """Post-softmax z-loss over the shared softmax. Returns the loss scalar and the uncast, masked
+        gradient contribution (the caller casts); z-loss emits no extra outputs."""
+        loss_mask, grad_output, divisor = arguments
+        grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
+        loss_term, grad = z_loss_core(exp_logits, sum_exp_logits, logits_max, grad_output)
+        loss = reduce_losses(loss_term, divisor, loss_mask)
+        if grad is not None and loss_mask is not None:
+            grad = grad * loss_mask.unsqueeze(-1)
+        return loss, grad, None
+
+    def triton_add_inputs(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> None:
+        loss_mask, grad_output, divisor = self.get_inputs(kwargs, split_index, register)
+        if context.divisor is None:
+            context.divisor = divisor
+        context.z = (loss_mask, grad_output)
+
+    def triton_finish(
+        self, context: "_TritonContext", kwargs: dict[str, typing.Any], split_index: int, register: bool
+    ) -> tuple[torch.Tensor, None]:
+        return context.z_loss, None
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
         return {"return_prediction_mask": True}
@@ -49,38 +90,3 @@ def z_loss(
     if loss_mask is not None:
         out = out * loss_mask
     return torch.mean(out)
-
-
-@torch.compile
-def fused_z_loss_forward_backward(
-    logits: torch.Tensor,
-    loss_mask: torch.Tensor | None,
-    grad_logits: torch.Tensor | None = None,
-    grad_output: float | None = None,
-    group: torch.distributed.ProcessGroup | None = None,
-    logits_scale_factor: float = 1.0,
-    divisor: float | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """
-    Z-loss = mean(logsumexp(logits, dim=-1) ** 2)
-    Grad = 2 * log_sum_exp_logits * softmax(logits)
-    """
-    if divisor is None:
-        divisor = logits.shape[:-1].numel()
-    grad_output = None if grad_output is None else grad_output / divisor * logits_scale_factor
-    logits_norm, exp_logits, sum_exp_logits, logits_max = fused_softmax_base(logits, logits_scale_factor, group)
-    log_sum_exp_logits = sum_exp_logits.log() + logits_max
-
-    loss = reduce_losses(log_sum_exp_logits**2, divisor, loss_mask)
-
-    if grad_output is not None:
-        grad_base = 2 * grad_output * (log_sum_exp_logits / sum_exp_logits)
-        if loss_mask is not None:
-            grad_base = grad_base * loss_mask
-        grad = (grad_base.unsqueeze(-1) * exp_logits).to(logits.dtype)
-        if grad_logits is None:
-            grad_logits = grad
-        else:
-            grad_logits.add_(grad)
-
-    return loss, grad_logits

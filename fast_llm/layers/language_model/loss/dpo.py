@@ -3,10 +3,10 @@ import typing
 import torch
 
 from fast_llm.layers.language_model.loss.config import LanguageModelDPOLossConfig, LanguageModelLossKwargs
-from fast_llm.layers.language_model.loss.loss import LanguageModelLoss, loss_forward_backward
+from fast_llm.layers.language_model.loss.loss import SingleLoss, loss_forward_backward
 
 
-class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](LanguageModelLoss[ConfigType]):
+class LanguageModelDPOLoss[ConfigType: LanguageModelDPOLossConfig](SingleLoss[ConfigType]):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self._prediction_distance > 1:

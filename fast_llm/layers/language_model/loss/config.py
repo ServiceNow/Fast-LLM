@@ -88,20 +88,38 @@ class LanguageModelLossConfig(Config):
         return set()
 
 
+@config_class()
+class CombinableLossConfig(LanguageModelLossConfig):
+    """Base for losses that share the vocabulary softmax via `fused_core`, so several can be fused together."""
+
+    _abstract: typing.ClassVar[bool] = True
+
+    # Slot this loss occupies in the triton monolithic kernel; `None` when it has no triton implementation.
+    triton_kind: typing.ClassVar[str | None] = None
+
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable triton implementation. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
+
 @config_class(dynamic_type={LanguageModelLossConfig: "label"})
-class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
+class LanguageModelLabelEntropyLossConfig(CombinableLossConfig):
     _abstract: typing.ClassVar[bool] = False
+    triton_kind: typing.ClassVar[str | None] = "ce"
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
         desc="Type of loss to use.",
         hint=FieldHint.core,
     )
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
-    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        # Labels are one-hot, so their forward-KL reduces to cross-entropy; reverse-KL is not defined.
+        if self.loss_type == EntropyLossType.reverse_kl:
+            raise ValueError("`reverse_kl` is not supported for a label loss.")
 
     @classmethod
     def _from_dict(cls, default: dict[str, typing.Any], strict: bool = True) -> typing.Self:
@@ -118,8 +136,9 @@ class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "distillation"})
-class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
+class LanguageModelDistillationLossConfig(CombinableLossConfig):
     _abstract: typing.ClassVar[bool] = False
+    triton_kind: typing.ClassVar[str | None] = "distillation"
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,
@@ -136,11 +155,6 @@ class LanguageModelDistillationLossConfig(LanguageModelLossConfig):
         hint=FieldHint.optional,
         desc="Temperature for teacher softmax.",
         valid=check_field(Assert.gt, 0.0),
-    )
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
     )
 
     @classmethod
@@ -189,16 +203,11 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "z_loss"})
-class LanguageModelZLossConfig(LanguageModelLossConfig):
+class LanguageModelZLossConfig(CombinableLossConfig):
     """Z-loss regularization to prevent overconfidence."""
 
     _abstract: typing.ClassVar[bool] = False
-
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
-    )
+    triton_kind: typing.ClassVar[str | None] = "z"
 
     @property
     def loss_class(self) -> "type[LanguageModelZLoss]":
@@ -210,7 +219,15 @@ class LanguageModelZLossConfig(LanguageModelLossConfig):
 class PolicyMetricsLevel(enum.StrEnum):
     none = "none"
     basic = "basic"
-    with_entropy = "with_entropy"
+    auto = "auto"
+
+
+class LossImplementation(enum.StrEnum):
+    # `auto` picks triton when the group is triton-eligible and triton is available, else the compiled path.
+    auto = "auto"
+    compiled = "compiled"
+    triton = "triton"
+    per_loss = "per_loss"
 
 
 @config_class()
@@ -222,12 +239,13 @@ class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
     epsilon_low: float = Field(default=0.2, desc="Lower clip parameter for ratio of log probs")
     epsilon_high: float = Field(default=0.2, desc="Upper clip parameter for ratio of log probs")
     metrics: PolicyMetricsLevel = Field(
-        default=PolicyMetricsLevel.none,
+        default=PolicyMetricsLevel.auto,
         desc=(
-            "Additional diagnostic metrics to log. "
-            "`basic`: importance-ratio, KL and advantage statistics. "
-            "`with_entropy`: also log the policy entropy. "
-            "Not supported with pipeline_parallel > 1."
+            "Diagnostic metrics to log. "
+            "`basic`: importance-ratio, KL, advantage statistics and the policy entropy. "
+            "`auto`: `basic` when `pipeline_parallel == 1`, else `none`. "
+            "`none`: disable, adding no cost. "
+            "`basic` is not supported with `pipeline_parallel > 1`."
         ),
         hint=FieldHint.feature,
     )
@@ -238,16 +256,11 @@ class LanguageModelPolicyGradientLossConfig(LanguageModelLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "grpo"})
-class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig):
+class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig, CombinableLossConfig):
     """Group-Relative Policy Optimization: per-token IS-ratio clipping."""
 
     _abstract: typing.ClassVar[bool] = False
-
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
-    )
+    triton_kind: typing.ClassVar[str | None] = "grpo"
 
     @property
     def loss_class(self) -> "type[LanguageModelGRPOLoss]":
@@ -257,19 +270,80 @@ class LanguageModelGRPOLossConfig(LanguageModelPolicyGradientLossConfig):
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "gspo"})
-class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig):
+class LanguageModelGSPOLossConfig(LanguageModelPolicyGradientLossConfig, CombinableLossConfig):
     """Group Sequence Policy Optimization: sequence-level geometric-mean IS-ratio clipping."""
 
     _abstract: typing.ClassVar[bool] = False
-
-    use_triton: bool | None = Field(
-        default=None,
-        desc="Enable triton implementation. Default: use if available.",
-        hint=FieldHint.expert,
-    )
+    triton_kind: typing.ClassVar[str | None] = "gspo"
 
     @property
     def loss_class(self) -> "type[LanguageModelGSPOLoss]":
         from fast_llm.layers.language_model.loss.policy_gradient import LanguageModelGSPOLoss
 
         return LanguageModelGSPOLoss
+
+
+@config_class()
+class MonolithicLossConfig(LanguageModelLossConfig):
+    """A composite loss that runs one vocabulary softmax and shares it across its combinable child losses.
+
+    Not user-selectable: the head synthesizes it internally from a flat loss set (see
+    `LanguageModelHeadConfig.get_effective_losses`), so it is not registered as a dynamic `type`."""
+
+    _abstract: typing.ClassVar[bool] = False
+
+    losses: dict[str, LanguageModelLossConfig] = Field(
+        default_factory=dict,
+        desc="The combinable losses sharing a single softmax pass. They must agree on `logits_scale_factor`.",
+        hint=FieldHint.core,
+    )
+    use_triton: bool | None = Field(
+        default=None,
+        desc="Enable the triton implementation of the shared-softmax kernel. Default: use if available.",
+        hint=FieldHint.expert,
+    )
+
+    def _validate(self) -> None:
+        super()._validate()
+        Assert.gt(len(self.losses), 0)
+        for name, loss in self.losses.items():
+            if not isinstance(loss, CombinableLossConfig):
+                raise ValueError(
+                    f"Loss `{name}` (`{type(loss).__name__}`) is not combinable and cannot share the softmax."
+                )
+            if loss.use_triton is not None:
+                raise ValueError(f"Loss `{name}` sets `use_triton`, which has no effect on a fused child loss.")
+        # A single softmax serves one effective scale (stacked with the common model scale).
+        Assert.eq(len({loss.logits_scale_factor for loss in self.losses.values()}), 1)
+        if self.use_triton and (incompatibility := self._triton_plan()[1]) is not None:
+            raise ValueError(f"The child loss set has no fused triton implementation: {incompatibility}.")
+
+    def _triton_plan(self) -> tuple[bool, str | None]:
+        # The fused triton path has two kernels, one slot per loss kind: a label-family kernel (ce/z/grpo/gspo)
+        # and a distribution kernel (distillation + optional z-loss). Returns whether the distribution kernel
+        # applies and, when the child set fits neither kernel, the reason it can't (else `None`). Single source
+        # for the rule so the explicit-`use_triton` validation and the `use_triton=None` fallback can't disagree.
+        is_distribution = any(loss.triton_kind == "distillation" for loss in self.losses.values())
+        seen_kinds = set()
+        for name, loss in self.losses.items():
+            kind = loss.triton_kind
+            if kind is None:
+                reason = f"loss `{name}` (`{type(loss).__name__}`) has no triton fused implementation"
+            elif kind in seen_kinds:
+                reason = f"the triton path fuses at most one `{kind}` loss (`{name}` is a duplicate)"
+            elif is_distribution and kind not in ("distillation", "z"):
+                reason = f"the triton path fuses distillation only with z-loss (`{name}` is `{kind}`)"
+            else:
+                seen_kinds.add(kind)
+                continue
+            return is_distribution, reason
+        return is_distribution, None
+
+    @property
+    def loss_class(self) -> "type[LanguageModelLoss]":
+        from fast_llm.layers.language_model.loss.monolithic import MonolithicLoss
+
+        return MonolithicLoss
+
+    def get_reference_models(self) -> set[str]:
+        return {reference_model for loss in self.losses.values() for reference_model in loss.get_reference_models()}

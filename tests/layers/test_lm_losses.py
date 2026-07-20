@@ -6,28 +6,38 @@ import pytest
 import torch
 
 from fast_llm.core.ops import split_op
-from fast_llm.engine.config_utils import data_type
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.distributed.config import DistributedBackend, DistributedConfig
 from fast_llm.functional.config import EntropyLossType, TargetFormat
-from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward, torch_entropy_loss_forward_backward
+from fast_llm.functional.entropy_loss import torch_entropy_loss_forward_backward
 from fast_llm.functional.triton import triton_available
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
 from fast_llm.functional.triton.grpo_loss import triton_grpo_loss_forward_backward
 from fast_llm.functional.triton.gspo_loss import triton_gspo_loss_forward_backward
+from fast_llm.functional.triton.monolithic_loss import (
+    _monolithic_forward_reduce,
+    triton_monolithic_loss_forward_backward,
+)
 from fast_llm.functional.triton.z_loss import triton_z_loss_forward_backward
 from fast_llm.layers.language_model.config import LanguageModelKwargs
-from fast_llm.layers.language_model.loss.config import LanguageModelGRPOLossConfig, LanguageModelLossKwargs
+from fast_llm.layers.language_model.loss.config import (
+    LanguageModelDistillationLossConfig,
+    LanguageModelGRPOLossConfig,
+    LanguageModelLabelEntropyLossConfig,
+    LanguageModelLossKwargs,
+    LanguageModelZLossConfig,
+)
 from fast_llm.layers.language_model.loss.dpo import dpo_loss
 from fast_llm.layers.language_model.loss.loss import loss_forward_backward
+from fast_llm.layers.language_model.loss.monolithic import _monolithic_core
 from fast_llm.layers.language_model.loss.policy_gradient import (
     PolicyMetrics,
     compute_grpo_metrics,
     compute_gspo_metrics,
-    fused_grpo_loss_forward_backward,
     fused_gspo_loss_forward_backward,
+    gspo_segment_seam,
 )
-from fast_llm.layers.language_model.loss.z_loss import fused_z_loss_forward_backward, z_loss
+from fast_llm.layers.language_model.loss.z_loss import z_loss
 from fast_llm.utils import Assert
 from tests.utils.dataset import get_random_spans
 from tests.utils.subtest import DistributedTestContext
@@ -77,8 +87,13 @@ def _compare_losses_and_grads(
     ref_grad: torch.Tensor | None,
     threshold=1e-5,
     group: torch.distributed.ProcessGroup | None = None,
+    loss_min_threshold: float = 1e-6,
 ):
-    Assert.rms_close_relative(loss, ref_loss, threshold, 1e-6)
+    # `loss_min_threshold` raises the absolute floor of the scalar-loss comparison. GSPO's per-segment
+    # geometric-mean reduction accumulates more float32 error than a per-token sum, and its loss can be near
+    # zero, so the fused-vs-reference difference sits at the abs floor rather than the relative band; the
+    # default `1e-6` floor flakes there. The gradient stays tight.
+    Assert.rms_close_relative(loss, ref_loss, threshold, loss_min_threshold)
     if has_grad:
         Assert.rms_close_relative(
             grad, split_op(ref_grad, group, -1), threshold, 1e-8 if grad.dtype == torch.float32 else 1e-7
@@ -139,7 +154,6 @@ def reference_grpo_metrics(
     epsilon_low: float,
     epsilon_high: float,
     logits_scale_factor: float,
-    compute_entropy: bool,
 ) -> PolicyMetrics:
     log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
     loss_mask = target >= 0
@@ -152,10 +166,8 @@ def reference_grpo_metrics(
     clipped = (ratio < 1.0 - epsilon_low) | (ratio > 1.0 + epsilon_high)
     kl = ratio - log_ratio - 1.0
 
-    entropy = None
-    if compute_entropy:
-        entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1)
-        entropy = (entropy_per_token * masked).sum()
+    entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1)
+    entropy = (entropy_per_token * masked).sum()
 
     return PolicyMetrics(
         old_logprobs=(old_log_probabilities.float() * masked).sum(),
@@ -184,7 +196,6 @@ def reference_gspo_metrics(
     epsilon_low: float,
     epsilon_high: float,
     logits_scale_factor: float,
-    compute_entropy: bool,
 ) -> PolicyMetrics:
     log_softmax = torch.nn.functional.log_softmax(logits.float() * logits_scale_factor, dim=-1)
     loss_mask = target >= 0
@@ -220,11 +231,9 @@ def reference_gspo_metrics(
         old_logprobs = old_logprobs + flat_old[in_segment].sum() / count_float
         num_segments_count = num_segments_count + 1.0
 
-    entropy = None
-    if compute_entropy:
-        entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1).reshape(-1)
-        masked = flat_mask.float() / num_labels_in_seq.reshape(-1).float().clamp(min=1)
-        entropy = (entropy_per_token * masked).sum()
+    entropy_per_token = -(log_softmax.exp() * log_softmax).sum(-1).reshape(-1)
+    masked = flat_mask.float() / num_labels_in_seq.reshape(-1).float().clamp(min=1)
+    entropy = (entropy_per_token * masked).sum()
 
     return PolicyMetrics(
         old_logprobs=old_logprobs,
@@ -346,7 +355,6 @@ def _test_entropy_loss(
 ):
     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
         pytest.skip(reason="Reverse KL loss not implemented for target labels")
-    # TODO: Test tensor-parallel implementation.
     logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, target_format, batch_shape, dtype)
     local_logits = split_op(logits, group, -1).contiguous()
     local_target = target if target_format == TargetFormat.labels else split_op(target, group, -1).contiguous()
@@ -364,16 +372,19 @@ def _test_entropy_loss(
         previous_grad = torch.randn_like(grad_ref)
         grad_ref = grad_ref + previous_grad
         local_previous_grad = split_op(previous_grad, group, -1).contiguous()
-    out_fused, grad_fused = fused_entropy_loss_forward_backward(
-        logits=local_logits,
-        target=local_target,
-        loss_mask=loss_mask,
-        grad_logits=local_previous_grad.clone() if accumulate else None,
-        grad_output=grad_output,
-        group=group,
-        logits_scale_factor=logits_scale_factor,
-        target_format=target_format,
-        entropy_loss_type=entropy_loss_type,
+    divisor = local_logits.shape[:-1].numel()
+    if target_format == TargetFormat.labels:
+        loss = _combinable_loss(
+            LanguageModelLabelEntropyLossConfig(loss_type=entropy_loss_type), "ce", logits_scale_factor
+        )
+        arguments = (local_target, grad_output, divisor)
+    else:
+        loss = _combinable_loss(
+            LanguageModelDistillationLossConfig(loss_type=entropy_loss_type), "distillation", logits_scale_factor
+        )
+        arguments = (local_target, loss_mask, grad_output, divisor, entropy_loss_type, 1.0)
+    out_fused, grad_fused, _ = loss.combinable_forward_backward(
+        local_logits, group, local_previous_grad.clone() if accumulate else None, arguments
     )
     _compare_losses_and_grads(
         out_fused,
@@ -381,13 +392,13 @@ def _test_entropy_loss(
         grad_output is not None,
         grad_fused,
         grad_ref,
-        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
 
     if not triton_available:
         return
-    out_triton, grad_triton = triton_entropy_loss_forward_backward(
+    out_triton, _, grad_triton = triton_entropy_loss_forward_backward(
         logits=local_logits,
         target=local_target,
         loss_mask=loss_mask,
@@ -405,7 +416,7 @@ def _test_entropy_loss(
         grad_output is not None,
         grad_triton,
         grad_ref,
-        threshold=1e-5 if target_format != TargetFormat.probabilities and data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
 
@@ -436,17 +447,12 @@ def _test_grpo_loss(
         previous_grad = torch.randn_like(grad_ref)
         grad_ref = grad_ref + previous_grad
         local_previous_grad = split_op(previous_grad, group, -1).contiguous()
-    out_fused, grad_fused, new_logprobs_fused = fused_grpo_loss_forward_backward(
+    loss = _combinable_loss(LanguageModelGRPOLossConfig(), "grpo", logits_scale_factor)
+    out_fused, grad_fused, (new_logprobs_fused, _) = loss.combinable_forward_backward(
         split_op(logits, group, -1),
-        target,
-        advantages,
-        old_log_probabilities,
-        grad_logits=local_previous_grad.clone() if accumulate else None,
-        grad_output=grad_output,
-        group=group,
-        logits_scale_factor=logits_scale_factor,
-        num_labels_in_seq=num_labels_in_seq,
-        divisor=divisor,
+        group,
+        local_previous_grad.clone() if accumulate else None,
+        (target, advantages, old_log_probabilities, grad_output, divisor, 0.2, 0.2, num_labels_in_seq, False),
     )
     _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
 
@@ -534,7 +540,9 @@ def _test_gspo_loss(
         logits_scale_factor=logits_scale_factor,
         num_labels_in_seq=num_labels_in_seq,
     )
-    _compare_losses_and_grads(out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
+    _compare_losses_and_grads(
+        out_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group, loss_min_threshold=1e-5
+    )
     Assert.rms_close_relative(new_logprobs_fused, ref_new_logprobs, 1e-5, 1e-6)
 
     if not triton_available:
@@ -553,7 +561,9 @@ def _test_gspo_loss(
         group=group,
         logits_scale_factor=logits_scale_factor,
     )
-    _compare_losses_and_grads(out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group)
+    _compare_losses_and_grads(
+        out_triton, out_ref, grad_output is not None, grad_triton, grad_ref, group=group, loss_min_threshold=1e-5
+    )
     Assert.rms_close_relative(new_logprobs_triton, new_logprobs_fused, 1e-5, 1e-6)
 
 
@@ -567,9 +577,7 @@ def _check_policy_metrics(ref: PolicyMetrics, got: PolicyMetrics, threshold: flo
             Assert.rms_close_relative(got_value, ref_value, threshold, 1e-6)
 
 
-def _test_grpo_metrics(
-    batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, group=None
-):
+def _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, group=None):
     logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
         num_columns, loss_masking, batch_shape, dtype
     )
@@ -587,7 +595,6 @@ def _test_grpo_metrics(
         epsilon_low=0.2,
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
-        compute_entropy=compute_entropy,
     )
     got = compute_grpo_metrics(
         split_op(logits, group, -1).contiguous(),
@@ -599,14 +606,11 @@ def _test_grpo_metrics(
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
         group=group,
-        compute_entropy=compute_entropy,
     )
     _check_policy_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
 
 
-def _test_gspo_metrics(
-    batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, num_segments, group=None
-):
+def _test_gspo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, num_segments, group=None):
     logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
         num_columns, loss_masking, batch_shape, dtype
     )
@@ -633,7 +637,6 @@ def _test_gspo_metrics(
         epsilon_low=0.2,
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
-        compute_entropy=compute_entropy,
     )
     got = compute_gspo_metrics(
         split_op(logits, group, -1).contiguous(),
@@ -647,9 +650,17 @@ def _test_gspo_metrics(
         epsilon_high=0.2,
         logits_scale_factor=logits_scale_factor,
         group=group,
-        compute_entropy=compute_entropy,
     )
     _check_policy_metrics(ref, got, threshold=5e-5 if dtype == DataType.float32 else 1e-4)
+
+
+def _combinable_loss(config, name: str, logits_scale_factor: float):
+    # Build the loss object so its `combinable_forward_backward` method is exercised directly. The tensor-
+    # parallel `group` is passed per call, so a trivial single-rank distributed config suffices even for the
+    # distributed subtests.
+    distributed_config = DistributedConfig()
+    distributed_config.validate()
+    return config.get_layer(distributed_config, name=name, logits_scale_factor=logits_scale_factor)
 
 
 def _test_z_loss(
@@ -668,13 +679,12 @@ def _test_z_loss(
         previous_grad = torch.randn_like(grad_ref)
         grad_ref = grad_ref + previous_grad
         local_previous_grad = split_op(previous_grad, group, -1).contiguous()
-    out_fused, grad_fused = fused_z_loss_forward_backward(
-        logits=local_logits,
-        loss_mask=loss_mask,
-        grad_logits=local_previous_grad.clone() if accumulate else None,
-        grad_output=grad_output,
-        group=group,
-        logits_scale_factor=logits_scale_factor,
+    loss = _combinable_loss(LanguageModelZLossConfig(), "z_loss", logits_scale_factor)
+    out_fused, grad_fused, _ = loss.combinable_forward_backward(
+        local_logits,
+        group,
+        local_previous_grad.clone() if accumulate else None,
+        (loss_mask, grad_output, local_logits.shape[:-1].numel()),
     )
     _compare_losses_and_grads(
         out_fused,
@@ -682,7 +692,7 @@ def _test_z_loss(
         grad_output is not None,
         grad_fused,
         grad_ref,
-        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
     if not triton_available:
@@ -702,9 +712,399 @@ def _test_z_loss(
         grad_output is not None,
         grad_triton,
         grad_ref,
-        threshold=1e-5 if data_type == DataType.float32 else 1e-4,
+        threshold=1e-5 if dtype == DataType.float32 else 1e-4,
         group=group,
     )
+
+
+def _test_monolithic_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate, group=None
+):
+    # A cross-entropy (labels) + z-loss composite sharing one softmax, checked against the same two losses run
+    # standalone. This exercises the shared, tensor-parallel-reduced softmax and the fp32 gradient accumulation
+    # against the already-validated single-loss path.
+    logits, target, _ = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    divisor = max(int((target >= 0).sum().item()), 1)
+    children = (
+        _combinable_loss(LanguageModelLabelEntropyLossConfig(), "cross_entropy", logits_scale_factor),
+        _combinable_loss(LanguageModelZLossConfig(), "z_loss", logits_scale_factor),
+    )
+    arguments = ((target, grad_output, divisor), (None, grad_output, local_logits.shape[:-1].numel()))
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    # Reference: run each loss standalone, accumulating into one gradient buffer.
+    grad_ref = previous_grad.clone() if accumulate else None
+    losses_ref = []
+    for child, child_arguments in zip(children, arguments, strict=True):
+        loss_ref, grad_ref, _ = child.combinable_forward_backward(local_logits, group, grad_ref, child_arguments)
+        losses_ref.append(loss_ref)
+
+    results, grad_fused = _monolithic_core(
+        children, local_logits, group, logits_scale_factor, previous_grad.clone() if accumulate else None, arguments
+    )
+
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    for (loss_fused, _), loss_ref in zip(results, losses_ref, strict=True):
+        Assert.rms_close_relative(loss_fused, loss_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        # The composite sums child gradients in fp32 and casts once; the standalone path casts each child
+        # gradient before adding. In fp16 the two differ by up to a rounding step, so allow a wider abs floor.
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
+
+
+def _test_monolithic_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
+):
+    # The triton monolithic kernel (cross-entropy + z-loss over one softmax) against the sum of the standalone
+    # triton kernels. Both use the same label-count divisor, as the head threads the same divisor to each
+    # combinable child. Tensor-parallel `group` is passed per call for the distributed subtest (case B).
+    if not triton_available:
+        return
+    logits, target, _ = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    divisor = max(int((target >= 0).sum().item()), 1)
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    # Reference: standalone triton cross-entropy then z-loss, accumulating into one gradient buffer.
+    grad_ref = previous_grad.clone() if accumulate else None
+    ce_ref, _, grad_ref = triton_entropy_loss_forward_backward(
+        local_logits,
+        target,
+        None,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        target_format=TargetFormat.labels,
+        divisor=divisor,
+        block_size=block_size,
+    )
+    z_ref, grad_ref = triton_z_loss_forward_backward(
+        local_logits,
+        None,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        divisor=divisor,
+        block_size=block_size,
+    )
+
+    ce_fused, z_fused, _, _, grad_fused, _, _ = triton_monolithic_loss_forward_backward(
+        local_logits,
+        target.contiguous(),
+        previous_grad.clone() if accumulate else None,
+        logits_scale_factor,
+        group,
+        divisor,
+        ce=(grad_output,),
+        z=(None, grad_output),
+        block_size=block_size,
+    )
+
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(ce_fused, ce_ref, threshold, 1e-6)
+    Assert.rms_close_relative(z_fused, z_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        # The kernel superposes both losses' gradients in fp32 before the single cast; the standalone path
+        # rounds cross-entropy's gradient before z-loss adds to it, so the two differ by up to a rounding step.
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
+
+
+def _test_monolithic_single_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
+):
+    # A single cross-entropy loss through the monolithic kernel. With masking this exercises the masked-row
+    # early-return (no z-loss / GSPO / metrics need the softmax on such a row), which must match the standalone
+    # triton cross-entropy exactly — the skip only avoids work that would have summed to zero.
+    if not triton_available:
+        return
+    logits, target, _ = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.labels, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    divisor = max(int((target >= 0).sum().item()), 1)
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    ce_ref, _, grad_ref = triton_entropy_loss_forward_backward(
+        local_logits,
+        target,
+        None,
+        grad_logits=previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        target_format=TargetFormat.labels,
+        divisor=divisor,
+        block_size=block_size,
+    )
+    ce_fused, _, _, _, grad_fused, _, _ = triton_monolithic_loss_forward_backward(
+        local_logits,
+        target.contiguous(),
+        previous_grad.clone() if accumulate else None,
+        logits_scale_factor,
+        group,
+        divisor,
+        ce=(grad_output,),
+        block_size=block_size,
+    )
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(ce_fused, ce_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-7)
+
+
+def _test_monolithic_grpo_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate, group=None
+):
+    # A single GRPO loss through the monolithic kernel's `grpo` slot (loss / gradient / new-log-probs), against
+    # the python reference. The ce+z monolithic tests never pass `grpo=`, so this is the only low-level cover of
+    # that slot; the object-dispatch driver around it is exercised by the head tests.
+    if not triton_available:
+        return
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    num_labels = int((target >= 0).sum().item())
+    num_labels_in_seq = torch.where(
+        target >= 0,
+        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
+        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    )
+    divisor = max(num_labels, 1)
+    out_ref, grad_ref = loss_forward_backward(
+        grad_output,
+        lambda *args, **kwargs: reference_grpo_loss(*args, **kwargs)[0],
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        logits_scale_factor=logits_scale_factor,
+    )
+    if accumulate:
+        previous_grad = torch.randn_like(grad_ref)
+        grad_ref = grad_ref + previous_grad
+        local_previous_grad = split_op(previous_grad, group, -1).contiguous()
+    _, _, grpo_fused, _, grad_fused, _, _ = triton_monolithic_loss_forward_backward(
+        split_op(logits, group, -1).contiguous(),
+        target.contiguous(),
+        local_previous_grad.clone() if accumulate else None,
+        logits_scale_factor,
+        group,
+        divisor,
+        grpo=(advantages, old_log_probabilities, grad_output, 0.2, 0.2, num_labels_in_seq),
+        block_size=block_size,
+    )
+    _compare_losses_and_grads(grpo_fused, out_ref, grad_output is not None, grad_fused, grad_ref, group=group)
+
+
+def _test_monolithic_gspo_loss_triton(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    num_segments,
+    accumulate,
+    group=None,
+):
+    # A single GSPO loss through the monolithic path: the eager segment seam produces the per-token backward
+    # coefficient, which the kernel's `gspo_coeff` slot then superposes. Checked against the python reference.
+    # The ce+z monolithic tests never pass `gspo_coeff=`.
+    if not triton_available:
+        return
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    seq_len = batch_shape[-1] if len(batch_shape) > 1 else batch_shape[0]
+    span = max(seq_len // num_segments, 1)
+    document_index = (torch.arange(seq_len, device=target.device) // span).clamp(max=num_segments - 1)
+    document_index = document_index.expand(batch_shape).contiguous()
+    flat_doc = document_index.reshape(-1).long()
+    labels_per_document = torch.zeros(num_segments, dtype=torch.int32, device=target.device).scatter_add(
+        0, flat_doc, (target.reshape(-1) >= 0).to(torch.int32)
+    )
+    num_labels_in_seq = labels_per_document[flat_doc].reshape(target.shape)
+    out_ref, grad_ref = loss_forward_backward(
+        grad_output,
+        lambda *args, **kwargs: reference_gspo_loss(*args, **kwargs)[0],
+        logits,
+        target,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        logits_scale_factor=logits_scale_factor,
+    )
+    if accumulate:
+        previous_grad = torch.randn_like(grad_ref)
+        grad_ref = grad_ref + previous_grad
+        local_previous_grad = split_op(previous_grad, group, -1).contiguous()
+    local_logits = split_op(logits, group, -1).contiguous()
+    # Eager pre-kernel phases (forward reduce + segment seam), as the driver runs them, produce the coefficient.
+    softmax = _monolithic_forward_reduce(local_logits, target.contiguous(), group, logits_scale_factor)
+    max_logits, sum_exp_logits, predicted_logits = softmax
+    new_log_probs = (predicted_logits - max_logits - sum_exp_logits.log()).reshape(target.shape)
+    gspo_loss, _, gspo_coeff = gspo_segment_seam(
+        new_log_probs,
+        target >= 0,
+        advantages,
+        old_log_probabilities,
+        document_index,
+        num_segments,
+        num_labels_in_seq,
+        num_segments,  # divisor
+        grad_output,
+        None,  # sdp_group
+        None,  # sp_group: the vocab-parallel path shards the vocab, not the sequence
+        0.2,
+        0.2,
+        logits_scale_factor,
+    )
+    _, _, _, _, grad_fused, _, _ = triton_monolithic_loss_forward_backward(
+        local_logits,
+        target.contiguous(),
+        local_previous_grad.clone() if accumulate else None,
+        logits_scale_factor,
+        group,
+        1.0,  # GSPO pre-scales its coefficient; no in-kernel divisor
+        gspo_coeff=None if gspo_coeff is None else gspo_coeff.reshape(-1).contiguous(),
+        softmax=softmax,
+    )
+    _compare_losses_and_grads(
+        gspo_loss, out_ref, grad_output is not None, grad_fused, grad_ref, group=group, loss_min_threshold=1e-5
+    )
+
+
+def _test_monolithic_metrics_without_grad_triton(batch_shape, num_columns, loss_masking, dtype, group=None):
+    # A zero-weight policy loss (grad_output=None) that still logs metrics: `compute_metrics=True` with no
+    # gradient must emit the same forward loss / new-log-probs / Σ exp·logits_norm as the with-gradient call,
+    # not crash or skip. The kernel runs the backward re-stream for the metrics alone.
+    if not triton_available:
+        return
+    logits, target, advantages, old_log_probabilities = _get_grpo_loss_inputs(
+        num_columns, loss_masking, batch_shape, dtype
+    )
+    num_labels = int((target >= 0).sum().item())
+    num_labels_in_seq = torch.where(
+        target >= 0,
+        torch.full(batch_shape, num_labels, dtype=torch.int32, device=target.device),
+        torch.zeros(batch_shape, dtype=torch.int32, device=target.device),
+    )
+    local_logits = split_op(logits, group, -1).contiguous()
+
+    def run(grad_output):
+        return triton_monolithic_loss_forward_backward(
+            local_logits,
+            target.contiguous(),
+            None,
+            1.0,
+            group,
+            max(num_labels, 1),
+            grpo=(advantages, old_log_probabilities, grad_output, 0.2, 0.2, num_labels_in_seq),
+            compute_metrics=True,
+        )
+
+    _, _, loss_grad, new_logprobs_grad, grad_grad, _, weighted_grad = run(1.0)
+    _, _, loss_nograd, new_logprobs_nograd, grad_nograd, _, weighted_nograd = run(None)
+
+    assert grad_grad is not None and grad_nograd is None
+    Assert.rms_close_relative(loss_nograd, loss_grad, 1e-5, 1e-6)
+    Assert.rms_close_relative(new_logprobs_nograd, new_logprobs_grad, 1e-5, 1e-6)
+    Assert.rms_close_relative(weighted_nograd, weighted_grad, 1e-5, 1e-6)
+
+
+def _test_monolithic_distillation_loss_triton(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    entropy_loss_type,
+    block_size,
+    accumulate,
+    group=None,
+):
+    # Distillation (from a teacher distribution) fused with z-loss over one shared student softmax — the
+    # distribution-family kernel — against the sum of the standalone triton distillation and z-loss kernels
+    # accumulating into one gradient buffer. Covers each KL direction. Distillation and z-loss share the loss
+    # mask and the divisor (both are threaded identically by the head), and a non-unit temperature checks that
+    # it stays confined to the teacher term (z-loss is on the student softmax, so it must be temperature-free).
+    if not triton_available:
+        return
+    temperature = 1.5
+    logits, target, loss_mask = _get_lm_loss_inputs(num_columns, loss_masking, TargetFormat.logits, batch_shape, dtype)
+    local_logits = split_op(logits, group, -1).contiguous()
+    local_target = split_op(target, group, -1).contiguous()
+    divisor = local_logits.shape[:-1].numel()
+    previous_grad = torch.randn_like(local_logits) if accumulate else None
+
+    # Reference: standalone triton distillation then z-loss, accumulating into one gradient buffer.
+    grad_ref = previous_grad.clone() if accumulate else None
+    dist_ref, _, grad_ref = triton_entropy_loss_forward_backward(
+        local_logits,
+        local_target,
+        loss_mask,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        temperature=temperature,
+        target_format=TargetFormat.logits,
+        entropy_loss_type=entropy_loss_type,
+        divisor=divisor,
+        block_size=block_size,
+    )
+    z_ref, grad_ref = triton_z_loss_forward_backward(
+        local_logits,
+        loss_mask,
+        grad_logits=grad_ref,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        divisor=divisor,
+        block_size=block_size,
+    )
+
+    dist_fused, z_fused, grad_fused = triton_entropy_loss_forward_backward(
+        local_logits,
+        local_target,
+        loss_mask,
+        grad_logits=previous_grad.clone() if accumulate else None,
+        grad_output=grad_output,
+        group=group,
+        logits_scale_factor=logits_scale_factor,
+        temperature=temperature,
+        target_format=TargetFormat.logits,
+        entropy_loss_type=entropy_loss_type,
+        z=(grad_output,),
+        divisor=divisor,
+        block_size=block_size,
+    )
+
+    threshold = 1e-5 if dtype == DataType.float32 else 1e-4
+    Assert.rms_close_relative(dist_fused, dist_ref, threshold, 1e-6)
+    Assert.rms_close_relative(z_fused, z_ref, threshold, 1e-6)
+    if grad_output is None:
+        assert grad_fused is None and grad_ref is None
+    else:
+        # The kernel superposes both losses' gradients in fp32 before the single cast; the standalone path
+        # rounds distillation's gradient before z-loss adds to it, so the two differ by up to a rounding step.
+        Assert.rms_close_relative(grad_fused, grad_ref, threshold, 1e-8 if grad_fused.dtype == torch.float32 else 1e-6)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize("loss_masking", (False, True))
+def test_monolithic_metrics_without_grad_triton(batch_shape, loss_masking):
+    _test_monolithic_metrics_without_grad_triton(batch_shape, 500, loss_masking, DataType.float32)
 
 
 @pytest.mark.slow
@@ -713,7 +1113,7 @@ def _test_z_loss(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
     _LOSS_PARAMETERS,
 )
-@pytest.mark.parametrize("target_format", TargetFormat)
+@pytest.mark.parametrize("target_format", (TargetFormat.labels, TargetFormat.logits))
 @pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
 def test_entropy_loss(
     batch_shape,
@@ -751,6 +1151,77 @@ def test_z_loss(
     batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
 ):
     _test_z_loss(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_loss(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_loss(batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, accumulate)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_loss_triton(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+@pytest.mark.parametrize("entropy_loss_type", EntropyLossType)
+def test_monolithic_distillation_loss_triton(
+    batch_shape,
+    num_columns,
+    grad_output,
+    logits_scale_factor,
+    loss_masking,
+    dtype,
+    block_size,
+    accumulate,
+    entropy_loss_type,
+):
+    _test_monolithic_distillation_loss_triton(
+        batch_shape,
+        num_columns,
+        grad_output,
+        logits_scale_factor,
+        loss_masking,
+        dtype,
+        entropy_loss_type,
+        block_size,
+        accumulate,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
+def test_monolithic_single_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_single_loss_triton(
         batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
     )
 
@@ -804,7 +1275,34 @@ def test_gspo_loss(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
     _LOSS_PARAMETERS,
 )
-@pytest.mark.parametrize("compute_entropy", (False, True))
+def test_monolithic_grpo_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+):
+    _test_monolithic_grpo_loss_triton(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, block_size, accumulate
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "num_segments", "accumulate"),
+    _GSPO_PARAMETERS,
+)
+def test_monolithic_gspo_loss_triton(
+    batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, num_segments, accumulate
+):
+    _test_monolithic_gspo_loss_triton(
+        batch_shape, num_columns, grad_output, logits_scale_factor, loss_masking, dtype, num_segments, accumulate
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("batch_shape", _BATCH_SHAPES)
+@pytest.mark.parametrize(
+    ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "block_size", "accumulate"),
+    _LOSS_PARAMETERS,
+)
 def test_grpo_metrics(
     batch_shape,
     num_columns,
@@ -814,9 +1312,8 @@ def test_grpo_metrics(
     dtype,
     block_size,
     accumulate,
-    compute_entropy,
 ):
-    _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy)
+    _test_grpo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype)
 
 
 @pytest.mark.slow
@@ -825,7 +1322,6 @@ def test_grpo_metrics(
     ("num_columns", "grad_output", "logits_scale_factor", "loss_masking", "dtype", "num_segments", "accumulate"),
     _GSPO_PARAMETERS,
 )
-@pytest.mark.parametrize("compute_entropy", (False, True))
 def test_gspo_metrics(
     batch_shape,
     num_columns,
@@ -835,11 +1331,8 @@ def test_gspo_metrics(
     dtype,
     num_segments,
     accumulate,
-    compute_entropy,
 ):
-    _test_gspo_metrics(
-        batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, compute_entropy, num_segments
-    )
+    _test_gspo_metrics(batch_shape, num_columns, logits_scale_factor, loss_masking, dtype, num_segments)
 
 
 def test_policy_data_metrics():
@@ -905,7 +1398,7 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
             suffix = f"{num_columns}-{grad_output}-{logits_scale_factor}-{loss_masking}-{dtype}-{block_size}-{accumulate}-{"_".join([str(i) for i in batch_shape])}"
             # Entropy loss
             for entropy_loss_type in EntropyLossType:
-                for target_format in TargetFormat:
+                for target_format in (TargetFormat.labels, TargetFormat.logits):
                     if target_format == TargetFormat.labels and entropy_loss_type == EntropyLossType.reverse_kl:
                         continue
                     with test_context.subtest(
@@ -956,34 +1449,122 @@ def _run_lm_loss_distributed(test_context: DistributedTestContext, base_path: pa
                         accumulate,
                         test_context.group,
                     )
+            # GSPO (tensor-parallel vocab path; segment seam runs eagerly per rank)
+            with test_context.subtest(base_path, f"gspo-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_gspo_loss(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        4,  # num_segments
+                        accumulate,
+                        test_context.group,
+                    )
             # GRPO metrics
-            for compute_entropy in (False, True):
-                with test_context.subtest(base_path, f"grpo_metrics-{compute_entropy}-{suffix}", 2) as subtest:
-                    if subtest.do_run:
-                        torch.manual_seed((seed + hash(subtest.name)) % 2**32)
-                        _test_grpo_metrics(
-                            batch_shape,
-                            num_columns,
-                            logits_scale_factor,
-                            loss_masking,
-                            dtype,
-                            compute_entropy,
-                            test_context.group,
-                        )
+            with test_context.subtest(base_path, f"grpo_metrics-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_grpo_metrics(
+                        batch_shape,
+                        num_columns,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        test_context.group,
+                    )
             # GSPO metrics
             num_segments = 4
-            for compute_entropy in (False, True):
-                with test_context.subtest(base_path, f"gspo_metrics-{compute_entropy}-{suffix}", 2) as subtest:
+            with test_context.subtest(base_path, f"gspo_metrics-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_gspo_metrics(
+                        batch_shape,
+                        num_columns,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        num_segments,
+                        test_context.group,
+                    )
+            # Monolithic composite: multiple losses share one tensor-parallel-reduced softmax.
+            with test_context.subtest(base_path, f"monolithic-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_loss(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        accumulate,
+                        test_context.group,
+                    )
+            # Triton monolithic composite: the vocab-parallel reduced-softmax path (case B).
+            with test_context.subtest(base_path, f"monolithic-triton-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_loss_triton(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        block_size,
+                        accumulate,
+                        test_context.group,
+                    )
+            # Triton monolithic GRPO / GSPO: the policy-loss slots over the tensor-parallel reduced softmax.
+            with test_context.subtest(base_path, f"monolithic-grpo-triton-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_grpo_loss_triton(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        block_size,
+                        accumulate,
+                        test_context.group,
+                    )
+            with test_context.subtest(base_path, f"monolithic-gspo-triton-{suffix}", 2) as subtest:
+                if subtest.do_run:
+                    torch.manual_seed((seed + hash(subtest.name)) % 2**32)
+                    _test_monolithic_gspo_loss_triton(
+                        batch_shape,
+                        num_columns,
+                        grad_output,
+                        logits_scale_factor,
+                        loss_masking,
+                        dtype,
+                        4,  # num_segments
+                        accumulate,
+                        test_context.group,
+                    )
+            # Triton monolithic distribution family: distillation fused with z-loss over one softmax.
+            for entropy_loss_type in EntropyLossType:
+                with test_context.subtest(
+                    base_path, f"monolithic-distillation-{entropy_loss_type}-triton-{suffix}", 2
+                ) as subtest:
                     if subtest.do_run:
                         torch.manual_seed((seed + hash(subtest.name)) % 2**32)
-                        _test_gspo_metrics(
+                        _test_monolithic_distillation_loss_triton(
                             batch_shape,
                             num_columns,
+                            grad_output,
                             logits_scale_factor,
                             loss_masking,
                             dtype,
-                            compute_entropy,
-                            num_segments,
+                            entropy_loss_type,
+                            block_size,
+                            accumulate,
                             test_context.group,
                         )
 
@@ -1021,15 +1602,15 @@ def test_run_lm_loss_distributed(run_parallel_script, result_path):
         *(
             f"{entropy_loss_type}-{target_format}"
             for entropy_loss_type in EntropyLossType
-            for target_format in TargetFormat
+            for target_format in (TargetFormat.labels, TargetFormat.logits)
             if target_format != TargetFormat.labels or entropy_loss_type != EntropyLossType.reverse_kl
         ),
         "z_loss",
         "grpo",
-        "grpo_metrics-False",
-        "grpo_metrics-True",
-        "gspo_metrics-False",
-        "gspo_metrics-True",
+        "gspo",
+        "grpo_metrics",
+        "gspo_metrics",
+        "monolithic",
     ),
 )
 def test_lm_loss_distributed(
