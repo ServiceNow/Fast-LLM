@@ -155,7 +155,7 @@ class LanguageModelPolicyGradientLoss[ConfigType: LanguageModelPolicyGradientLos
             self._register_loss(f"{self._name}_num_segments", metrics.num_segments, losses)
         self._register_loss(f"{self._name}_entropy", metrics.entropy / num_documents, losses)
 
-    def _register_data_metrics(self, kwargs: dict[str, typing.Any], losses: dict, split_index: int) -> None:
+    def _register_data_metrics(self, kwargs: dict[str, typing.Any], losses: dict | None, split_index: int) -> None:
         # The values are constant / near-constant within a document, so the per-document mean and the
         # token extrema are the natural summaries.
         num_documents = kwargs[LanguageModelKwargs.num_documents_in_batch]

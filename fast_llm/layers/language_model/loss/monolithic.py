@@ -218,9 +218,9 @@ class MonolithicLoss[ConfigType: MonolithicLossConfig](LanguageModelLoss[ConfigT
         # `Σ exp·logits_norm`, so no second softmax pass. Derived once here and shared by each metric loss.
         if compute_metrics:
             max_logits, sum_exp_logits, predicted_logits = softmax
-            log_sum_exp_logits = sum_exp_logits.log()
-            context.new_log_probs = predicted_logits - max_logits - log_sum_exp_logits
-            context.entropy_per_token = log_sum_exp_logits - weighted_logits_sum / sum_exp_logits
+            log_sum_exp_regularized = sum_exp_logits.log()
+            context.new_log_probs = predicted_logits - max_logits - log_sum_exp_regularized
+            context.entropy_per_token = log_sum_exp_regularized - weighted_logits_sum / sum_exp_logits
 
         return self._triton_finish_children(context, kwargs, losses, split_index, register), grad_logits
 
