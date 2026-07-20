@@ -193,8 +193,11 @@ class LanguageModelHeadConfig(BlockConfig):
     def _validate(self) -> None:
         super()._validate()
         assert LM_HEAD_LOSS_NAME not in self.losses
-        # `get_effective_losses` synthesizes fused-group names with a `monolithic` prefix; keep it reserved.
-        assert not any(name.startswith("monolithic") for name in self.losses)
+        # `get_effective_losses` synthesizes fused-group names `monolithic` / `monolithic_<index>`; keep them reserved.
+        assert not any(
+            name == "monolithic" or (name.startswith("monolithic_") and name.removeprefix("monolithic_").isdigit())
+            for name in self.losses
+        )
         # Surface fusion/grouping errors (e.g. an ineligible `triton` set) at config time.
         self.get_effective_losses()
 
@@ -221,14 +224,14 @@ class LanguageModelHeadConfig(BlockConfig):
                 scale_groups[loss.logits_scale_factor][name] = loss
             else:
                 slots.append((name, loss))
-        named = len(scale_groups) > 1
-        effective = {}
+        multiple_groups = len(scale_groups) > 1
+        effective: dict[str, LanguageModelLossConfig] = {}
         group_index = 0
         for slot in slots:
             if isinstance(slot, tuple):
                 effective[slot[0]] = slot[1]
             else:
-                name = f"monolithic_{group_index}" if named else "monolithic"
+                name = f"monolithic_{group_index}" if multiple_groups else "monolithic"
                 effective[name] = MonolithicLossConfig(losses=scale_groups[slot], use_triton=use_triton)
                 group_index += 1
         return effective

@@ -223,14 +223,10 @@ class PolicyMetricsLevel(enum.StrEnum):
 
 
 class LossImplementation(enum.StrEnum):
-    # Fuse combinable losses over one shared softmax, using triton when the group is triton-eligible and
-    # triton is available, else the compiled path.
+    # `auto` picks triton when the group is triton-eligible and triton is available, else the compiled path.
     auto = "auto"
-    # Fuse combinable losses, forcing the `torch.compile` path.
     compiled = "compiled"
-    # Fuse combinable losses, forcing triton (errors if a group has no triton kernel).
     triton = "triton"
-    # No fusion: each loss runs its own softmax, honoring its own `use_triton`.
     per_loss = "per_loss"
 
 
