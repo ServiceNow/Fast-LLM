@@ -9,9 +9,9 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.functional.triton import triton_available
 from fast_llm.layers.attention.config import AttentionKwargs
 from fast_llm.layers.block.config import BlockKwargs
-from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelKwargs
+from fast_llm.layers.language_model.config import LM_HEAD_LOSS_NAME, LanguageModelHeadConfig, LanguageModelKwargs
 from fast_llm.layers.language_model.head import LanguageModelHead
-from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs
+from fast_llm.layers.language_model.loss.config import LanguageModelLossKwargs, MonolithicLossConfig
 from fast_llm.models.gpt.config import GPTModelConfig
 from fast_llm.utils import Assert
 from tests.layers.test_lm_losses import (
@@ -118,24 +118,16 @@ class LMHeadTestConfig:
             losses["gspo_loss"] = {"type": "gspo", "metrics": self.gspo_metrics or "none"}
             if isinstance(self.gspo_loss, float):
                 losses["gspo_loss"]["weight"] = self.gspo_loss
-        if self.loss_implementation in ("fused", "fused_triton") and losses:
-            # Wrap the combinable losses in a single `monolithic` loss that shares one softmax; keep the
-            # child keys so the registered metric names match the per-loss configuration. `fused` pins the
-            # compiled path and `fused_triton` the triton path, so both are exercised in every environment.
-            combinable = {
-                name: loss
-                for name, loss in losses.items()
-                if loss["type"] in ("label", "distillation", "z_loss", "grpo", "gspo")
-            }
-            if combinable:
-                losses = {name: loss for name, loss in losses.items() if name not in combinable}
-                losses["monolithic"] = {
-                    "type": "monolithic",
-                    "losses": combinable,
-                    "use_triton": self.loss_implementation == "fused_triton",
-                }
         if losses:
             head_config["losses"] = losses
+        # The head auto-groups the combinable losses into one shared-softmax kernel; the test's implementation
+        # label maps onto the real selector (`fused` forces the compiled backend, `fused_triton` the triton one).
+        head_config["loss_implementation"] = {
+            "per_loss": "per_loss",
+            "fused": "compiled",
+            "fused_triton": "triton",
+            "auto": "auto",
+        }[self.loss_implementation]
 
         return GPTModelConfig.from_dict(
             {
@@ -490,9 +482,9 @@ _add_configs("label_and_z_loss_weighted", label_loss=True, z_loss=0.5)
 _add_configs("label_and_distillation_loss_zero_weight", label_loss=True, distillation_loss=0.0)
 _add_configs("distillation_loss_temperature", distillation_loss=True, distillation_temperature=2.0)
 
-# Monolithic loss type: the combinable losses are wrapped in a single `monolithic` loss that shares one
-# softmax pass; the head treats it as an ordinary loss. These configs must match their per-loss equivalents
-# above (validated against the same independent reference).
+# Fused paths: the head auto-groups the combinable losses into one shared-softmax kernel (`fused` forces the
+# compiled backend, `fused_triton` the triton one). These configs must match their per-loss equivalents above
+# (validated against the same independent reference).
 _add_configs("fused", loss_implementation="fused")
 _add_configs("fused_bfloat16", loss_implementation="fused", compute_dtype=DataType.bfloat16)
 _add_configs("fused_logit_scaling", loss_implementation="fused", logits_scale_factor=5.0)
@@ -628,6 +620,12 @@ for _loss_masking in (False, True):
         )
     )
 
+# `auto` backend selection: triton when available and eligible, else compiled. Exercised over the
+# interpreter-safe distribution kernel (distillation, alone and with z-loss); label-family `auto` resolves to
+# the explicit compiled/triton cases above.
+_add_configs("auto_distillation_loss", loss_implementation="auto", distillation_loss=True)
+_add_configs("auto_distillation_and_z_loss", loss_implementation="auto", distillation_loss=True, z_loss=0.5)
+
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
@@ -729,3 +727,46 @@ def test_lm_head(test_config: LMHeadTestConfig):
             head.final_norm.weight.grad_buffer, ref_normalization_weight_grad, threshold, min_threshold
         )
         Assert.rms_close_relative(logit_weight.grad_buffer, ref_logit_weight_grad, threshold, min_threshold)
+
+
+def _head_config(losses: dict, loss_implementation: str | None = None) -> LanguageModelHeadConfig:
+    config = {"normalization": {"type": "rms_norm"}, "losses": losses}
+    if loss_implementation is not None:
+        config["loss_implementation"] = loss_implementation
+    return LanguageModelHeadConfig.from_dict(config)
+
+
+def test_get_effective_losses():
+    # `auto` (default): combinable losses sharing one scale fuse into a single monolithic group, backend unset.
+    effective = _head_config({"ce": {"type": "label"}, "z": {"type": "z_loss"}}).get_effective_losses()
+    Assert.eq(list(effective), ["monolithic"])
+    Assert.custom(isinstance, effective["monolithic"], MonolithicLossConfig)
+    Assert.eq(list(effective["monolithic"].losses), ["ce", "z"])
+    Assert.eq(effective["monolithic"].use_triton, None)
+
+    # `per_loss`: unchanged flat set, no grouping.
+    effective = _head_config({"ce": {"type": "label"}, "z": {"type": "z_loss"}}, "per_loss").get_effective_losses()
+    Assert.eq(list(effective), ["ce", "z"])
+
+    # Distinct effective scales can't share one softmax, so they land in separate groups.
+    effective = _head_config(
+        {"ce": {"type": "label"}, "z": {"type": "z_loss", "logits_scale_factor": 2.0}}
+    ).get_effective_losses()
+    Assert.eq(list(effective), ["monolithic_0", "monolithic_1"])
+
+    # Non-combinable losses (DPO) stay standalone alongside a fused group.
+    effective = _head_config(
+        {"ce": {"type": "label"}, "dpo": {"type": "dpo", "reference_model": "ref"}}
+    ).get_effective_losses()
+    Assert.eq(set(effective), {"monolithic", "dpo"})
+    Assert.custom(isinstance, effective["monolithic"], MonolithicLossConfig)
+
+    # `compiled` / `triton` map to the explicit backend on every group.
+    Assert.eq(
+        _head_config({"ce": {"type": "label"}}, "compiled").get_effective_losses()["monolithic"].use_triton, False
+    )
+    Assert.eq(_head_config({"ce": {"type": "label"}}, "triton").get_effective_losses()["monolithic"].use_triton, True)
+
+    # `triton` on a set with no shared triton kernel is rejected at config time.
+    with pytest.raises(ValueError):
+        _head_config({"ce": {"type": "label"}, "d": {"type": "distillation", "reference_model": "t"}}, "triton")
