@@ -710,7 +710,14 @@ update_and_add_testing_config(
     "llama_grpo",
     # Metrics default to `auto` (→ `basic` when pipeline_parallel == 1); pin `none` so this loss-mechanics
     # config doesn't register the metric family (metrics are covered by the subtests in `test_lm_losses`).
-    updates={("model", "base_model", "head", "losses"): {"grpo": {"type": "grpo", "metrics": "none"}}},
+    # Disable IS-ratio clipping (huge epsilons): the clip bound is a discontinuity that tiny floating-point
+    # differences between parallel layouts flip, making the distributed-vs-single gradient comparison flaky
+    # (same failure mode as MoE top-k routing). The clip itself is covered by `test_lm_losses`.
+    updates={
+        ("model", "base_model", "head", "losses"): {
+            "grpo": {"type": "grpo", "metrics": "none", "epsilon_low": 1e6, "epsilon_high": 1e6}
+        }
+    },
     groups={
         ModelTestingGroup.basic: ModelTestingGroupAction.normal,
         ModelTestingGroup.checkpoint: ModelTestingGroupAction.not_implemented,
@@ -727,8 +734,13 @@ update_and_add_testing_config(
     "llama",
     "llama_gspo",
     # Metrics default to `auto`; pin `none` for the same reason as `llama_grpo` (keep this config focused
-    # on loss mechanics; metrics are covered by `test_lm_losses`).
-    updates={("model", "base_model", "head", "losses"): {"gspo": {"type": "gspo", "metrics": "none"}}},
+    # on loss mechanics; metrics are covered by `test_lm_losses`). Clipping disabled (huge epsilons) for the
+    # same reason as `llama_grpo`: the clip discontinuity makes the distributed-vs-single comparison flaky.
+    updates={
+        ("model", "base_model", "head", "losses"): {
+            "gspo": {"type": "gspo", "metrics": "none", "epsilon_low": 1e6, "epsilon_high": 1e6}
+        }
+    },
     # `ms*` (micro_batch_splits>1) and `ce*` (cross_entropy_splits>1) both produce
     # multiple kernel calls per micro-batch; GSPO's per-document geometric mean can't be
     # reconstructed from per-fragment `exp(mean)` values, so we skip these variants.
