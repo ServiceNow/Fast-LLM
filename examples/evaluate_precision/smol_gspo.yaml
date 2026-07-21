@@ -1,0 +1,52 @@
+# Example precision-evaluation config: sweep precision-stability features on SmolLM2-135M
+# with the GSPO policy-gradient loss (uses advantages and old log-probabilities).
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/smol_gspo.yaml
+#
+# `pretrained.path` accepts either a local checkpoint directory or a HF Hub model id
+# (auto-downloaded via `huggingface_hub.snapshot_download` on first use).
+pretrained:
+  path: HuggingFaceTB/SmolLM2-135M
+  format: llama
+model:
+  base_model:
+    head:
+      losses:
+        gspo:
+          type: gspo
+output_dir: /tmp/fast_llm_tests/evaluate_precision/gspo
+data_path: /tmp/fast_llm_tests/evaluate_precision/gspo_data
+sequence_length: 2048
+variants:
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  bf16_fp32_residual:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+  bf16_fp32_lm_head:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+  bf16_max_precision:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+    model.base_model.head.fp32_lm_head: true
+  bf16_reduced_reduction:
+    model.distributed.compute_dtype: bfloat16
+    _torch_backend.cuda.matmul.allow_bf16_reduced_precision_reduction: true
+  bf16_in_fp32_out:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+    _torch_matmul_precision: medium
+  fp16:
+    model.distributed.compute_dtype: float16
+  fp16_fp32_residual:
+    model.distributed.compute_dtype: float16
+    model.base_model.embeddings.full_precision_residual: true
+  fp16_fp32_lm_head:
+    model.distributed.compute_dtype: float16
+    model.base_model.head.fp32_lm_head: true
+  fp16_max_precision:
+    model.distributed.compute_dtype: float16
+    model.base_model.embeddings.full_precision_residual: true
+    model.base_model.head.fp32_lm_head: true

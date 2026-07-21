@@ -14,7 +14,7 @@ from fast_llm.utils import padded_cumsum
 from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE, TOKENIZER_FILE, TOKENIZER_PATH
 
 
-def download_santacoder_tokenizer():
+def download_test_tokenizer():
     if not TOKENIZER_FILE.is_file():
         import transformers
 
@@ -218,7 +218,7 @@ def _get_test_dataset(
         if has_grpo_data:
             source_schema["advantages"] = "advantages"
 
-        download_santacoder_tokenizer()
+        download_test_tokenizer()
         preparator_config = GPTMemmapDatasetPreparatorConfig.from_dict(
             {
                 "dataset": {

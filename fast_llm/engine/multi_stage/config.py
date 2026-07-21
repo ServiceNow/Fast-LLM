@@ -139,6 +139,14 @@ class StageConfig(Config):
         desc="Check for tensor-parallel desyncs and log an error if a desync is found. High overhead",
         hint=FieldHint.logging,
     )
+    debug_hidden_states_log: list[str] = Field(
+        default_factory=list,
+        desc="Regex patterns for `_debug`-named tensors (`<module>.<suffix>`, e.g. `head.logits`,"
+        " `decoder.0.norm_1`) to log to `tensor_logs`. Patterns are appended to each model"
+        " input's `output_hidden_states` set, so matching tensors are both populated into"
+        " `kwargs[hidden_states]` for downstream consumers and emitted into `tensor_logs`.",
+        hint=FieldHint.logging,
+    )
 
 
 @config_class()

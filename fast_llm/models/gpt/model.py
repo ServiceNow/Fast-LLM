@@ -112,6 +112,7 @@ class GPTModel[ConfigType: GPTModelConfig](FastLLMModel[ConfigType]):
         return LanguageModelBatchPreprocessingConfig(
             phase=phase,
             micro_batch_splits=micro_batch_splits,
+            output_hidden_states=list(self._config.multi_stage.debug_hidden_states_log),
             **self._base_model.get_preprocessing_config(),
         )
 

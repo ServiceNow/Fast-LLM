@@ -101,6 +101,18 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         Assert.eq(shard_name, "weights")
         return parameter_name
 
+    @classmethod
+    def _resolve_path(cls, path: pathlib.Path) -> pathlib.Path:
+        """Resolve a local directory or HF Hub model id (e.g. ``meta-llama/Llama-3.2-1B``) to a
+        local snapshot directory. Local directories pass through unchanged; everything else is
+        materialized via :func:`huggingface_hub.snapshot_download` (cached on subsequent calls).
+        """
+        if path.is_dir():
+            return path
+        import huggingface_hub
+
+        return pathlib.Path(huggingface_hub.snapshot_download(str(path)))
+
     # Use custom config instead of relying on the transformers library
     @classmethod
     def _load_config(cls, directory: pathlib.Path | str) -> dict:
@@ -145,10 +157,39 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
             "mask_token_id",
             "pad_token_id",
             "sep_token_id",
+            # Generation defaults — never architecture.
+            "bad_words_ids",
+            "begin_suppress_tokens",
+            "diversity_penalty",
+            "do_sample",
+            "early_stopping",
+            "encoder_no_repeat_ngram_size",
+            "exponential_decay_length_penalty",
+            "forced_bos_token_id",
+            "forced_eos_token_id",
+            "length_penalty",
+            "max_length",
+            "min_length",
+            "no_repeat_ngram_size",
+            "num_beam_groups",
+            "num_beams",
+            "num_return_sequences",
+            "output_scores",
+            "remove_invalid_values",
+            "repetition_penalty",
+            "return_dict_in_generate",
+            "suppress_tokens",
+            "temperature",
+            "top_k",
+            "top_p",
+            "typical_p",
             # Initialization / pretraining metadata Fast-LLM does not consume.
             "initializer_range",
             "max_position_embeddings",
             "pretraining_tp",
+            # Family markers / default-valued knobs serialized by recent transformers versions.
+            "is_llama_config",
+            "rope_interleaved",
         }
     )
 
@@ -190,28 +231,29 @@ class HuggingfaceStateDictCheckpointHandler(ExternalStateDictCheckpointHandler, 
         import transformers
 
         Assert.eq(self.get_shard_names(config), ("weights",))
-        if (config.path / transformers.utils.SAFE_WEIGHTS_NAME).is_file():
-            paths = {config.path / transformers.utils.SAFE_WEIGHTS_NAME}
-        elif (config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).is_file():
-            logger.info(f"Loading index from {config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME}")
+        directory = self._resolve_path(config.path)
+        if (directory / transformers.utils.SAFE_WEIGHTS_NAME).is_file():
+            paths = {directory / transformers.utils.SAFE_WEIGHTS_NAME}
+        elif (directory / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).is_file():
+            logger.info(f"Loading index from {directory / transformers.utils.SAFE_WEIGHTS_INDEX_NAME}")
             paths = {
-                config.path / path
-                for path in json.loads((config.path / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).read_text())[
+                directory / path
+                for path in json.loads((directory / transformers.utils.SAFE_WEIGHTS_INDEX_NAME).read_text())[
                     "weight_map"
                 ].values()
             }
-        elif (config.path / transformers.utils.WEIGHTS_NAME).is_file():
-            paths = {config.path / transformers.utils.WEIGHTS_NAME}
-        elif (config.path / transformers.utils.WEIGHTS_INDEX_NAME).is_file():
-            logger.info(f"Loading index from {config.path / transformers.utils.WEIGHTS_INDEX_NAME}")
+        elif (directory / transformers.utils.WEIGHTS_NAME).is_file():
+            paths = {directory / transformers.utils.WEIGHTS_NAME}
+        elif (directory / transformers.utils.WEIGHTS_INDEX_NAME).is_file():
+            logger.info(f"Loading index from {directory / transformers.utils.WEIGHTS_INDEX_NAME}")
             paths = {
-                config.path / path
-                for path in json.loads((config.path / transformers.utils.WEIGHTS_INDEX_NAME).read_text())[
+                directory / path
+                for path in json.loads((directory / transformers.utils.WEIGHTS_INDEX_NAME).read_text())[
                     "weight_map"
                 ].values()
             }
         else:
-            raise FileNotFoundError(f"No compatible checkpoint found in {config.path}")
+            raise FileNotFoundError(f"No compatible checkpoint found in {directory}")
 
         for path in paths:
             logger.info(f"Loading from {path}")

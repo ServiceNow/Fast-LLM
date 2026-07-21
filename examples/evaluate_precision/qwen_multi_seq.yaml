@@ -1,0 +1,35 @@
+# Multi-sequence (per-sequence / GSPO) precision config on Qwen2.5-0.5B. Each MATH-500 example becomes one
+# independent sequence (chat-templated problem + reference solution); the tool runs one inference-mode
+# forward per sequence and saves per-sequence log π. The cross-engine tool then reports the across-sequence
+# distribution of the length-normalized log-ratio (the GSPO-relevant quantity), alongside the per-token
+# (GRPO) view. `input_dataset` implies forward-only; the other engines consume the saved inputs.pt.
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/qwen_multi_seq.yaml
+#   python -m tools.evaluate_precision_deepspeed --model Qwen/Qwen2.5-0.5B \
+#       --inputs-file <output_dir>/inputs.pt --output-dir <output_dir>/ds
+#   python -m tools.evaluate_precision_vllm --model Qwen/Qwen2.5-0.5B --attention-backend TRITON_ATTN \
+#       --inputs-file <output_dir>/inputs.pt --output-dir <output_dir>/vllm
+#   python -m tools.evaluate_precision_cross_engine --fast-llm-dir <output_dir> \
+#       --deepspeed-dir <output_dir>/ds --vllm-dir <output_dir>/vllm --inputs-file <output_dir>/inputs.pt
+pretrained:
+  path: Qwen/Qwen2.5-0.5B
+  format: qwen2
+output_dir: /tmp/fast_llm_tests/evaluate_precision/qwen_multi_seq
+input_dataset: HuggingFaceH4/MATH-500
+num_sequences: 256
+sequence_length: 2048
+# Forward-only: one inference forward per sequence, saving per-sequence log π for the cross-engine
+# comparison (no per-layer tables). The layer-wise variant (qwen_multi_seq_layerwise.yaml) sets this false.
+forward_only: true
+variants:
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  bf16_fp32_lm_head:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+  fp16:
+    model.distributed.compute_dtype: float16
+  fp16_fp32_lm_head:
+    model.distributed.compute_dtype: float16
+    model.base_model.head.fp32_lm_head: true

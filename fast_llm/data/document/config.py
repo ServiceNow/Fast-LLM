@@ -75,6 +75,12 @@ class LanguageModelBatchPreprocessingConfig(LengthPreprocessingConfig):
     use_preference_spans: bool = Field(default=False)
     use_grpo_data: bool = Field(default=False)
     return_label_counts: bool = Field(default=False)
+    output_hidden_states: list[str] = Field(
+        default_factory=list,
+        desc="Regex patterns to add to each model input's `output_hidden_states` set."
+        " Matching `_debug`-named tensors get populated into `kwargs[hidden_states]`"
+        " and (when running under a `Run` context) emitted into `tensor_logs`.",
+    )
 
     def _validate(self) -> None:
         super()._validate()

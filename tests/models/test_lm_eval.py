@@ -3,7 +3,7 @@ import shutil
 
 import pytest
 
-from tests.utils.dataset import download_santacoder_tokenizer
+from tests.utils.dataset import download_test_tokenizer
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import TOKENIZER_PATH
 from tests.utils.model_configs import ModelTestingGroup
@@ -15,7 +15,7 @@ from tests.utils.model_configs import ModelTestingGroup
 
 @pytest.fixture(scope="module")
 def tokenizer_path():
-    download_santacoder_tokenizer()
+    download_test_tokenizer()
     return TOKENIZER_PATH
 
 

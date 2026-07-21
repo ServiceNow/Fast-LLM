@@ -135,6 +135,15 @@ def log_tensor[T](
 ) -> T | None:
     if level < 1:
         return
+    # Per-tensor sample-density override: lets users boost the effective level for specific
+    # tensors (e.g. sparse embedding-weight gradients) via `TensorLogsConfig`.
+    overrides = TensorLogs.config.sample_level_overrides if TensorLogs.config else None
+    if overrides:
+        import re
+
+        for pattern, override in overrides.items():
+            if re.search(pattern, name):
+                level = max(level, override)
     tensor = tensor.detach()
     if tensor.ndim == 0:
         tensor = tensor[None]

@@ -1,0 +1,59 @@
+# Example precision-evaluation config: sweep precision-stability features on SmolLM2-135M.
+#
+# Run with:
+#   python -m tools.evaluate_precision -c examples/evaluate_precision/smol.yaml
+#
+# `pretrained.path` accepts either a local checkpoint directory or a HF Hub model id
+# (auto-downloaded via `huggingface_hub.snapshot_download` on first use).
+pretrained:
+  path: HuggingFaceTB/SmolLM2-135M
+  format: llama
+output_dir: /tmp/fast_llm_tests/evaluate_precision/features
+sequence_length: 2048
+variants:
+  # Baseline bf16: compute_dtype=bf16 + Fast-LLM defaults (fp32 gradient accumulation, bf16 residual, bf16 lm_head).
+  bf16:
+    model.distributed.compute_dtype: bfloat16
+  # Turn ON full-precision residual stream.
+  bf16_fp32_residual:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+  # Turn ON fp32 LM head matmul (PR #526).
+  bf16_fp32_lm_head:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+  # Both stability features on (most precise bf16-compute configuration).
+  bf16_max_precision:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.embeddings.full_precision_residual: true
+    model.base_model.head.fp32_lm_head: true
+  # Diagnostic: enable bf16 reduced-precision reductions in cuBLAS GEMMs. Tests whether the
+  # within-engine bf16-vs-fp32 gap is sensitive to the partial-sum reduction precision (the
+  # MMA accumulator is fp32 by hardware on H100/A100; this flag affects split-K reductions).
+  bf16_reduced_reduction:
+    model.distributed.compute_dtype: bfloat16
+    _torch_backend.cuda.matmul.allow_bf16_reduced_precision_reduction: true
+  # Diagnostic: simulate a "bf16 inputs, fp32 output" lm-head matmul kernel. fp32_lm_head=True
+  # upcasts inputs+weights to fp32, then matmul_precision='medium' runs the matmul through
+  # bf16 Tensor Cores anyway, then logits stay fp32. Tests whether fp32_lm_head's gain comes
+  # from input precision or from skipping the bf16 output cast.
+  bf16_in_fp32_out:
+    model.distributed.compute_dtype: bfloat16
+    model.base_model.head.fp32_lm_head: true
+    _torch_matmul_precision: medium
+  # fp16 sweep: probes whether the precision-vs-noise picture (rms noise ~0.1 nats per token
+  # for bf16) shrinks ~8× for fp16 (10 mantissa bits vs 7), as the literature's "switch to
+  # fp16" recommendation implies. Default dynamic grad-scaler (initial 2^16) is uniform
+  # across variants, so relative comparisons stay meaningful.
+  fp16:
+    model.distributed.compute_dtype: float16
+  fp16_fp32_residual:
+    model.distributed.compute_dtype: float16
+    model.base_model.embeddings.full_precision_residual: true
+  fp16_fp32_lm_head:
+    model.distributed.compute_dtype: float16
+    model.base_model.head.fp32_lm_head: true
+  fp16_max_precision:
+    model.distributed.compute_dtype: float16
+    model.base_model.embeddings.full_precision_residual: true
+    model.base_model.head.fp32_lm_head: true

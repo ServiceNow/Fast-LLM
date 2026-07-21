@@ -18,6 +18,12 @@ from fast_llm.tensor import TensorMeta
 logger = logging.getLogger(__name__)
 
 
+# Verbosity used for `output_hidden_states`-driven tensor logging. `log_tensor` collects sampled
+# tensor values only at level >= 3; 13 matches the convention in the layer-comparison tests
+# (1024 sampled values per tensor).
+_HIDDEN_STATE_LOG_LEVEL = 13
+
+
 class DebugLayer:
     """
     A debugging utility for blocks.
@@ -55,11 +61,14 @@ class DebugLayer:
         if level > 1:
             log_pipeline_parallel_main_rank(lambda: log_memory_usage(name, str))
 
-        if level > 0 and tensor is not None:
+        # `output_hidden_state` requests full-fidelity capture even when `model_debug_level` is
+        # off — clamp the log level so samples are saved alongside summary stats.
+        log_level = max(level, _HIDDEN_STATE_LOG_LEVEL) if output_hidden_state else level
+        if log_level > 0 and tensor is not None:
             log_distributed_tensor(
                 "",
                 tensor,
-                level=level,
+                level=log_level,
                 meta=meta,
                 **logging_kwargs,
             )
@@ -67,7 +76,7 @@ class DebugLayer:
                 log_distributed_grad(
                     "",
                     tensor,
-                    level=level,
+                    level=log_level,
                     meta=self._get_meta(tensor, f"{name}.grad", dims),
                     **logging_kwargs,
                 )

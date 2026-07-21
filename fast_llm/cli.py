@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import os
 import sys
 import traceback
 
@@ -38,6 +39,11 @@ def fast_llm_main_wrapper():
 def fast_llm_main(args: list[str] | None = None):
     # TODO: Add hook to register model classes? (environment variable?)
     with fast_llm_main_wrapper():
+        if (precision := os.environ.get("FAST_LLM_FLOAT32_MATMUL_PRECISION")) is not None:
+            import torch
+
+            # "high"/"medium" enable TF32/bf16 tensor cores for float32 matmuls; "highest" keeps true fp32.
+            torch.set_float32_matmul_precision(precision)
         RunnableConfig.parse_and_run(args)
 
 

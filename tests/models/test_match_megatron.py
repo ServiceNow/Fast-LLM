@@ -18,9 +18,9 @@ from fast_llm.data.dataset.memmap.config import MemmapDatasetConfig
 from fast_llm.data.dataset.sampled import logger
 from fast_llm.data.document.language_model import LanguageModelDocument
 from fast_llm.data.preparation.tokenizer import TokenizerConfig
+from fast_llm.engine.config_utils.compare_tensor_logs import CompareConfig
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.utils import Assert
-from tests.utils.compare_tensor_logs import CompareConfig
 from tests.utils.dataset import get_common_test_dataset
 from tests.utils.distributed_configs import DistributedTestingConfig
 from tests.utils.global_variables import DATASET_CACHE, MODEL_TEST_VOCAB_SIZE, TOKENIZER_NAME

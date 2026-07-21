@@ -2,13 +2,13 @@ import pytest
 
 from fast_llm.data.preparation.tokenizer import Tokenizer, TokenizerConfig
 from fast_llm.utils import Assert
-from tests.utils.dataset import download_santacoder_tokenizer
+from tests.utils.dataset import download_test_tokenizer
 from tests.utils.global_variables import TOKENIZER_PATH
 
 
 @pytest.fixture(scope="session")
 def common_tokenizer() -> Tokenizer:
-    download_santacoder_tokenizer()
+    download_test_tokenizer()
     return TokenizerConfig(path=TOKENIZER_PATH).get_tokenizer()
 
 

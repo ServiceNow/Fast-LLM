@@ -76,6 +76,15 @@ class TensorLogsConfig(Config):
         valid=check_field(Assert.gt, 0),
     )
     full_tensors: bool = Field(default=False, desc="Save and/or print entire tensors.")
+    sample_level_overrides: dict[str, int] = Field(
+        default_factory=dict,
+        desc="Per-tensor sample-density overrides (regex pattern -> level)."
+        " For tensors whose logged name matches a pattern, the effective `log_tensor` level is"
+        " raised to the matching override (samples = 2 ** (level - 3))."
+        " Useful for sparse tensors like embedding-weight gradients where the default sampling"
+        " stride misses most non-zero rows.",
+        hint=FieldHint.logging,
+    )
 
 
 class TensorLogs:

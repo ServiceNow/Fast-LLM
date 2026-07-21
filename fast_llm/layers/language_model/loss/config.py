@@ -9,6 +9,7 @@ from fast_llm.layers.block.config import BlockKwargs
 from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
+    from fast_llm.layers.language_model.loss.chosen_logprob import LanguageModelChosenLogprobLoss
     from fast_llm.layers.language_model.loss.dpo import LanguageModelDPOLoss
     from fast_llm.layers.language_model.loss.entropy_loss import (
         LanguageModelDistillationLoss,
@@ -200,6 +201,30 @@ class LanguageModelDPOLossConfig(LanguageModelLossConfig):
 
     def get_reference_models(self) -> set[str]:
         return {self.reference_model}
+
+
+@config_class(dynamic_type={LanguageModelLossConfig: "chosen_logprob"})
+class LanguageModelChosenLogprobLossConfig(LanguageModelLossConfig):
+    """No-gradient diagnostic loss that logs log π(label) per position via the tensor-log pipeline.
+
+    The chosen-token log-prob is the scalar that policy-gradient importance ratios depend on,
+    so its precision drift is a more direct signal than bulk-logit RMS.
+    """
+
+    _abstract: typing.ClassVar[bool] = False
+
+    weight: float = Field(
+        default=0.0,
+        hint=FieldHint.derived,
+        desc="Forced to 0: this loss has no gradient contribution.",
+        valid=check_field(Assert.eq, 0.0),
+    )
+
+    @property
+    def loss_class(self) -> "type[LanguageModelChosenLogprobLoss]":
+        from fast_llm.layers.language_model.loss.chosen_logprob import LanguageModelChosenLogprobLoss
+
+        return LanguageModelChosenLogprobLoss
 
 
 @config_class(dynamic_type={LanguageModelLossConfig: "z_loss"})
