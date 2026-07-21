@@ -225,12 +225,15 @@ class PreprocessingTestConfig:
     def expected_cumulative_lengths(self) -> list[tuple[torch.Tensor | None, torch.Tensor | None]]:
         if not self.return_cumulative_sequence_lengths:
             return [(None, None)] * self.micro_batch_splits
+        # `cu_seqlens_k` follows the canonical varlen prefix-sum layout starting at 0; the K
+        # extent is narrowed by `first_doc_begin` (the inactive leading prefix from earlier
+        # documents). Downstream consumers narrow `key_value` by the same amount.
         result = []
         for split_index, (begin, _end) in enumerate(self._split_ranges):
             cropped_lengths, first_doc_begin = self._cropped_lengths_per_split[split_index]
             cu_q = torch.tensor([0] + cropped_lengths, dtype=torch.int32).cumsum(dim=0)
-            cu_k = (cu_q + begin).clone()
-            cu_k[0] = first_doc_begin
+            cu_k = cu_q + (begin - first_doc_begin)
+            cu_k[0] = 0
             result.append((cu_q, cu_k))
         return result
 

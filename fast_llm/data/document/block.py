@@ -126,9 +126,13 @@ class LengthModelInputPreprocessor:
 
     @functools.cached_property
     def cumulative_lengths(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # `cu_seqlens_k` follows the canonical prefix-sum layout starting at 0, describing the K
+        # extent narrowed by `first_document_begin` (the inactive leading prefix from earlier
+        # documents brought in by the sequence-data-parallel gather is dropped). Downstream
+        # consumers narrow `key_value` by `first_document_begin` to match.
         cumulative_lengths_q = torch.from_numpy(padded_cumsum(self.lengths)).to(dtype=torch.int32, device=self.device)
-        cumulative_lengths_k = cumulative_lengths_q + self.sequence_k_past
-        cumulative_lengths_k[0] = self.first_document_begin
+        cumulative_lengths_k = cumulative_lengths_q + (self.sequence_k_past - self.first_document_begin)
+        cumulative_lengths_k[0] = 0
         return cumulative_lengths_q, cumulative_lengths_k
 
     @functools.cached_property
@@ -149,30 +153,35 @@ class LengthModelInputPreprocessor:
 
     @functools.cached_property
     def document_index(self) -> tuple[torch.Tensor, torch.Tensor]:
+        # `document_index_k` is computed against the narrowed K extent (length `_narrow_total_k`),
+        # consistent with the canonical `cumulative_lengths_k`. Values start at 1 (no leading
+        # "before first active document" entries).
         cumulative_lengths_q, cumulative_lengths_k = self.cumulative_lengths
-        # Note: index starts at 1. Index 0 is for sequence k before `self.current_document_begin`.
         return (
             torch.searchsorted(
                 cumulative_lengths_q, torch.arange(self.length, device=self.device), side="right", out_int32=True
             ),
             torch.searchsorted(
                 cumulative_lengths_k,
-                torch.arange(self.sequence_k_past + self.length, device=self.device),
+                torch.arange(self._narrow_total_k, device=self.device),
                 side="right",
                 out_int32=True,
             ),
         )
 
     @functools.cached_property
+    def _narrow_total_k(self) -> int:
+        return self.sequence_k_past + self.length - self.first_document_begin
+
+    @functools.cached_property
     def position_index(self) -> torch.Tensor:
+        # Computed in the narrowed K coordinate space; the position-within-document is invariant
+        # under the narrowing shift, so this matches the un-narrowed result.
         _, document_index_k = self.document_index
         _, cumulative_lengths_k = self.cumulative_lengths
-        document_begins = cumulative_lengths_k[
-            document_index_k[self.sequence_k_past : self.sequence_k_past + self.length] - 1
-        ]
+        narrow_total = self._narrow_total_k
+        document_begins = cumulative_lengths_k[document_index_k[narrow_total - self.length : narrow_total] - 1]
         return (
-            torch.arange(
-                self.sequence_k_past, self.sequence_k_past + self.length, dtype=torch.int32, device=self.device
-            )
+            torch.arange(narrow_total - self.length, narrow_total, dtype=torch.int32, device=self.device)
             - document_begins
         )
