@@ -1,0 +1,62 @@
+# Stage 2 — branch arms from the warmup checkpoint. Each arm is a SEPARATE run, launched with
+# per-arm overrides (see README.md for the arm matrix). This base file holds the shared settings
+# and defaults to a naive unscaled small-batch configuration; every arm overrides from here.
+#
+# Arms inherit the architecture from the warmup checkpoint (pretrained.load_config: model),
+# start fresh (completed_steps = 0) so all arms consume the SAME `experiment` token stream from
+# offset 0, and differ only in: schedule.depth_first_micro_batches, optimizer betas/lr,
+# training.train_iters (chosen so num_samples is identical across arms), eval interval, and dir.
+#
+#   fast-llm train gpt --config arm_base.yaml <ARM OVERRIDES>
+pretrained:
+  path: experiments/batch_size/warmup/checkpoint/LATEST   # set to the ~1h checkpoint iteration
+  format: distributed
+  model_weights: true
+  optimizer_state: false        # cold optimizer; each arm warms its own v under its own beta_2
+  load_config: model
+training:
+  train_iters: 1280000          # small-batch cap; num_samples = 2 x 1280000 = 2,560,000 (~42B tokens at micro_batch_size 16384, within the ~94B experiment split). Monitor and stop.
+  num_workers: 8
+  wandb:
+    entity_name: null  # set to your W&B entity to enable logging
+    project_name: batch_size_scaling
+    group_name: arms
+  logs:
+    interval: 10
+  checkpoint:
+    interval: 30000             # ~1B tokens for small arms
+    keep: 2
+  evaluators:
+    validation:
+      type: loss
+      interval: 6000            # ~200M-token cadence for small arms
+      iterations: 50
+schedule:
+  depth_first_micro_batches: 2   # small batch = 2 x 16384 = 32768 tokens (large arms override to 64 -> 1,048,576)
+data:
+  datasets:
+    training:
+      type: file
+      path: data/batch_size/fineweb_edu_qwen/fast_llm_config_experiment.yaml
+    validation:
+      type: file
+      path: data/batch_size/fineweb_edu_qwen/fast_llm_config_validation.yaml
+  micro_batch_size: 16384        # tokens packed per micro-batch (throughput knob; documents are masked per-doc within the pack). Same value for all arms -> identical packing.
+optimizer:
+  learning_rate:
+    base: 1.0e-04
+    decay_style: constant
+    warmup_iterations: 0
+  weight_decay: 0.0
+  beta_1: 0.9
+  beta_2: 0.95
+  epsilon: 1.0e-08
+  gradient_norm_clipping: 5.0    # raised from 1.0: grad norms ~1, so clipping ~never fires -> avoids batch-size-dependent differential clipping; still a safety net vs spikes
+model:
+  multi_stage:
+    zero_stage: 1                # ZeRO-1 (optimizer-state sharding); weights replicated across data-parallel ranks
+  distributed:
+    compute_dtype: bf16
+    seed: 7                      # shared across arms -> identical data order
+run:
+  experiment_dir: experiments/batch_size/arm_D
