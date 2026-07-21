@@ -21,6 +21,16 @@ class ScheduleConfig(Config):
         hint=FieldHint.core,
         valid=check_field(Assert.gt, 0),
     )
+    docs_per_step: int = Field(
+        default=0,
+        desc="Target number of documents (rollouts) per optimizer step, globally across all data-parallel ranks. "
+        "When >0, each training step dynamically accumulates microbatches until the globally all-reduced "
+        "document count reaches this value, then triggers the optimizer step. "
+        "depth_first_micro_batches is ignored when this is set. "
+        "0 = use depth_first_micro_batches as-is (fixed microbatch count per step).",
+        hint=FieldHint.feature,
+        valid=check_field(Assert.geq, 0),
+    )
     breadth_first_micro_batches: int = Field(
         default=1,
         desc="Number of micro-batches processed breadth-first, i.e., interleaved across model stages.",

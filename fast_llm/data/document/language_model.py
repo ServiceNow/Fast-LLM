@@ -223,7 +223,7 @@ class LanguageModelBatch(TokenBatch):
 
                 model_input.targets.append(target_input)
 
-    def _get_label_counts(self, mask: torch.Tensor):
+    def _get_label_counts(self, mask: torch.Tensor) -> torch.Tensor:
         # Count the number of non-masked labels in each document through cumulative sums.
         mask_cumsum = torch.cat([mask.new_zeros(1), mask.cumsum(0)])
         length_cumsum = torch.tensor([0] + self.lengths, device=self.device).cumsum(0)
@@ -231,7 +231,6 @@ class LanguageModelBatch(TokenBatch):
         labels_per_document = label_count_cumsum[1:] - label_count_cumsum[:-1]
         # Expand to one entry per token: find each token's document index via the sorted
         # length cumsum, then look up that document's label count.
-        # TODO: Document index already computed in `LengthModelInputPreprocessor`.
         document_index = torch.searchsorted(
             length_cumsum[1:], torch.arange(len(mask), device=self.device), side="right"
         )

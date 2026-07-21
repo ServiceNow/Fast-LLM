@@ -328,9 +328,10 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         # Time blocked on the data loader (input starvation), kept separate from the CPU
         # preprocessing below. Preprocessing runs interleaved with the schedule's compute, so its
         # clock is paused across each yield to exclude the compute happening between micro-batches.
+        n_micro_batches = context.schedule._eff_sequential_micro_batches
         if measure_time:
             wait_start = time.perf_counter()
-        model_inputs = [next(data_iterator) for _ in range(self._config.sequential_micro_batches)]
+        model_inputs = [next(data_iterator) for _ in range(n_micro_batches)]
         if measure_time:
             context.metrics["data_wait_time_ms"] += (time.perf_counter() - wait_start) * 1000
             preprocess_start = time.perf_counter()
@@ -351,7 +352,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                         "grad_output": grad_output,
                         "documents_seen": context.documents_seen,
                         "micro_batch": micro_batch,
-                        "num_micro_batches": self._config.sequential_micro_batches,
+                        "num_micro_batches": n_micro_batches,
                         "micro_batch_splits": self._config.micro_batch_splits,
                     },
                 )

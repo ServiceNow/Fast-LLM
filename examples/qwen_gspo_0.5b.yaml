@@ -1,0 +1,76 @@
+# ILLUSTRATIVE EXCERPT of the Fast-LLM knobs for GSPO RL on Qwen2.5-0.5B — NOT the operative
+# config and NOT standalone-runnable. A run is driven by a single committed hydra config in
+# the RL orchestrator; this file is a readable reference for the fast_llm.* values only. To
+# change a run, edit that hydra config, not this file.
+#
+# This is NOT a standalone training config. Reinforcement learning is driven by an
+# external async-RL orchestrator that generates rollouts with vLLM samplers and
+# broadcasts the trainer weights back to the samplers over NCCL each step. The
+# orchestrator builds the base model config by importing the Qwen2.5-0.5B checkpoint
+# (architecture, vocab, RoPE, tokenizer) and supplies the rollout data stream
+# (packed sequences carrying advantages, sampling log-probabilities and per-document
+# lengths). The keys below are the RL-relevant overrides layered on top of that base
+# config; only these differ from a standard fine-tune. See
+# `docs/recipes/reinforcement-learning.md` for the full recipe and rationale.
+#
+# Reference run: Qwen2.5-0.5B, seed 43, single trainer replica (FSDP size 1).
+
+model:
+  distributed:
+    # bfloat16 is the default. For a fp16 or fp32 run, set this AND the sampler dtype
+    # to the same value — a trainer/sampler precision mismatch corrupts the importance
+    # ratios and collapses reward. See the "Precision matching" section in the recipe.
+    compute_dtype: bfloat16
+    sequence_data_parallel: 1
+    timeout: 3600
+  multi_stage:
+    # Single trainer GPU (FSDP size 1) — ZeRO shards across nothing, so the stage is a
+    # no-op; 1 is the minimal choice. Raise only if the trainer is sharded over >1 GPU.
+    zero_stage: 1
+  base_model:
+    head:
+      # Keep the LM head in fp32 to match the sampler's fp32-logit path (cross-engine
+      # numerical matching, independent of the body compute dtype).
+      fp32_lm_head: true
+      losses:
+        # The dict key is a free label; `type` selects the loss. Use `grpo` for GRPO.
+        gspo:
+          type: gspo
+          epsilon_low: 0.003
+          epsilon_high: 0.004
+          # = 1 / sampling_temperature (temperature 0.7). Rescales logits so the
+          # trainer's log-probabilities match the sampler's.
+          logits_scale_factor: 1.4285714
+          # Log lag/instability diagnostics (staleness, reward, clip fraction, ratio
+          # variance, KL, advantage). `with_entropy` also logs entropy; `none` disables
+          # them and skips the extra softmax. Requires pipeline_parallel == 1.
+          metrics: basic
+
+data:
+  # Token budget per micro-batch. Must be >= the longest packed sequence, so it tracks
+  # the orchestrator's sequence length (10000 here); it cannot be smaller.
+  micro_batch_size: 10000
+
+schedule:
+  depth_first_micro_batches: 48
+  # Accumulate gradients until this many documents (rollouts) are seen, then step.
+  # Set equal to the number of rollouts per step so the loss divisor matches the batch.
+  docs_per_step: 256
+
+optimizer:
+  learning_rate:
+    base: 5.0e-7
+    warmup_iterations: 0
+    decay_style: constant
+    decay_iterations: 400
+  # Adjusted for the effective batch multiplier (sqrt-rule, m=4): beta = beta_default**(1/m).
+  beta_1: 0.974004
+  beta_2: 0.999750
+  # 0.3 * docs_per_step. The per-step gradient is divided by the document count, so the
+  # clip threshold scales with docs_per_step to keep the effective clip fixed at 0.3.
+  gradient_norm_clipping: 76.8
+
+training:
+  train_iters: 2000
+  checkpoint:
+    interval: 100
