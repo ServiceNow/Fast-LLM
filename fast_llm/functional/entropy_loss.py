@@ -287,6 +287,7 @@ def fused_entropy_loss_forward_backward(
     target_format: TargetFormat = TargetFormat.labels,
     entropy_loss_type: EntropyLossType = EntropyLossType.cross_entropy,
     divisor: float | None = None,
+    weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
     A fused implementation of cross-entropy with torch compile.
@@ -332,11 +333,15 @@ def fused_entropy_loss_forward_backward(
     else:
         raise NotImplementedError(entropy_loss_type)
 
+    if weights is not None:
+        losses = losses * weights
     loss = reduce_losses(losses, divisor, loss_mask)
 
     if grad is not None:
         if loss_mask is not None:
             grad = grad * loss_mask.unsqueeze(-1)
+        if weights is not None:
+            grad = grad * weights.unsqueeze(-1)
         grad = grad.to(logits.dtype)
         if grad_logits is None:
             grad_logits = grad

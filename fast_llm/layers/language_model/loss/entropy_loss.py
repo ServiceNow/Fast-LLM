@@ -5,9 +5,12 @@ import torch
 from fast_llm.functional.config import TargetFormat, TritonConfig
 from fast_llm.functional.entropy_loss import fused_entropy_loss_forward_backward
 from fast_llm.functional.triton.entropy_loss import triton_entropy_loss_forward_backward
+from fast_llm.layers.language_model.config import LanguageModelKwargs
 from fast_llm.layers.language_model.loss.config import (
     LanguageModelDistillationLossConfig,
     LanguageModelLabelEntropyLossConfig,
+    LanguageModelLabelLossReduction,
+    LanguageModelLossKwargs,
 )
 from fast_llm.layers.language_model.loss.loss import LanguageModelLoss
 
@@ -21,13 +24,20 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
         split_index: int = 0,
         grad_logits: torch.Tensor | None = None,
     ) -> "tuple[torch.Tensor, torch.Tensor | None]":
+        labels = self._get_labels(kwargs, split_index)
+        weights = None
+        divisor = self._get_label_count(kwargs)
+        if self._config.reduction == LanguageModelLabelLossReduction.sample:
+            counts = self._prepare_target(kwargs[LanguageModelLossKwargs.label_counts], split_index)
+            weights = ((labels >= 0).float() / counts.float().clamp_min(1)).contiguous()
+            divisor = max(kwargs[LanguageModelKwargs.num_valid_documents_in_batch][self._prediction_distance - 1], 1)
         return (
             triton_entropy_loss_forward_backward
             if TritonConfig.enabled(logits.device, self._config.use_triton)
             else fused_entropy_loss_forward_backward
         )(
             logits,
-            self._get_labels(kwargs, split_index),
+            labels,
             None,  # Labels are already masked
             grad_logits=grad_logits,
             grad_output=self._get_grad_output(kwargs),
@@ -35,7 +45,15 @@ class LanguageModelLabelEntropyLoss[ConfigType: LanguageModelLabelEntropyLossCon
             logits_scale_factor=self._logits_scale_factor,
             target_format=TargetFormat.labels,
             entropy_loss_type=self._config.loss_type,
-            divisor=self._get_label_count(kwargs),
+            divisor=divisor,
+            weights=weights,
+        )
+
+    def get_preprocessing_config(self) -> dict[str, typing.Any]:
+        return (
+            {"return_label_counts": True, "return_valid_document_count": True}
+            if self._config.reduction == LanguageModelLabelLossReduction.sample
+            else {}
         )
 
 

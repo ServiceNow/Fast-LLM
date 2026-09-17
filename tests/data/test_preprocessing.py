@@ -416,3 +416,101 @@ def test_preprocessing(test_config: PreprocessingTestConfig):
         _assert_tensor_equal_or_none(model_input.cumulative_lengths_q, cu_q)
         _assert_tensor_equal_or_none(model_input.cumulative_lengths_k, cu_k)
         Assert.eq(model_input.num_documents, test_config.expected_num_documents[split_index])
+
+
+@pytest.mark.parametrize("meta", [False, True])
+@pytest.mark.parametrize("micro_batch_splits", [1, 2])
+def test_valid_document_counts(meta, micro_batch_splits):
+    from types import SimpleNamespace
+
+    from fast_llm.data.document.language_model import LanguageModelInput
+    from fast_llm.layers.language_model.config import LanguageModelKwargs
+
+    config = LanguageModelBatchPreprocessingConfig(
+        predicted_tokens=2,
+        micro_batch_splits=micro_batch_splits,
+        return_label_counts=True,
+        return_valid_document_count=True,
+    )
+    batch = LanguageModelBatch.from_documents(
+        [
+            LanguageModelDocument(tokens=torch.tensor([1, 2])),
+            LanguageModelDocument(
+                tokens=torch.tensor([3, 4, 5, 6, 7]), loss_masking_spans=RangeDocument(ranges=[(1, 2), (3, 4)])
+            ),
+            LanguageModelDocument(tokens=torch.tensor([8, 9]), loss_masking_spans=RangeDocument(ranges=[(0, 2)])),
+        ],
+        pad_to_size=10,
+    )
+    if meta:
+        batch.to_device_(torch.device("meta"))
+    inputs = batch.get_model_inputs(config)
+    expected_labels = [
+        [-100, 2, -100, -100, 5, -100, 7, -100, -100, -100],
+        [-100, -100, -100, -100, 5, -100, 7, -100, -100, -100],
+    ]
+    expected_documents = [3, 3] if meta else [2, 1]
+    for index, model_input in enumerate(inputs):
+        for distance, target in enumerate(model_input.targets):
+            assert target.num_valid_documents == (expected_documents[distance] if index == 0 else 0)
+            if not meta:
+                full_counts = _compute_label_counts([2, 5, 2, 1], expected_labels[distance])
+                begin = index * (8 // micro_batch_splits) + distance + 1
+                torch.testing.assert_close(target.label_counts, full_counts[begin : begin + len(target.tokens)])
+    LanguageModelInput.share_batch_data(inputs, SimpleNamespace(batch_data_group=None))
+    for model_input in inputs:
+        assert model_input.to_kwargs()[LanguageModelKwargs.num_valid_documents_in_batch] == expected_documents
+
+
+def test_sample_counts_sequence_data_shards():
+    from types import SimpleNamespace
+
+    from fast_llm.data.document.language_model import LanguageModelInput
+    from fast_llm.engine.distributed.config import DistributedConfig
+
+    batch = LanguageModelBatch.from_documents([LanguageModelDocument(tokens=torch.arange(9))])
+    assembled_counts = []
+    for rank in range(2):
+        config = LanguageModelBatchPreprocessingConfig(
+            distributed=DistributedConfig(
+                world_size=2, local_world_size=2, rank=rank, sequence_data_parallel=2, use_cuda=False
+            ),
+            return_label_counts=True,
+            return_valid_document_count=True,
+        )
+        inputs = batch.get_model_inputs(config)
+        LanguageModelInput.share_batch_data(inputs, SimpleNamespace(batch_data_group=None))
+        target = inputs[0].targets[0]
+        assert target.num_valid_documents_in_batch == 1
+        assert target.num_labels_in_batch == 8
+        assembled_counts.append(target.label_counts)
+    torch.testing.assert_close(torch.cat(assembled_counts), torch.full((8,), 8, dtype=torch.int64))
+
+
+def test_sample_counts_accumulation_and_batch_group(monkeypatch):
+    from types import SimpleNamespace
+
+    from fast_llm.data.document.language_model import LanguageModelTargetInput
+
+    group = object()
+    calls = []
+
+    def reduce_counts(counts, *, group):
+        calls.append(group)
+        assert counts.dtype == torch.int32
+        torch.testing.assert_close(counts, torch.tensor([11, 3], dtype=torch.int32))
+        counts.add_(torch.tensor([7, 2], dtype=torch.int32))
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", reduce_counts)
+    targets = [
+        LanguageModelTargetInput(num_labels=3, num_valid_documents=1),
+        LanguageModelTargetInput(num_labels=0, num_valid_documents=0),
+        LanguageModelTargetInput(num_labels=8, num_valid_documents=2),
+    ]
+    distributed = SimpleNamespace(batch_data_group=group, device=torch.device("cpu"))
+    LanguageModelTargetInput.share_batch_data(targets, distributed)
+    LanguageModelTargetInput.share_batch_data(targets, distributed)
+    assert calls == [group]
+    for target in targets:
+        assert target.num_labels_in_batch == 18
+        assert target.num_valid_documents_in_batch == 5

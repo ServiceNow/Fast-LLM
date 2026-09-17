@@ -29,6 +29,7 @@ class LanguageModelLossKwargs(BlockKwargs):
     old_log_probabilities = "old_log_probabilities"
     label_counts = "label_counts"
     num_labels_in_batch = "num_labels_in_batch"
+    num_valid_documents_in_batch = "num_valid_documents_in_batch"
 
 
 @config_class(registry=True)
@@ -75,9 +76,20 @@ class LanguageModelLossConfig(Config):
         return set()
 
 
+class LanguageModelLabelLossReduction(enum.StrEnum):
+    token = "token"
+    sample = "sample"
+
+
 @config_class(dynamic_type={LanguageModelLossConfig: "label"})
 class LanguageModelLabelEntropyLossConfig(LanguageModelLossConfig):
     _abstract: typing.ClassVar[bool] = False
+
+    reduction: LanguageModelLabelLossReduction = Field(
+        default=LanguageModelLabelLossReduction.token,
+        desc="Reduction over valid tokens or supervised documents.",
+        hint=FieldHint.feature,
+    )
 
     loss_type: EntropyLossType = Field(
         default=EntropyLossType.cross_entropy,

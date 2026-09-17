@@ -113,6 +113,7 @@ def triton_cross_entropy_forward_backward_from_labels_kernel(
     col_min: tl_constexpr = 0,
     logits_scale_factor: tl_constexpr = 1.0,
     accumulate: tl_constexpr = False,
+    weights_ptr=None,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -153,6 +154,8 @@ def triton_cross_entropy_forward_backward_from_labels_kernel(
         tl.store(losses_ptr + block_idx, loss)
 
     if grad_losses is not None:
+        if weights_ptr is not None:
+            grad_losses *= tl.load(weights_ptr + block_idx).to(tl.float32)
         if logits_scale_factor != 1.0:
             grad_losses *= logits_scale_factor
         # Run in reverse order to maximize input and cache reuse.
@@ -331,6 +334,7 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
     target_logits_scale_factor: tl_constexpr = 1.0,
     return_kl_loss: tl.constexpr = False,
     accumulate: tl_constexpr = False,
+    weights_ptr=None,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -386,6 +390,8 @@ def triton_cross_entropy_from_distribution_forward_backward_kernel(
         tl.store(losses_ptr + block_idx, loss)
 
     if grad_losses is not None:
+        if weights_ptr is not None:
+            grad_losses *= tl.load(weights_ptr + block_idx).to(tl.float32)
         if logits_scale_factor != 1.0:
             grad_losses *= logits_scale_factor
         # grad / grad_output = exp_logits / sum_exp_logits - target_probabilities.
@@ -554,6 +560,7 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
     logits_scale_factor: tl_constexpr = 1.0,
     target_logits_scale_factor: tl_constexpr = 1.0,
     accumulate: tl_constexpr = False,
+    weights_ptr=None,
 ):
     # TODO: Int64 ptr only if needed?
     block_idx = tl.program_id(0).to(tl.int64)
@@ -600,6 +607,8 @@ def triton_reverse_kl_forward_backward_kernel_from_distribution(
         tl.store(losses_ptr + block_idx, loss)
 
     if grad_losses is not None:
+        if weights_ptr is not None:
+            grad_losses *= tl.load(weights_ptr + block_idx).to(tl.float32)
         if logits_scale_factor != 1.0:
             grad_losses *= logits_scale_factor
         col_offset_start: tl.constexpr = (n_cols - 1) // block_size * block_size
@@ -702,6 +711,7 @@ def triton_entropy_loss_forward_backward(
     block_size: int | None = None,
     num_warps: int | None = None,
     divisor: float | None = None,
+    weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     A fast triton implementation of cross-entropy, which combines the casting and forward and backward passes,
@@ -737,6 +747,7 @@ def triton_entropy_loss_forward_backward(
             "grad_losses": grad_output / divisor,
             "grad_logits_stride_0": grad_logits.stride(-2),
             "accumulate": accumulate,
+            "weights_ptr": weights,
         }
     if target_format == TargetFormat.labels:
         assert entropy_loss_type != EntropyLossType.reverse_kl
@@ -860,5 +871,7 @@ def triton_entropy_loss_forward_backward(
                 **kwargs,
                 **backward_kwargs,
             )
+    if weights is not None:
+        losses = losses * weights.flatten()
     loss = reduce_losses(losses, divisor)
     return loss, grad_logits

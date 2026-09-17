@@ -37,10 +37,25 @@ class LanguageModelTargetInput(ModelInput):
     label_counts: torch.Tensor | None = None
     num_labels: int | None = None
     num_labels_in_batch: int | None = None
+    num_valid_documents: int | None = None
+    num_valid_documents_in_batch: int | None = None
 
     @classmethod
     def share_batch_data(cls, model_inputs: "list[LanguageModelTargetInput]", distributed: "Distributed"):
         if model_inputs[0].num_labels is not None and model_inputs[0].num_labels_in_batch is None:
+            if model_inputs[0].num_valid_documents is not None:
+                totals = [
+                    sum(model_input.num_labels for model_input in model_inputs),
+                    sum(model_input.num_valid_documents for model_input in model_inputs),
+                ]
+                # Full-document counts are replicated across sequence data peers.
+                if distributed.batch_data_group is not None:
+                    counts = torch.tensor(totals, dtype=torch.int32, device=distributed.device)
+                    torch.distributed.all_reduce(counts, group=distributed.batch_data_group)
+                    totals = counts.cpu().tolist()
+                for model_input in model_inputs:
+                    model_input.num_labels_in_batch, model_input.num_valid_documents_in_batch = totals
+                return
             # We sum over sequences but not within a sequence.
             num_labels_in_batch = allreduce_scalar(
                 sum(model_input.num_labels for model_input in model_inputs),
@@ -86,6 +101,10 @@ class LanguageModelInput(TokenModelInput):
             LanguageModelKwargs.label_counts: [target.label_counts for target in self.targets],
             LanguageModelKwargs.num_labels_in_batch: [target.num_labels_in_batch for target in self.targets],
         }
+        if self.targets and self.targets[0].num_valid_documents is not None:
+            out[LanguageModelKwargs.num_valid_documents_in_batch] = [
+                target.num_valid_documents_in_batch for target in self.targets
+            ]
         if self.image_patches is not None:
             out.update(self.image_patches.to_kwargs())
             out[LanguageModelKwargs.token_ids] = self.tokens
@@ -177,7 +196,19 @@ class LanguageModelBatch(TokenBatch):
                 document_begin += length
 
             mask = labels >= 0
-            label_counts = self._get_label_counts(mask) if config.return_label_counts else None
+            label_counts, valid_document_count = (
+                self._get_label_counts(mask, config.return_valid_document_count and not self.is_meta)
+                if config.return_label_counts or config.return_valid_document_count
+                else (None, None)
+            )
+            if config.return_valid_document_count:
+                if self.is_meta:
+                    num_labels = len(mask)
+                    num_valid_documents = len(self.lengths) - int(self.unpadded_length < len(self.tokens))
+                else:
+                    num_labels, num_valid_documents = (
+                        torch.stack([mask.sum(dtype=torch.int32), valid_document_count.to(torch.int32)]).cpu().tolist()
+                    )
 
             for input_index, model_input in enumerate(model_inputs):
                 label_end = model_input.sequence_k_dim.size + prediction_distance
@@ -191,9 +222,17 @@ class LanguageModelBatch(TokenBatch):
                     # Set value for the first input only so `share_batch_data` generated the correct sum.
                     # TODO: ====== Make optional?
                     num_labels=(
-                        len(mask) if self.is_meta else mask.sum(dtype=torch.int32).item() if input_index == 0 else 0
+                        (num_labels if input_index == 0 else 0)
+                        if config.return_valid_document_count
+                        else (
+                            len(mask)
+                            if self.is_meta
+                            else mask.sum(dtype=torch.int32).item() if input_index == 0 else 0
+                        )
                     ),
                 )
+                if config.return_valid_document_count:
+                    target_input.num_valid_documents = num_valid_documents if input_index == 0 else 0
                 if config.use_grpo_data and not model_input.is_meta:
                     target_input.advantages = self.advantages.get_cropped_data(label_begin, label_end)
                     target_input.old_log_probabilities = self.old_log_probabilities.get_cropped_data(
@@ -202,16 +241,19 @@ class LanguageModelBatch(TokenBatch):
 
                 model_input.targets.append(target_input)
 
-    def _get_label_counts(self, mask: torch.Tensor):
+    def _get_label_counts(
+        self, mask: torch.Tensor, return_valid_document_count: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # Count the number of non-masked labels in each document through cumulative sums.
         mask_cumsum = torch.cat([mask.new_zeros(1), mask.cumsum(0)])
         length_cumsum = torch.tensor([0] + self.lengths, device=self.device).cumsum(0)
         label_count_cumsum = mask_cumsum[length_cumsum]
         labels_per_document = label_count_cumsum[1:] - label_count_cumsum[:-1]
+        valid_document_count = (labels_per_document > 0).sum() if return_valid_document_count else None
         # Expand to one entry per token: find each token's document index via the sorted
         # length cumsum, then look up that document's label count.
         # TODO: Document index already computed in `LengthModelInputPreprocessor`.
         document_index = torch.searchsorted(
             length_cumsum[1:], torch.arange(len(mask), device=self.device), side="right"
         )
-        return labels_per_document[document_index]
+        return labels_per_document[document_index], valid_document_count

@@ -689,3 +689,142 @@ def test_lm_loss_distributed(
         2,
         use_cuda=False,
     )
+
+
+@pytest.mark.parametrize("backend", [fused_entropy_loss_forward_backward, triton_entropy_loss_forward_backward])
+@pytest.mark.parametrize("all_masked", [False, True])
+@pytest.mark.parametrize("accumulate", [False, True])
+def test_sample_wise_entropy(backend, all_masked, accumulate):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if backend is triton_entropy_loss_forward_backward and not triton_available:
+        pytest.skip("Triton unavailable")
+    torch.manual_seed(17)
+    logits = torch.randn(12, 19, device=device, requires_grad=True)
+    labels = torch.tensor([1, -100, 3, 4, 5, -100, 7, 8, -100, -100, -100, -100], device=device)
+    if all_masked:
+        labels.fill_(-100)
+    document_losses = []
+    weights = torch.zeros(12, device=device)
+    for begin, end in [(0, 3), (3, 9), (9, 12)]:
+        valid = labels[begin:end] >= 0
+        if valid.any():
+            document_losses.append(
+                torch.nn.functional.cross_entropy(logits[begin:end][valid] * 0.7, labels[begin:end][valid])
+            )
+            weights[begin:end][valid] = 1 / int(valid.sum())
+    expected = torch.stack(document_losses).mean() if document_losses else logits.sum() * 0
+    expected_grad = torch.autograd.grad(expected * 1.3, logits)[0]
+    initial_grad = torch.randn_like(logits) if accumulate else torch.zeros_like(logits)
+    loss, grad = backend(
+        logits.detach(),
+        labels,
+        None,
+        grad_logits=initial_grad.clone() if accumulate else None,
+        grad_output=1.3,
+        logits_scale_factor=0.7,
+        divisor=max(len(document_losses), 1),
+        weights=weights,
+    )
+    torch.testing.assert_close(loss, expected.detach())
+    torch.testing.assert_close(grad, initial_grad + expected_grad, atol=1e-6, rtol=1e-5)
+    if not all_masked:
+        token_mean = torch.nn.functional.cross_entropy(logits * 0.7, labels)
+        assert not torch.isclose(expected, token_mean)
+
+
+def test_sample_reduction_config():
+    from fast_llm.layers.language_model.loss.config import (
+        LanguageModelLabelEntropyLossConfig,
+        LanguageModelLabelLossReduction,
+    )
+
+    assert LanguageModelLabelEntropyLossConfig().reduction == LanguageModelLabelLossReduction.token
+    config = LanguageModelLabelEntropyLossConfig.from_dict({"reduction": "sample", "use_triton": False})
+    assert config.reduction == LanguageModelLabelLossReduction.sample
+
+
+@pytest.mark.parametrize("num_splits", [1, 3])
+def test_sample_label_loss_splits(num_splits):
+    from fast_llm.engine.distributed.config import DistributedConfig
+    from fast_llm.layers.language_model.config import LanguageModelKwargs
+    from fast_llm.layers.language_model.loss.config import LanguageModelLabelEntropyLossConfig
+
+    logits = torch.randn(12, 17, requires_grad=True)
+    labels = torch.tensor([1, -100, 3, 4, 5, -100, 7, 8, -100, -100, -100, -100])
+    counts = torch.tensor([2] * 3 + [4] * 6 + [0] * 3)
+    expected = torch.stack(
+        [
+            torch.nn.functional.cross_entropy(
+                logits[begin:end][labels[begin:end] >= 0], labels[begin:end][labels[begin:end] >= 0]
+            )
+            for begin, end in [(0, 3), (3, 9)]
+        ]
+    ).mean()
+    expected_grad = torch.autograd.grad(expected, logits)[0]
+    layer = LanguageModelLabelEntropyLossConfig(reduction="sample", use_triton=False).get_layer(
+        DistributedConfig(use_cuda=False),
+        name="cross_entropy",
+        num_splits=num_splits,
+    )
+    assert layer.get_preprocessing_config() == {"return_label_counts": True, "return_valid_document_count": True}
+    kwargs = {
+        LanguageModelKwargs.labels: [labels],
+        LanguageModelKwargs.label_counts: [counts],
+        LanguageModelKwargs.num_labels_in_batch: [6],
+        LanguageModelKwargs.num_valid_documents_in_batch: [2],
+        LanguageModelKwargs.grad_output: 1.0,
+    }
+    outputs = [
+        layer.forward_backward(chunk.detach(), kwargs, split_index=index)
+        for index, chunk in enumerate(logits.chunk(num_splits))
+    ]
+    torch.testing.assert_close(sum(loss for loss, _ in outputs), expected.detach())
+    torch.testing.assert_close(torch.cat([grad for _, grad in outputs]), expected_grad)
+
+
+def _run_sample_vocab_parallel(test_context, base_path):
+    with test_context.subtest(base_path, "sample_vocab", 2) as subtest:
+        if not subtest.do_run:
+            return
+        device = torch.device("cuda", torch.cuda.current_device())
+        torch.manual_seed(37)
+        logits = torch.randn(9, 18, device=device, requires_grad=True)
+        labels = torch.tensor([1, -100, 14, 4, 5, -100, 7, 8, -100], device=device)
+        expected = torch.stack(
+            [
+                torch.nn.functional.cross_entropy(
+                    logits[begin:end][labels[begin:end] >= 0], labels[begin:end][labels[begin:end] >= 0]
+                )
+                for begin, end in [(0, 3), (3, 9)]
+            ]
+        ).mean()
+        expected_grad = torch.autograd.grad(expected, logits)[0]
+        weights = torch.tensor([0.5, 0, 0.5, 0.25, 0.25, 0, 0.25, 0.25, 0], device=device)
+        local_logits = logits.detach().chunk(2, dim=-1)[test_context.rank].contiguous()
+        local_expected_grad = expected_grad.chunk(2, dim=-1)[test_context.rank]
+        for backend in [fused_entropy_loss_forward_backward, triton_entropy_loss_forward_backward]:
+            initial = torch.full_like(local_logits, 0.3)
+            loss, grad = backend(
+                local_logits,
+                labels,
+                None,
+                grad_output=1.0,
+                grad_logits=initial.clone(),
+                group=test_context.group,
+                divisor=2,
+                weights=weights,
+            )
+            torch.testing.assert_close(loss, expected.detach())
+            torch.testing.assert_close(grad, local_expected_grad + initial)
+
+
+def test_sample_vocab_parallel(run_parallel_script, result_path):
+    if torch.cuda.device_count() < 2:
+        pytest.skip("Requires two GPUs")
+    run_parallel_script(
+        _run_sample_vocab_parallel,
+        (result_path / "sample_vocab_parallel",),
+        world_size=2,
+        backend=DistributedBackend.nccl,
+        use_cuda=True,
+    )

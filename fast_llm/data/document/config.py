@@ -80,6 +80,7 @@ class LanguageModelBatchPreprocessingConfig(TokenPreprocessingConfig):
     use_preference_spans: bool = Field(default=False)
     use_grpo_data: bool = Field(default=False)
     return_label_counts: bool = Field(default=False)
+    return_valid_document_count: bool = Field(default=False)
 
     def _validate(self) -> None:
         super()._validate()
