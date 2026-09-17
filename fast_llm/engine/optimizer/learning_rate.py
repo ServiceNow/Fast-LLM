@@ -113,7 +113,10 @@ def create_schedule_from_config(config: LearningRateScheduleConfig) -> LearningR
         }
         if config.decay_style != "constant":
             kwargs.update(end_lr=config.minimum, power=config.decay_power)
-        stages.append(_STAGE_TYPE_MAP[config.decay_style](**kwargs))
+        # A run can consist entirely of warmup (e.g. a one-step epoch).
+        # Avoid constructing an interpolation stage with zero duration.
+        if config.warmup_iterations == 0 or config.decay_iterations != config.warmup_iterations:
+            stages.append(_STAGE_TYPE_MAP[config.decay_style](**kwargs))
     else:
         begin_step = 0
         for stage_arg_str in config.schedule.split(";"):

@@ -119,6 +119,8 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
         if self.model.base_model.embeddings.position_embeddings.enabled:
             Assert.geq(self.model.base_model.embeddings.num_position_embeddings, self.data.maximum_document_length)
 
+        self._validate_epoch_inputs()
+
         # TODO: Avoid digging inside the model.
         Assert.eq(self.reference_models.keys(), self.model.base_model.get_reference_models())
 
@@ -133,8 +135,78 @@ class GPTTrainerConfig(PretrainedGPTModelConfig, TrainerConfig):
                 self.model.base_model.embeddings.vocab_parallel,
             )
 
+    def _validate_epoch_inputs(self):
+        from fast_llm.data.dataset.epoch_config import EpochDatasetConfig
+
+        training = self.training
+        lr = self.optimizer.learning_rate
+        dataset = self.data.datasets.get("training")
+        if training.epochs is None:
+            if (
+                training.global_batch_size is not None
+                or isinstance(dataset, EpochDatasetConfig)
+                or lr.warmup_epochs is not None
+                or training.checkpoint.every_epochs is not None
+                or training.export.every_epochs is not None
+            ):
+                raise ValueError("Epoch settings require training.epochs")
+            return
+        if not isinstance(dataset, EpochDatasetConfig):
+            raise ValueError("training.epochs requires data.datasets.training.type: epoch")
+        if training.global_batch_size is None:
+            raise ValueError("Epoch training requires training.global_batch_size")
+        if self.run.experiment_dir is None:
+            raise ValueError("Epoch training requires run.experiment_dir for reproducible plans/resume")
+        if self.data.truncate_documents:
+            raise ValueError("Epoch training requires data.truncate_documents: false")
+        if self.data.shuffle.value != "epoch":
+            raise ValueError("Epoch training currently requires data.shuffle: epoch")
+        if self.reference_models or any(loss.type != "label" for loss in self.model.base_model.head.losses.values()):
+            raise ValueError("Epoch training currently supports supervised label losses without reference models")
+        if self.__class__ is GPTTrainerConfig:
+            conflicts = []
+            for obj, names, prefix in (
+                (training, ("train_iters",), "training"),
+                (self.schedule, ("depth_first_micro_batches", "breadth_first_micro_batches"), "schedule"),
+                (lr, ("decay_iterations", "schedule"), "optimizer.learning_rate"),
+                (dataset, ("plan_summary",), "data.datasets.training"),
+                (training.checkpoint, ("steps",), "training.checkpoint"),
+                (training.export, ("steps",), "training.export"),
+            ):
+                conflicts += [f"{prefix}.{name}" for name in names if name in obj._explicit_fields]
+            if conflicts:
+                raise ValueError("Epoch mode derives these fields; remove explicit values: " + ", ".join(conflicts))
+            if lr.warmup_epochs is not None and "warmup_iterations" in lr._explicit_fields:
+                raise ValueError("warmup_epochs and warmup_iterations are mutually exclusive")
+        if lr.warmup_epochs is not None and lr.warmup_epochs > training.epochs:
+            raise ValueError("warmup_epochs cannot exceed training.epochs")
+        replicas = self.model.distributed.batch_data_parallel
+        if training.global_batch_size % replicas:
+            raise ValueError(
+                f"global_batch_size={training.global_batch_size} must be divisible by batch_data_parallel={replicas}"
+            )
+
+    def _get_runnable(self):
+        if self.training.epochs is None:
+            return super()._get_runnable()
+        from fast_llm.models.gpt.epoch import get_epoch_runnable
+
+        return get_epoch_runnable(self)
+
     @classmethod
     def get_trainer_class(cls) -> type["GPTTrainer"]:
         from fast_llm.models.gpt.trainer import GPTTrainer
 
         return GPTTrainer
+
+
+@config_class()
+class ResolvedGPTTrainerConfig(GPTTrainerConfig):
+    """Internal execution copy; source-only conflicts have already been checked."""
+
+    _planning_distributed: object = Field(default=None, init=False)
+
+    def _setup(self):
+        super()._setup()
+        if self._planning_distributed is not None:
+            self.model.distributed = self._planning_distributed

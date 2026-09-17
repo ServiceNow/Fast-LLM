@@ -22,3 +22,5 @@ from fast_llm.data.dataset.gpt.config import (  # isort: skip
 )
 from fast_llm.data.preparation.dataset_discovery.config import DatasetDiscoveryConfig  # isort: skip
 from fast_llm.data.preparation.gpt_memmap.config import GPTMemmapDatasetPreparatorConfig  # isort: skip
+
+from fast_llm.data.dataset.epoch_config import EpochDatasetConfig  # isort: skip

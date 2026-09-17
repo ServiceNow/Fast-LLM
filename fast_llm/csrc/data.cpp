@@ -211,7 +211,34 @@ py::array build_padded_token_cumsum(const py::array_t<int32_t>& sizes_,
                    free_when_done);
 }
 
+// Finite whole-document plan. Inputs must already be eligibility-filtered.
+py::array_t<int64_t> build_epoch_sequence_boundaries(
+    const py::array_t<int64_t, py::array::c_style | py::array::forcecast>& sizes_,
+    const int64_t capacity) {
+  if (capacity <= 0) throw std::invalid_argument("capacity must be > 0");
+  if (sizes_.ndim() != 1) throw std::invalid_argument("sizes must be one-dimensional");
+  auto sizes = sizes_.unchecked<1>();
+  std::vector<int64_t> boundaries{0};
+  int64_t used = 0;
+  for (int64_t i = 0; i < sizes.size(); ++i) {
+    const int64_t size = sizes(i);
+    if (size <= 0 || size > capacity)
+      throw std::invalid_argument("document size must be in (0, capacity]");
+    if (used > capacity - size) {
+      boundaries.push_back(i);
+      used = 0;
+    }
+    used += size;
+  }
+  if (sizes.size() > 0) boundaries.push_back(sizes.size());
+  py::array_t<int64_t> result(boundaries.size());
+  auto output = result.mutable_unchecked<1>();
+  for (size_t i = 0; i < boundaries.size(); ++i) output(i) = boundaries[i];
+  return result;
+}
+
 PYBIND11_MODULE(data, m) {
+    m.def("build_epoch_sequence_boundaries", &build_epoch_sequence_boundaries);
     m.def("build_sample_idx", &build_sample_idx);
     m.def("build_padded_token_cumsum", &build_padded_token_cumsum);
 }

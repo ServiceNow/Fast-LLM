@@ -146,12 +146,26 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
     def _get_completion_metrics(self) -> dict[str, int | float]:
         assert self._is_setup
-        return {
+        metrics = {
             "total_steps": self._config.training.train_iters,
             "completed_steps": self._completed_steps,
             "consumed_tokens": self._completed_steps * self._batch_size,
             "percent_done": 100 * self._completed_steps / self._config.training.train_iters,
         }
+        if self._config.training.epochs is not None:
+            summary = self._config.data.datasets["training"].plan_summary
+            consumed_slots = self._completed_steps * summary["global_batch_size"]
+            real_sequences = 0
+            begin = 0
+            for count, end in zip(summary["packed_sequences"], summary["epoch_end_steps"], strict=True):
+                real_sequences += min(count, max(0, consumed_slots - begin))
+                begin = end * summary["global_batch_size"]
+            metrics.update(
+                consumed_real_sequences=real_sequences,
+                consumed_padding_sequences=consumed_slots - real_sequences,
+                completed_epochs=sum(self._completed_steps >= end for end in summary["epoch_end_steps"]),
+            )
+        return metrics
 
     @property
     def _batch_size(self) -> int:
@@ -388,6 +402,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             "optimizer": self._optimizer.save(),
             "completed_steps": self._completed_steps,
         }
+        if self._config.training.epochs is not None:
+            metadata["epoch_execution_identity"] = self._config.data.datasets["training"].plan_summary[
+                "execution_identity"
+            ]
         if metrics is not None:
             metadata["metrics"] = metrics
         self._multi_stage.save_checkpoint(
@@ -423,6 +441,10 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             config.get_load_config(checkpoint_directory, timeout=self._config.training.timeout)
         )
         assert metadata is not None
+        if self._config.training.epochs is not None:
+            expected = self._config.data.datasets["training"].plan_summary["execution_identity"]
+            if metadata.get("epoch_execution_identity") != expected:
+                raise ValueError("Checkpoint epoch plan/batch/topology differs from this run")
         if self._do_train:
             self._optimizer.load(metadata["optimizer"])
         if "schedules" in metadata:

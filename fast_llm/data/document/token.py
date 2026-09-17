@@ -67,6 +67,12 @@ class TokenBatch(Batch, TokenDocument):
 
     @classmethod
     def from_documents(cls, documents: typing.Sequence[TokenDocument], pad_to_size: int | None = None) -> typing.Self:
+        if not documents:
+            if pad_to_size is None or pad_to_size <= 0:
+                raise ValueError("An empty batch requires positive pad_to_size")
+            return cls(
+                tokens=torch.full((pad_to_size,), -100, dtype=torch.int64), lengths=[pad_to_size], unpadded_length=0
+            )
         tokens = [document.tokens for document in documents]
         lengths = [len(document) for document in documents]
         unpadded_length = sum(lengths)
@@ -114,7 +120,7 @@ class TokenBatch(Batch, TokenDocument):
             first_document_begin=first_document_begin,
             last_document_end=last_document_end,
             device=self.device,
-            unpadded_length=min(end, self.unpadded_length) - begin,
+            unpadded_length=max(0, min(end, self.unpadded_length) - begin),
             sequence_length=len(self.tokens),
         ).preprocess(model_input, config)
 

@@ -1,0 +1,81 @@
+# Sequence length is data.micro_batch_size (tokens); global batch size counts packed sequences.
+type: train_gpt
+run:
+  experiment_dir: /mnt/queue1/shruthan/experiments/gemma_epoch_sft
+model:
+  type: gpt
+  base_model:
+    embeddings:
+      vocab_parallel: false
+    decoder:
+      type: pattern
+      blocks:
+        full_attention:
+          mixer:
+            implementation: sdpa
+          mlp:
+            type: hybrid_moe
+            dense:
+              recompute_level: full
+            routed:
+              recompute_level: full
+              auxiliary_loss_coefficient: 0.0
+        sliding_attention:
+          mixer:
+            implementation: flash
+          mlp:
+            type: hybrid_moe
+            dense:
+              recompute_level: full
+            routed:
+              recompute_level: full
+              auxiliary_loss_coefficient: 0.0
+    head:
+      cross_entropy_splits: 8
+  multi_stage:
+    zero_stage: 3
+  distributed:
+    tensor_parallel: 2
+    sequence_tensor_parallel: true
+    sequence_data_parallel: 4
+    timeout: 3600.0
+    compute_dtype: bfloat16
+pretrained:
+  format: gemma4
+  model_weights: true
+  path: /mnt/queue1/shruthan/models/gemma-4-26B-A4B-it-causal-lm
+  load_config: model
+training:
+  evaluators: {}
+  logs:
+    interval: 1
+  checkpoint:
+    keep: 1
+    every_epochs: 1
+  export:
+    format: gemma4
+    every_epochs: 1
+  wandb:
+    project_name: gemma-sft
+    entity_name: corellm
+  num_workers: 0
+  epochs: 3
+  global_batch_size: 64
+data:
+  micro_batch_size: 32768
+  maximum_document_length: 32768
+  truncate_documents: false
+  datasets:
+    training:
+      type: epoch
+      datasets:
+      - type: file
+        path: /mnt/queue1/shruthan/data/9_14_26_gemma_sft_v4_filtered_dsbench_tgt_only/fastllm/fast_llm_config.yaml
+      - type: file
+        path: /mnt/queue1/shruthan/data/gemma_sft_replay/200k_think/fastllm/fast_llm_config.yaml
+optimizer:
+  learning_rate:
+    base: 2.0e-05
+    decay_style: cosine
+    warmup_epochs: 0.1
+  weight_decay: 0.01

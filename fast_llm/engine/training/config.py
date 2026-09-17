@@ -1,5 +1,6 @@
 import abc
 import functools
+import math
 import pathlib
 import typing
 
@@ -95,6 +96,38 @@ class TrainingCheckpointBaseConfig(IntervalConfig):
 
     _abstract = True
     save_name: typing.ClassVar[str] = "save"
+    every_epochs: float | None = Field(
+        default=None,
+        desc="Save every N epochs; fractions such as 0.5 and 0.25 are supported.",
+        hint=FieldHint.core,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
+    steps: list[int] = Field(default_factory=list, desc="Resolved save boundaries.", hint=FieldHint.expert)
+
+    def _validate(self):
+        super()._validate()
+        if self.every_epochs is not None and not math.isfinite(self.every_epochs):
+            raise ValueError("every_epochs must be finite")
+        if self.every_epochs is not None and "interval" in self._explicit_fields:
+            raise ValueError("every_epochs and interval are mutually exclusive")
+        if self.steps and (self.steps != sorted(set(self.steps)) or self.steps[0] <= 0):
+            raise ValueError("Save steps must be positive, unique, and increasing")
+
+    def enabled(self, iteration=None):
+        if self.steps:
+            return iteration is None or iteration in self.steps
+        # Enable source epoch save config without interpreting boundaries as intervals.
+        if self.every_epochs is not None:
+            return iteration is None
+        return super().enabled(iteration)
+
+    def get_count(self, iteration):
+        if self.steps:
+            import bisect
+
+            return bisect.bisect_right(self.steps, iteration)
+        return super().get_count(iteration)
+
     keep: int | None = Field(
         default=None,
         desc="The maximum number of saves to keep. When exceeding this value, checkpoints are deleted starting from the older ones.",
@@ -207,6 +240,18 @@ class TrainingConfig(Config):
     export: TrainingExportConfig = Field(desc="Configuration for exports.", hint=FieldHint.core)
     shutdown: ShutdownConfig = Field(desc="Configuration for automated shutdown.", hint=FieldHint.core)
     wandb: WandbConfig = Field(desc="Configuration for Wandb.", hint=FieldHint.core)
+    epochs: int | None = Field(
+        default=None,
+        desc="Complete passes through eligible training documents.",
+        hint=FieldHint.core,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
+    global_batch_size: int | None = Field(
+        default=None,
+        desc="Packed sequences per optimizer update, not tokens/documents.",
+        hint=FieldHint.core,
+        valid=skip_valid_if_none(check_field(Assert.gt, 0)),
+    )
     train_iters: int = Field(
         default=0, desc="Total number of training iterations.", hint=FieldHint.core, valid=check_field(Assert.geq, 0)
     )
@@ -233,7 +278,11 @@ class TrainingConfig(Config):
 
     def _validate(self) -> None:
         super()._validate()
-        self.shutdown.assert_sub_interval(self.checkpoint)
+        if self.checkpoint.every_epochs is not None or self.checkpoint.steps:
+            if self.shutdown.enabled():
+                raise ValueError("Automated shutdown is unsupported with epoch checkpoint schedules")
+        else:
+            self.shutdown.assert_sub_interval(self.checkpoint)
         self.wandb.alert.assert_sub_interval(self.logs)
 
 

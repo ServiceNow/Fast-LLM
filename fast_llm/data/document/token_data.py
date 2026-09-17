@@ -28,6 +28,8 @@ class TokenDataBatch(Batch, TokenDataDocument):
         """
         Used to merge ranges from multiple documents, i.e. when multiple documents are packed together.
         """
+        if not documents:
+            return None
         data = [document.data for document in documents if document is not None]
         if len(data) == len(documents):
             lengths = [len(data_) for data_ in data]

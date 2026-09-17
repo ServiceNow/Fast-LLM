@@ -297,3 +297,9 @@ def test_distributed_global_ranks(bdp: int, sdp: int, tp: int, pp: int, pipeline
         Assert.eq(len({global_rank for global_ranks in global_ranks_set for global_rank in global_ranks}), world_size)
 
     Assert.eq(len(rank_breakdowns), world_size)
+
+
+def test_validate_epoch_train_without_import():
+    run_without_import(
+        "main(['train', 'gpt', '-v', 'training.epochs=2', 'training.global_batch_size=4', 'run.experiment_dir=/tmp/epoch-config-validation', 'data.maximum_document_length=2048', 'data.truncate_documents=false', 'data.datasets.training.type=epoch'])"
+    )

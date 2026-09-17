@@ -136,6 +136,13 @@ class GPTData[ConfigType: GPTDataConfig](Data[ConfigType]):
         )
 
         if preprocess:
-            return batch.get_model_inputs(self._preprocessing[dataset_name])
+            model_inputs = batch.get_model_inputs(self._preprocessing[dataset_name])
+            from fast_llm.data.dataset.epoch_config import EpochDatasetConfig
+
+            if isinstance(self._config.datasets[dataset_name], EpochDatasetConfig):
+                for model_input in model_inputs:
+                    for target in model_input.targets:
+                        target.require_supervised_batch = True
+            return model_inputs
         else:
             return batch

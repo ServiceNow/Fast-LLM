@@ -27,6 +27,12 @@ class LearningRateScheduleConfig(Config):
     decay_power: float = Field(
         default=1.0, desc="Exponent for learning rate decay, applied on the decay step..", hint=FieldHint.feature
     )
+    warmup_epochs: float | None = Field(
+        default=None,
+        desc="Warmup duration on the planned epoch timeline.",
+        hint=FieldHint.core,
+        valid=skip_valid_if_none(check_field(Assert.geq, 0)),
+    )
     warmup_iterations: int = Field(
         default=0, desc="Number of iteration for the learning rate warmup.", hint=FieldHint.feature
     )

@@ -39,6 +39,7 @@ class LanguageModelTargetInput(ModelInput):
     num_labels_in_batch: int | None = None
     num_valid_documents: int | None = None
     num_valid_documents_in_batch: int | None = None
+    require_supervised_batch: bool = False
 
     @classmethod
     def share_batch_data(cls, model_inputs: "list[LanguageModelTargetInput]", distributed: "Distributed"):
@@ -53,6 +54,8 @@ class LanguageModelTargetInput(ModelInput):
                     counts = torch.tensor(totals, dtype=torch.int32, device=distributed.device)
                     torch.distributed.all_reduce(counts, group=distributed.batch_data_group)
                     totals = counts.cpu().tolist()
+                if model_inputs[0].require_supervised_batch and totals[0] == 0:
+                    raise ValueError("Global batch contains no supervised labels")
                 for model_input in model_inputs:
                     model_input.num_labels_in_batch, model_input.num_valid_documents_in_batch = totals
                 return
@@ -62,6 +65,8 @@ class LanguageModelTargetInput(ModelInput):
                 dtype=torch.int32,
                 group=distributed.batch_data_group,
             )
+            if model_inputs[0].require_supervised_batch and num_labels_in_batch == 0:
+                raise ValueError("Global batch contains no supervised labels")
             for model_input in model_inputs:
                 model_input.num_labels_in_batch = num_labels_in_batch
 
