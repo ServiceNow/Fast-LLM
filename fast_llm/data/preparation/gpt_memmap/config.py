@@ -276,6 +276,20 @@ class DatasetPreparatorDistributedConfig(Config):
         Assert.in_range(self.rank, 0, self.world_size)
 
 
+@config_class()
+class SpecialTokensPreparationConfig(Config):
+    add_bos: bool = Field(
+        default=True,
+        desc="Insert BOS unless it is already emitted by a conversation chat template.",
+        hint=FieldHint.optional,
+    )
+    add_eos: bool = Field(
+        default=True,
+        desc="Insert EOS unless it is already emitted by a conversation chat template.",
+        hint=FieldHint.optional,
+    )
+
+
 @config_class(dynamic_type={RunnableConfig: "prepare_gpt_memmap", DatasetPreparatorConfig: "gpt_memmap"})
 class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     output_path: pathlib.Path = Field(
@@ -304,6 +318,10 @@ class GPTMemmapDatasetPreparatorConfig(DatasetPreparatorConfig):
     )
     tokenizer: TokenizerConfig = Field(
         desc="Configuration for the tokenizer.",
+        hint=FieldHint.feature,
+    )
+    special_tokens: SpecialTokensPreparationConfig = Field(
+        desc="Control explicit BOS and EOS insertion during preparation.",
         hint=FieldHint.feature,
     )
     image_patches: ImagePreparationConfig = Field(

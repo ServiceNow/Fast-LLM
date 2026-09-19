@@ -219,8 +219,8 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             # Conversation format: tokenize messages and get loss masking spans from chat template
             tokens, loss_masking_spans = self._tokenizer.tokenize_chat(
                 sample[self._source_schema.messages],
-                True,
-                True,
+                self._config.special_tokens.add_bos,
+                self._config.special_tokens.add_eos,
                 data_type=self._data_type,
             )
             token_spans_by_type[SpanType.loss_masking] = loss_masking_spans
@@ -240,10 +240,10 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 all_spans.extend(loss_masking_spans)
 
             if self._source_schema.has_preference_spans:
-                full_chosen_text = text + sample[self._source_schema.chosen_span] + self._tokenizer.tokenizer.eos_token
-                full_rejected_text = (
-                    self._tokenizer.tokenizer.bos_token + text + sample[self._source_schema.rejected_span]
-                )
+                chosen_eos = self._tokenizer.tokenizer.eos_token if self._config.special_tokens.add_eos else ""
+                full_chosen_text = text + sample[self._source_schema.chosen_span] + chosen_eos
+                rejected_bos = self._tokenizer.tokenizer.bos_token if self._config.special_tokens.add_bos else ""
+                full_rejected_text = rejected_bos + text + sample[self._source_schema.rejected_span]
                 # compute chosen span
                 chosen_spans = [(SpanType.chosen, (len(text), len(full_chosen_text)))]
 
@@ -252,7 +252,7 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                     (
                         SpanType.rejected,
                         (
-                            len(full_chosen_text) + len(self._tokenizer.tokenizer.bos_token) + len(text),
+                            len(full_chosen_text) + len(rejected_bos) + len(text),
                             len(full_chosen_text) + len(full_rejected_text),
                         ),
                     )
@@ -290,7 +290,11 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
             span_types, spans = zip(*_sort_spans(all_spans)) if all_spans else ([], [])
             # Tokenize the text, and determine the span locations in the tokenized text.
             tokens, token_spans = self._tokenizer.tokenize_with_spans(
-                text, True, True, text_spans=spans, data_type=self._data_type
+                text,
+                self._config.special_tokens.add_bos,
+                self._config.special_tokens.add_eos,
+                text_spans=spans,
+                data_type=self._data_type,
             )
 
             # Gather token spans by type.
@@ -336,8 +340,13 @@ class GPTMemmapDatasetPreparator[ConfigType: GPTMemmapDatasetPreparatorConfig](D
                 else None
             ),
             rejected_spans=(
-                # `tokenize_with_spans` excludes the final eod token from the rejected span, but we want to include it.
-                RangeDocument(ranges=[(begin, end + 1) for begin, end in token_spans_by_type[SpanType.rejected]])
+                # Include the appended EOS in the rejected span when EOS insertion is enabled.
+                RangeDocument(
+                    ranges=[
+                        (begin, end + int(self._config.special_tokens.add_eos))
+                        for begin, end in token_spans_by_type[SpanType.rejected]
+                    ]
+                )
                 if self._source_schema.has_preference_spans
                 else None
             ),

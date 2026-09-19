@@ -338,3 +338,19 @@ Fast-LLM's prepare command processes the dataset by tokenizing and saving it in 
     You can follow the job's progress by running `kubectl get pods` and checking the logs with `kubectl logs fast-llm-stack-prepare-master-0`.
 
 That is all! Once the jobs complete, you'll see the data in Fast-LLM's memory-mapped indexed dataset format in `./prep-stack-tutorial/tokenized/Mistral-Nemo-Base-2407` which can be used with Fast-LLM to set off a training run.
+
+## Controlling special-token insertion
+
+Preparation inserts BOS and EOS by default. Configure them independently with
+the top-level `special_tokens` section:
+
+```yaml
+special_tokens:
+  add_bos: false
+  add_eos: true
+```
+
+These settings control only explicit insertion by preparation. Special tokens
+already present in document text or emitted by a conversation chat template are
+retained. Existing prepared datasets are unchanged; the settings apply when
+preparing a new dataset.
