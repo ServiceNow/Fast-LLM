@@ -14,7 +14,7 @@ from fast_llm.layers.attention.config import AttentionConfig, AttentionImplement
 from fast_llm.layers.common.peft.config import PeftConfig
 from fast_llm.layers.decoder.block import BlockWithBias
 from fast_llm.tensor import TensorMeta
-from fast_llm.utils import div
+from fast_llm.utils import Assert, div
 
 try:
     from flash_attn.flash_attn_interface import flash_attn_func as _flash_attn_func  # noqa
@@ -23,6 +23,13 @@ try:
     _flash_available = torch.cuda.is_available()
 except ImportError:
     _flash_available = False
+
+try:
+    from gemma_triton_flash_attn import flash_attn_gqa_varlen as _triton_flash_attn_varlen_func
+
+    _triton_flash_available = torch.cuda.is_available()
+except ImportError:
+    _triton_flash_available = False
 
 _SDPA_MASK_NONE = 0
 _SDPA_MASK_CAUSAL_LOWER_RIGHT = 2  # torch.nn.attention.bias.CausalVariant.LOWER_RIGHT
@@ -92,6 +99,9 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
                 self._implementation = AttentionImplementation.flash
             else:
                 self._implementation = AttentionImplementation.sdpa
+        if self._implementation == AttentionImplementation.triton:
+            # The Triton kernel has no dropout.
+            Assert.eq(self._config.dropout, 0)
 
         self._parallel_dim = self._distributed_config.get_distributed_dim(DistributedDimNames.tensor)
         self._sequence_data_parallel_dim = self._distributed_config.get_distributed_dim(
@@ -267,6 +277,29 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
             dropout_p=self._config.dropout if self.training else 0.0,
             window_size=(-1, -1) if self._config.window_size is None else (self._config.window_size - 1, 0),
             causal=self._config.causal,
+            softmax_scale=self._softmax_scale,
+        )
+
+    def _attn_triton(
+        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, kwargs: dict[str, typing.Any]
+    ) -> torch.Tensor:
+        assert _triton_flash_available
+        cu_seqlens_k = kwargs[AttentionKwargs.cu_seqlens_k]
+        if sequence_k_offset := kwargs.get(AttentionKwargs.sequence_k_offset, 0):
+            key = key.narrow(0, sequence_k_offset, key.size(0) - sequence_k_offset)
+            value = value.narrow(0, sequence_k_offset, value.size(0) - sequence_k_offset)
+            cu_seqlens_k = cu_seqlens_k - sequence_k_offset
+        return _triton_flash_attn_varlen_func(
+            query,
+            key,
+            value,
+            kwargs[AttentionKwargs.cu_seqlens_q],
+            cu_seqlens_k,
+            kwargs[AttentionKwargs.max_seqlen_q],
+            kwargs[AttentionKwargs.max_seqlen_k],
+            causal=self._config.causal,
+            # Unlike flash_attn's (window_size - 1, 0), the Triton window includes the current token.
+            window_size=0 if self._config.window_size is None else self._config.window_size,
             softmax_scale=self._softmax_scale,
         )
 
@@ -493,6 +526,8 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         with set_generator(self._distributed.tp_generator):
             if self._implementation == AttentionImplementation.flash:
                 input_ = self._attn_flash(query, key, value, kwargs)
+            elif self._implementation == AttentionImplementation.triton:
+                input_ = self._attn_triton(query, key, value, kwargs)
             elif self._implementation == AttentionImplementation.sdpa:
                 input_ = self._attn_sdpa(query, key, value, kwargs)
             elif self._implementation == AttentionImplementation.backup:
@@ -549,6 +584,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
 
         if (not config.hardware) or self._implementation in (
             AttentionImplementation.flash,
+            AttentionImplementation.triton,
             AttentionImplementation.sdpa,
         ):
             # Remove non-causal part. (TODO: Support non-causal)
@@ -576,7 +612,7 @@ class Attention[ConfigType: AttentionConfig](BlockWithBias[ConfigType]):
         )
 
     def get_preprocessing_config(self) -> dict[str, typing.Any]:
-        if self._implementation == AttentionImplementation.flash:
+        if self._implementation in (AttentionImplementation.flash, AttentionImplementation.triton):
             return {
                 "return_cumulative_sequence_lengths": True,
                 "return_max_sequence_lengths": True,

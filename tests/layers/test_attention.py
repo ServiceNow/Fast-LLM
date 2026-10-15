@@ -11,7 +11,7 @@ from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.tensor_dim import TensorDim
 from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.layers.attention.attention import Attention, _flash_available
+from fast_llm.layers.attention.attention import Attention, _flash_available, _triton_flash_available
 from fast_llm.layers.attention.config import AttentionConfig
 from fast_llm.utils import Assert
 from tests.utils.utils import get_stage
@@ -60,6 +60,7 @@ class AttentionTestConfig:
     rotary: bool = False
     rotary_theta: float = 10000.0
     rotary_partial_rotary_factor: float | None = None
+    softmax_scale_power: float | None = None
 
     @property
     def hidden_size(self) -> int:
@@ -80,6 +81,8 @@ class AttentionTestConfig:
         }
         if self.window_size is not None:
             config["window_size"] = self.window_size
+        if self.softmax_scale_power is not None:
+            config["softmax_scale_power"] = self.softmax_scale_power
         if self.query_norm:
             config["query_norm"] = {"type": "rms_norm"}
         if self.key_norm:
@@ -429,7 +432,13 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
 
     if _flash_available and config.head_size <= 256:
         _check_packed("flash")
+    if _triton_flash_available and _is_power_of_two(config.head_size):
+        _check_packed("triton")
     _check_packed("sdpa")
+
+
+def _is_power_of_two(value: int) -> bool:
+    return value & (value - 1) == 0
 
 
 @pytest.mark.slow
@@ -440,3 +449,98 @@ def _test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
 def test_attention(config: AttentionTestConfig, lengths: list[int]) -> None:
     with _no_tf32():
         _test_attention(config, lengths)
+
+
+# Past keys: with `micro_batch_splits > 1`, each micro-sequence attends to the keys of the earlier ones,
+# so documents can have more keys than queries (`sequence_k_past > 0`), and `first_document_begin > 0`
+# when a document straddles the split. This is the same layout sequence-data parallelism produces.
+_past_key_test_cases: list[tuple[AttentionTestConfig, list[int], int]] = [
+    (config, lengths, micro_batch_splits)
+    for config in (
+        AttentionTestConfig(name="causal", head_size=64),
+        AttentionTestConfig(name="window", head_size=64, window_size=8),
+        AttentionTestConfig(name="large_head", heads=2, kv_heads=1, head_size=512),
+        # Gemma4: unit softmax scale, which differs from the Triton kernel's 1/sqrt(head_size) default.
+        AttentionTestConfig(name="unit_scale", heads=2, kv_heads=1, head_size=512, softmax_scale_power=0),
+    )
+    # One document straddling every split (`first_document_begin == 0`), and documents that
+    # start before the split begins (`first_document_begin > 0`).
+    for lengths in ([40], [10, 30], [7, 20, 13], [3, 1, 25, 11])
+    for micro_batch_splits in (2, 4)
+]
+
+
+def _run_micro_sequences(
+    config: AttentionTestConfig,
+    implementation: str,
+    parameters: list[torch.Tensor],
+    hidden_states: torch.Tensor,
+    lengths: list[int],
+    micro_batch_splits: int,
+) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
+    distributed_config = DistributedConfig(compute_dtype=DataType.bfloat16, use_cuda=True)
+    distributed = Distributed(distributed_config)
+    attention: Attention = config.get_attention_config(implementation).get_layer(
+        distributed_config, TensorDim("hidden", config.hidden_size), lr_scale=None, peft=None, return_bias=False
+    )
+    stage = get_stage([attention], distributed)
+    for param, param_ref in zip(attention.parameters(), parameters, strict=True):
+        param.data.copy_(param_ref)
+
+    model_inputs = LanguageModelBatch(
+        tokens=torch.empty(len(hidden_states), dtype=torch.int64, device=hidden_states.device), lengths=lengths
+    ).get_model_inputs(
+        LanguageModelBatchPreprocessingConfig(
+            distributed=distributed_config,
+            predicted_tokens=0,
+            micro_batch_splits=micro_batch_splits,
+            **attention.get_preprocessing_config(),
+        )
+    )
+    inputs = [input_.detach().requires_grad_() for input_ in hidden_states.chunk(micro_batch_splits)]
+    outputs, contexts = [], []
+    for model_input, input_ in zip(model_inputs, inputs, strict=True):
+        kwargs = model_input.to_kwargs()
+        attention.preprocess(kwargs)
+        output, context = stage.forward(input_, kwargs)
+        outputs.append(output)
+        contexts.append(context)
+    # Later micro-sequences first, as in the schedule: their gradients flow into the earlier keys.
+    for output, context in reversed(list(zip(outputs, contexts, strict=True))):
+        stage.backward(torch.ones_like(output), context)
+    return (
+        torch.cat(outputs),
+        torch.cat([input_.grad for input_ in inputs]),
+        [param.grad_buffer.clone() for param in attention.parameters()],
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _triton_flash_available, reason="gemma_triton_flash_attn not available")
+@pytest.mark.parametrize(
+    ("config", "lengths", "micro_batch_splits"),
+    [
+        pytest.param(config, lengths, micro_batch_splits, id=f"{config.name}-{lengths}-{micro_batch_splits}")
+        for config, lengths, micro_batch_splits in _past_key_test_cases
+    ],
+)
+def test_attention_past_keys_triton(config: AttentionTestConfig, lengths: list[int], micro_batch_splits: int) -> None:
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+    parameters = [
+        torch.randn(config.hidden_size, config.hidden_size, device=device) * config.hidden_size**-0.5,
+        torch.randn(2 * config.kv_heads * config.head_size, config.hidden_size, device=device)
+        * config.hidden_size**-0.5,
+        torch.randn(config.hidden_size, config.hidden_size, device=device) * config.hidden_size**-0.5,
+    ]
+    hidden_states = torch.randn(sum(lengths), config.hidden_size, device=device, dtype=torch.bfloat16)
+    output_sdpa, input_grad_sdpa, param_grads_sdpa = _run_micro_sequences(
+        config, "sdpa", parameters, hidden_states, lengths, micro_batch_splits
+    )
+    output_triton, input_grad_triton, param_grads_triton = _run_micro_sequences(
+        config, "triton", parameters, hidden_states, lengths, micro_batch_splits
+    )
+    Assert.rms_close_relative(output_triton, output_sdpa, 1e-2, 1e-7, msg="output")
+    Assert.rms_close_relative(input_grad_triton, input_grad_sdpa, 1e-2, 1e-7, msg="input_grad")
+    for index, (grad_triton, grad_sdpa) in enumerate(zip(param_grads_triton, param_grads_sdpa, strict=True)):
+        Assert.rms_close_relative(grad_triton, grad_sdpa, 1e-2, 1e-7, msg=f"param_grad_{index}")
