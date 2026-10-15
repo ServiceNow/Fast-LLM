@@ -1,4 +1,5 @@
 import dataclasses
+import enum
 import typing
 
 from fast_llm.config import Config, Field, FieldHint, check_field, config_class, skip_valid_if_none
@@ -6,6 +7,20 @@ from fast_llm.utils import Assert
 
 if typing.TYPE_CHECKING:
     from fast_llm.engine.optimizer.optimizer import Optimizer
+
+
+class NonFiniteGradientPolicy(enum.StrEnum):
+    ignore = "ignore"
+    skip = "skip"
+    stop = "stop"
+
+
+class OptimizerStepResult(enum.StrEnum):
+    applied = "applied"
+    # Rejected by the gradient scaler (expected with dynamic fp16 loss scaling).
+    skipped = "skipped"
+    skipped_nonfinite_gradient = "skipped_nonfinite_gradient"
+    stopped_nonfinite_gradient = "stopped_nonfinite_gradient"
 
 
 class LearningRateStageType:
@@ -118,6 +133,13 @@ class OptimizerConfig(Config):
         desc="Clip the gradient norm to this value.",
         hint=FieldHint.feature,
         valid=check_field(Assert.gt, 0),
+    )
+    on_nonfinite_gradient: NonFiniteGradientPolicy = Field(
+        default=NonFiniteGradientPolicy.ignore,
+        desc="What to do when the reduced gradient norm is not finite, checked before the update is applied."
+        " `skip` drops the update and continues; `stop` saves a replayable checkpoint and gradient diagnostics"
+        " to `<experiment_dir>/nan_debug/<step>_run<run index>`, then raises. `ignore` applies the update anyway.",
+        hint=FieldHint.feature,
     )
     default_learning_rate_scale: float = Field(
         default=1.0,

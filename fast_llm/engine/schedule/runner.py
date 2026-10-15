@@ -16,6 +16,7 @@ from fast_llm.engine.distributed.config import DistributedConfig
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.multi_stage import MultiStageModel
 from fast_llm.engine.multi_stage.stage import Stage
+from fast_llm.engine.optimizer.config import OptimizerStepResult
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.config import EventType, MockEvent, MockStream, ScheduleConfig, StepType, StreamType
 from fast_llm.engine.schedule.schedule import Schedule, Step
@@ -148,7 +149,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         *,
         iteration: int = 1,
         return_metrics: bool = False,
-    ) -> tuple[dict[str, float | int], bool, dict[str, typing.Any] | None]:
+    ) -> tuple[dict[str, float | int], OptimizerStepResult, dict[str, typing.Any] | None]:
         assert self._is_setup
         assert schedule._config is self._config  # Noqa
         if schedule.phase.is_training:
@@ -188,6 +189,8 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         for stage in self._stages_on_device:
             if context.is_training:
                 stage.reset_gradients()
+                for fsdp in stage.fsdps:
+                    fsdp.reset_nonfinite_local_grads()
             # TODO: Overlap this?
             if stage.is_tied_weight_copy:
                 stage.restore_parameters()
@@ -224,7 +227,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         self._record_event(context, EventType.compute_wait_data, None)
 
         if not context.is_training or self._config.skip_step:
-            return self._reduce_losses(context), True, metrics
+            return self._reduce_losses(context), OptimizerStepResult.applied, metrics
 
         for name, tied_parameter in self._tied_parameters.items():
             if tied_parameter.group is not None:
@@ -251,13 +254,13 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
         # TODO: Option to update with reduce (needs per-layer grad_norm and update_successful)
         # TODO: Avoid blocking synchronizations: async transfer, turn noop_flag into a real noop flag
         #  (uncomment line in apex).
-        update_successful = self._optimizer.step(metrics)
+        step_result = self._optimizer.step(metrics)
 
         if self._multi_stage.config.multi_stage.debug_tensor_parallel and self._distributed.tensor_group is not None:
             for stage in self._stages_on_device:
                 stage.check_tensor_parallel_synchronization()
 
-        if update_successful:
+        if step_result == OptimizerStepResult.applied:
             for stage in self._stages_on_device:
                 stage.invalidate_buffer()
         if self._multi_stage.config.multi_stage.debug_param_update:
@@ -283,7 +286,7 @@ class ScheduleRunner[ConfigType: ScheduleConfig](Configurable[ConfigType]):
                 lambda: log_memory_usage(f"End of {context.phase} iteration {iteration}", str)
             )
 
-        return self._reduce_losses(context), update_successful, metrics
+        return self._reduce_losses(context), step_result, metrics
 
     def _reduce_losses(self, context: BatchContext) -> dict[str, float | int]:
         reduced_losses = {

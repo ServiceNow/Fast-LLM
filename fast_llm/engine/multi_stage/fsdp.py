@@ -34,6 +34,7 @@ class FSDP:
     _weight_buffer_local_shard: torch.Tensor
     _grad_buffer_local_shard: torch.Tensor
     _parameter_buffers: dict[str, torch.nn.Parameter]
+    _nonfinite_local_grads: torch.Tensor | None = None
 
     def __init__(
         self,
@@ -122,6 +123,10 @@ class FSDP:
     @property
     def parameter_count(self) -> int:
         return self._parameter_count
+
+    @property
+    def name(self) -> str:
+        return self._name
 
     @property
     def requires_grad(self) -> bool:
@@ -372,6 +377,24 @@ class FSDP:
             assert buffer.grad is None
             buffer.param_grad_is_zero = True
 
+    def track_nonfinite_local_grads(self) -> None:
+        """
+        Record, on this rank and before any gradient reduction, whether the local gradient buffer was non-finite
+        in the current step (OR-ed over gradient accumulation). Stays on device: no host sync until read.
+        """
+        assert self._is_setup
+        if self._mode.support_backward and self._requires_grad:
+            self._nonfinite_local_grads = torch.zeros([], dtype=torch.bool, device=self._grad_buffer.device)
+
+    def reset_nonfinite_local_grads(self) -> None:
+        # Once per step: `reset_gradients` also runs after every reduce, which would drop the accumulated flag.
+        if self._nonfinite_local_grads is not None:
+            self._nonfinite_local_grads.zero_()
+
+    @property
+    def nonfinite_local_grads(self) -> torch.Tensor | None:
+        return self._nonfinite_local_grads
+
     def reduce_gradients(
         self, distributed: Distributed, accumulate: bool = False, allow_no_grad: bool = False
     ) -> None:
@@ -386,6 +409,13 @@ class FSDP:
             if buffer.param_grad_is_zero:  # noqa
                 assert allow_no_grad or meta.allow_no_grad, meta
                 triton_fill(buffer.grad_buffer, 0)  # noqa
+        if self._nonfinite_local_grads is not None:
+            # Checked after the zero-fill (unused buffers hold stale values until then) and before any collective.
+            # The sum avoids a buffer-sized temporary; any nan or inf makes it non-finite.
+            # (Finite values large enough to overflow the fp32 sum also set it; `max_abs_finite` tells them apart.)
+            self._nonfinite_local_grads.logical_or_(
+                ~self._grad_buffer[: self._parameter_count].sum(dtype=torch.float32).isfinite()
+            )
         if self._sequence_parallel_grads is not None and distributed.tensor_group:
             all_reduce(self._sequence_parallel_grads, group=distributed.tensor_group)
         if self._fsdp_dim.size > 1:

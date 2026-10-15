@@ -4,6 +4,7 @@ import typing
 from fast_llm.data.document.abstract import ModelInput
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.multi_stage.fast_llm_model import FastLLMModel
+from fast_llm.engine.optimizer.config import OptimizerStepResult
 from fast_llm.engine.schedule.config import ScheduleConfig
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
@@ -61,11 +62,11 @@ class InferenceRunner(abc.ABC):
         self, model_input: ModelInput, *, iteration: int = 1, return_metrics: bool = False
     ) -> tuple[dict[str, float | int], dict[str, typing.Any] | None]:
         # TODO: Return an actual model output.
-        reduced_losses, update_successful, metrics = self._runner.run_step(
+        reduced_losses, step_result, metrics = self._runner.run_step(
             iter(((model_input,),)),
             self._schedule,
             iteration=iteration,
             return_metrics=return_metrics,
         )
-        assert update_successful
+        Assert.eq(step_result, OptimizerStepResult.applied)
         return reduced_losses, metrics

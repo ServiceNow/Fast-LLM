@@ -1,4 +1,5 @@
 import abc
+import math
 import typing
 
 import torch
@@ -8,7 +9,13 @@ from fast_llm.core.kernels import fused_adam, l2_norm, scale_
 from fast_llm.engine.config_utils.data_type import DataType
 from fast_llm.engine.config_utils.run import log_main_rank
 from fast_llm.engine.distributed.distributed import Distributed
-from fast_llm.engine.optimizer.config import GradientScalerConfig, OptimizerConfig, ParamGroup
+from fast_llm.engine.optimizer.config import (
+    GradientScalerConfig,
+    NonFiniteGradientPolicy,
+    OptimizerConfig,
+    OptimizerStepResult,
+    ParamGroup,
+)
 from fast_llm.engine.optimizer.learning_rate import create_schedule_from_config
 from fast_llm.utils import Assert
 
@@ -61,13 +68,14 @@ class Optimizer:
         self._param_groups = _merge_and_filter_groups(param_groups)
         self._grads_for_norm = [g for g in grads_for_norm if g.device.type != "meta" and g.numel() > 0]
         self._grad_norm = None if self._grads_for_norm else torch.zeros([1], device=distributed.device)
+        self._grad_norm_value: float | None = None
         self._grads = [g for group in self._param_groups for g in group.grads]
         self._grad_scaler = get_grad_scaler(self._config.gradient_scaler, distributed)
         self._noop_flag = self._grad_scaler.noop_flag
         self._reduce_group = distributed.world_group
         self._lr_schedule = create_schedule_from_config(self._config.learning_rate)
 
-    def _clip_grad_norm(self) -> torch.Tensor:
+    def _compute_grad_norm(self) -> torch.Tensor:
         # TODO: Optimize this.
         grad_norm = l2_norm(self._grads_for_norm, self._noop_flag) if self._grads_for_norm else self._grad_norm.zero_()
         Assert.eq(grad_norm.dtype, torch.float32)
@@ -79,49 +87,72 @@ class Optimizer:
                 group=self._reduce_group,
             )
             grad_norm.pow_(0.5)
-        if self._config.gradient_norm_clipping > 0.0:
-            # TODO: Use noop flag instead of clamp.
-            clip_coeff = torch.clamp_max_(self._config.gradient_norm_clipping / (grad_norm + 1.0e-6), 1.0)
-            # if clip_coeff < 1.0:
-            scale_(self._grads, self._noop_flag, clip_coeff)
         return grad_norm
 
+    def _clip_grads(self, grad_norm: torch.Tensor) -> None:
+        # TODO: Use noop flag instead of clamp.
+        clip_coeff = torch.clamp_max_(self._config.gradient_norm_clipping / (grad_norm + 1.0e-6), 1.0)
+        scale_(self._grads, self._noop_flag, clip_coeff)
+
     @torch.no_grad()
-    def step(self, metrics: dict | None = None) -> bool:
+    def step(self, metrics: dict | None = None) -> OptimizerStepResult:
         for group in self._param_groups:
             for grad in group.grads:
                 self._grad_scaler.unscale_and_check_nans(grad)
-        # Update weights
         # Noop flag still used beyond this point, but no longer expecting nans.
-        update_successful = self._grad_scaler.update_successful()
-        if update_successful:
-            self._optimizer_step += 1
-            lr = self._lr_schedule(self._optimizer_step)
-            grad_norm = (
-                self._clip_grad_norm().item()
-                if self._config.gradient_norm_clipping > 0.0 or metrics is not None
-                else None
-            )
-            for group in self._param_groups:
-                fused_adam(
-                    params=group.params,
-                    grads=group.grads,
-                    exp_avgs=group.exp_avgs,
-                    exp_avg_sqs=group.exp_avgs_sq,
-                    noop_flag=self._noop_flag,
-                    lr=lr * (self._config.default_learning_rate_scale if group.lr_scale is None else group.lr_scale),
-                    beta1=self._config.beta_1 if group.beta1 is None else group.beta1,
-                    beta2=self._config.beta_2 if group.beta2 is None else group.beta2,
-                    wd=self._config.weight_decay if group.weight_decay is None else group.weight_decay,
-                    eps=self._config.epsilon if group.eps is None else group.eps,
-                    step=self._optimizer_step,
-                )
+        if not self._grad_scaler.update_successful():
+            self._grad_scaler.update(False)
+            return OptimizerStepResult.skipped
 
+        check_finite = self._config.on_nonfinite_gradient != NonFiniteGradientPolicy.ignore
+        if self._config.gradient_norm_clipping > 0.0 or metrics is not None or check_finite:
+            grad_norm_tensor = self._compute_grad_norm()
+            self._grad_norm_value = grad_norm_tensor.item()
+        else:
+            self._grad_norm_value = None
+
+        if check_finite and not math.isfinite(self._grad_norm_value):
+            # Leave the gradients unclipped (so diagnostics can tell nan from inf),
+            # and the weights, optimizer state and step count untouched.
             if metrics is not None:
-                metrics.update({"grad_norm": grad_norm, "learning_rate": lr})
+                metrics["grad_norm"] = self._grad_norm_value
+            # `l2_norm` sets the noop flag on non-finite input, and `NoopGradScaler.update` does not clear it.
+            self._noop_flag.zero_()
+            if self._config.on_nonfinite_gradient == NonFiniteGradientPolicy.stop:
+                # No scaler update, so the saved state replays this step with the same loss scale.
+                return OptimizerStepResult.stopped_nonfinite_gradient
+            self._grad_scaler.update(False)
+            return OptimizerStepResult.skipped_nonfinite_gradient
 
-        self._grad_scaler.update(update_successful)
-        return update_successful
+        self._optimizer_step += 1
+        lr = self._lr_schedule(self._optimizer_step)
+        if self._config.gradient_norm_clipping > 0.0:
+            self._clip_grads(grad_norm_tensor)
+        for group in self._param_groups:
+            fused_adam(
+                params=group.params,
+                grads=group.grads,
+                exp_avgs=group.exp_avgs,
+                exp_avg_sqs=group.exp_avgs_sq,
+                noop_flag=self._noop_flag,
+                lr=lr * (self._config.default_learning_rate_scale if group.lr_scale is None else group.lr_scale),
+                beta1=self._config.beta_1 if group.beta1 is None else group.beta1,
+                beta2=self._config.beta_2 if group.beta2 is None else group.beta2,
+                wd=self._config.weight_decay if group.weight_decay is None else group.weight_decay,
+                eps=self._config.epsilon if group.eps is None else group.eps,
+                step=self._optimizer_step,
+            )
+
+        if metrics is not None:
+            metrics.update({"grad_norm": self._grad_norm_value, "learning_rate": lr})
+
+        self._grad_scaler.update(True)
+        return OptimizerStepResult.applied
+
+    @property
+    def grad_norm(self) -> float | None:
+        # The norm from the last `step`, before clipping.
+        return self._grad_norm_value
 
     @property
     def grad_scale(self) -> float:

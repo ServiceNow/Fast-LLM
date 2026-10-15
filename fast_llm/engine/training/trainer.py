@@ -1,8 +1,10 @@
 import abc
+import json
 import logging
 import math
 import pathlib
 import shutil
+import socket
 import time
 import typing
 
@@ -15,7 +17,7 @@ from fast_llm.engine.config_utils.run import Run, is_main_rank, log_main_rank, l
 from fast_llm.engine.distributed.config import PhaseType
 from fast_llm.engine.distributed.distributed import Distributed
 from fast_llm.engine.multi_stage.config import StageMode
-from fast_llm.engine.optimizer.config import ParamGroup
+from fast_llm.engine.optimizer.config import NonFiniteGradientPolicy, OptimizerStepResult, ParamGroup
 from fast_llm.engine.optimizer.optimizer import Optimizer
 from fast_llm.engine.schedule.runner import ScheduleRunner
 from fast_llm.engine.schedule.schedule import Schedule
@@ -204,6 +206,13 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             distributed_config=self._config.model.distributed, start_step=self._completed_steps
         )
 
+        if self._config.optimizer.on_nonfinite_gradient == NonFiniteGradientPolicy.stop:
+            if self._run.experiment_directory is None:
+                raise ValueError("`optimizer.on_nonfinite_gradient: stop` requires an experiment directory.")
+            for stage in self._multi_stage.stages_on_device.values():
+                for fsdp in stage.fsdps:
+                    fsdp.track_nonfinite_local_grads()
+
         interrupter = Interrupter(self._config.training.checkpoint.enabled())
         train_iterator = self._get_data_iterator(
             PhaseType.training,
@@ -234,12 +243,21 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
 
                 # TODO: Data loader hates getting all micro-batches at once.
                 #   (Also preprocessing adds overhead)
-                reduced_losses, update_successful, train_metrics = self._runner.run_step(
+                reduced_losses, step_result, train_metrics = self._runner.run_step(
                     train_iterator,
                     self._schedule,
                     iteration=self._completed_steps,
                     return_metrics=is_logging,
                 )
+                # Leave before callbacks (which may broadcast weights), evaluation, export and checkpointing.
+                # The result comes from the all-reduced gradient norm, so every rank stops here.
+                if step_result == OptimizerStepResult.stopped_nonfinite_gradient:
+                    directory = self._save_nonfinite_gradient_state(reduced_losses, train_metrics)
+                    raise RuntimeError(
+                        f"Non-finite gradient norm ({self._optimizer.grad_norm}) at step {self._completed_steps}."
+                        f" The update was not applied. Debug state saved to {directory}."
+                    )
+                update_successful = step_result == OptimizerStepResult.applied
 
                 # Advanced, skipped, and Nan iterations.
                 if update_successful:
@@ -248,7 +266,9 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
                         total_losses[name] += value
                 else:
                     skipped_iters += 1
-                    nan_iters += not all(math.isfinite(loss) for loss in reduced_losses.values())
+                    nan_iters += step_result == OptimizerStepResult.skipped_nonfinite_gradient or not all(
+                        math.isfinite(loss) for loss in reduced_losses.values()
+                    )
 
                 for callback in self._callbacks.values():
                     callback.step_end(self._completed_steps, reduced_losses, update_successful, train_metrics)
@@ -387,20 +407,39 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
     def _save_checkpoint(
         self, config: TrainingCheckpointBaseConfig, metrics: dict[str, dict[str, float | int]] | None
     ) -> None:
-        # TODO: Move barrier, ok file to FastLLMModel
         checkpoint_base_directory = config.get_save_directory(self._run.experiment_directory)
-        checkpoint_directory = checkpoint_base_directory / str(self._completed_steps)
+        self._write_checkpoint(
+            config, checkpoint_base_directory / str(self._completed_steps), self._completed_steps, metrics
+        )
+        if self._run.is_main_rank:
+            to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_base_directory.iterdir()))
 
+            for iteration in to_delete:
+                path = checkpoint_base_directory / str(iteration)
+                logger.info(f"Deleting {config.save_name} at {path}")
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                except OSError as e:
+                    logger.warning(f"Could not remove {config.save_name} directory: {e.args}")
+
+    def _write_checkpoint(
+        self,
+        config: TrainingCheckpointBaseConfig,
+        checkpoint_directory: pathlib.Path,
+        completed_steps: int,
+        metrics: dict[str, dict[str, float | int]] | None,
+    ) -> None:
+        # TODO: Move barrier, ok file to FastLLMModel
         # Create the checkpoint
         if self._run.is_main_rank:
-            logger.info(f"Saving {config.save_name} at iteration {self._completed_steps}")
+            logger.info(f"Saving {config.save_name} at iteration {completed_steps}")
             checkpoint_directory.mkdir(exist_ok=False, parents=True)
         # Barrier to ensure the directory is created correctly (and didn't exist before).
-        safe_barrier(self._distributed.world_group, f"{config.save_name} {self._completed_steps} enter")
+        safe_barrier(self._distributed.world_group, f"{config.save_name} {completed_steps} enter")
 
         metadata = {
             "optimizer": self._optimizer.save(),
-            "completed_steps": self._completed_steps,
+            "completed_steps": completed_steps,
         }
         if self._config.training.epochs is not None:
             metadata["epoch_execution_identity"] = self._config.data.datasets["training"].plan_summary[
@@ -415,7 +454,7 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
         # Barrier to ensure everyone is done.
         safe_barrier(
             self._distributed.world_group,
-            f"{config.save_name} {self._completed_steps} exit",
+            f"{config.save_name} {completed_steps} exit",
             timeout=self._config.training.timeout,
         )
         # Mark the checkpoint as complete.
@@ -423,15 +462,67 @@ class Trainer[ConfigType: TrainerConfig](Configurable[ConfigType], abc.ABC):
             (checkpoint_directory / "ok").touch()
             logger.info(f"Saved {config.save_name} to {checkpoint_directory}")
 
-            to_delete = config.to_delete(sorted(int(path.name) for path in checkpoint_base_directory.iterdir()))
+    def _save_nonfinite_gradient_state(
+        self, reduced_losses: dict[str, float | int], train_metrics: dict[str, typing.Any] | None
+    ) -> pathlib.Path:
+        """
+        Save what is needed to replay and diagnose a step whose reduced gradient norm is non-finite.
+        The weights and optimizer state are still those after the previous step, so the checkpoint is saved with
+        `completed_steps = step - 1`, which makes a resume replay the same batch.
+        It lives outside the checkpoint directory (no rotation, not picked up automatically): to replay,
+        link it as `<checkpoint directory>/<step - 1>`. The run index in the name keeps a replay that hits the
+        same step from overwriting the checkpoint it resumed from.
+        """
+        step = self._completed_steps
+        directory = self._run.experiment_directory / "nan_debug" / f"{step}_run{self._run.index}"
+        self._write_checkpoint(self._config.training.checkpoint, directory, step - 1, None)
 
-            for iteration in to_delete:
-                path = checkpoint_base_directory / str(iteration)
-                logger.info(f"Deleting {config.save_name} at {path}")
-                try:
-                    shutil.rmtree(path, ignore_errors=True)
-                except OSError as e:
-                    logger.warning(f"Could not remove {config.save_name} directory: {e.args}")
+        # The gradients are reduced and unscaled, but not clipped.
+        rank = self._distributed.config.rank
+        report = {
+            "rank": rank,
+            "hostname": socket.gethostname(),
+            "device": str(self._distributed.device),
+            "nonfinite_local_grads_before_reduction": {},
+            "grads_after_reduction": {},
+        }
+        for stage in self._multi_stage.stages_on_device.values():
+            for fsdp in stage.fsdps:
+                if fsdp.nonfinite_local_grads is not None:
+                    report["nonfinite_local_grads_before_reduction"][fsdp.name] = fsdp.nonfinite_local_grads.item()
+                if not fsdp.requires_grad:
+                    continue
+                for parameter_name, grad in fsdp.split_shard(fsdp.grad_shard).items():
+                    if grad.numel() == 0:
+                        continue
+                    finite = grad.isfinite()
+                    report["grads_after_reduction"][parameter_name] = {
+                        "nan": grad.isnan().sum().item(),
+                        "inf": grad.isinf().sum().item(),
+                        # Over finite entries only, since a single nan makes the plain maximum nan.
+                        "max_abs_finite": grad.abs().where(finite, 0).max().item(),
+                    }
+        (directory / f"grads_rank_{rank:03d}.json").write_text(json.dumps(report, indent=2))
+
+        if self._run.is_main_rank:
+            samples_per_batch = self._schedule.samples_per_batch
+            meta = {
+                "step": step,
+                "resume_completed_steps": step - 1,
+                "samples": [(step - 1) * samples_per_batch, step * samples_per_batch],
+                "grad_norm": self._optimizer.grad_norm,
+                "optimizer_step": self._optimizer.optimizer_step,
+                "losses": reduced_losses,
+                "metrics": train_metrics,
+                "world_size": self._distributed.config.world_size,
+            }
+            if self._config.training.epochs is not None:
+                meta["epoch_plan_fingerprint"] = self._config.data.datasets["training"].plan_summary["fingerprint"]
+            # Non-finite values (the gradient norm, by construction) as strings, so strict JSON parsers accept it.
+            meta = json.loads(json.dumps(meta, default=str), parse_constant=str)
+            (directory / "meta.json").write_text(json.dumps(meta, indent=2, allow_nan=False))
+        safe_barrier(self._distributed.world_group, f"nan debug {step} exit", timeout=self._config.training.timeout)
+        return directory
 
     def _load_checkpoint(self, config: TrainingCheckpointConfig, iteration: int) -> None:
         checkpoint_directory = config.get_save_directory(self._run.experiment_directory) / str(iteration)
